@@ -35,3 +35,6 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Rendered upload copies produced by explore/feasibility_test.py
+.render/
