@@ -15,9 +15,36 @@ This directory contains the **inat.lrplugin** Adobe Lightroom Classic plugin.
 
 ## First-time setup
 
-1. In Lightroom, go to **Library → Plug-in Extras → iNaturalist: Set Up Credentials**.
-2. Enter your iNaturalist OAuth **App ID** and **App Secret** (create an app at <https://www.inaturalist.org/oauth/applications/new>), plus your **username** and **account password**.
-3. Credentials are stored in Lightroom's encrypted password store (`LrPasswords`).
+Go to **Library → Plug-in Extras → iNaturalist: Set Up Credentials**. There are
+two ways to authenticate, and the dialog offers both.
+
+### Option 1 — paste an API token (works today)
+
+1. Sign in at <https://www.inaturalist.org>.
+2. Click **Open Token Page** in the dialog, or visit
+   <https://www.inaturalist.org/users/api_token> directly.
+3. Copy the token and paste it into the **Token** field. Either the bare token
+   or the whole `{"api_token":"..."}` response works.
+4. Click **Save**. The plugin verifies the token immediately and reports which
+   account it belongs to.
+
+These tokens expire after **24 hours**, so this needs repeating each day you
+use the plugin. It requires no registration, which makes it the practical
+option right now.
+
+### Option 2 — OAuth application (no repeat prompts)
+
+Fill in **App ID**, **App Secret**, **Username** and **Password**. The plugin
+then mints fresh tokens on demand and never prompts again.
+
+This needs an approved iNaturalist application. Since 2022 iNaturalist reviews
+these manually: your account must be at least two months old and have made ten
+or more improving identifications for other users in the past month. Apply at
+<https://www.inaturalist.org/oauth/applications/new>.
+
+Everything is stored in Lightroom's encrypted password store (`LrPasswords`),
+which is backed by the OS credential vault. Nothing is written to disk by the
+plugin. Use **Clear Stored Credentials** in the same dialog to remove it all.
 
 ---
 
@@ -34,6 +61,16 @@ This directory contains the **inat.lrplugin** Adobe Lightroom Classic plugin.
    - **Date / Location** – override if the EXIF values are wrong.
    - **Project** – optionally add to an iNaturalist project.
 5. Click **Export**.  The observation ID is written back to each photo's custom metadata.
+
+The export settings (JPEG, 2048 px long edge, sRGB, quality 90) are locked by
+the plugin. iNaturalist rejects uploads over roughly 20 MB and displays at most
+2048 px, so exporting a full-resolution raw conversion would fail for no gain.
+
+Each photo upload is verified after the fact rather than trusted: iNaturalist
+returns success before it has finished processing an image, so the plugin polls
+until it can confirm the photo really attached, and retries if it cannot. If a
+photo still fails, the plugin says so explicitly instead of leaving you with a
+silently empty observation.
 
 ### Sync taxon data back to Lightroom
 
@@ -70,12 +107,21 @@ The plugin is written in **Lua** using the [Lightroom Classic SDK](https://www.a
 ```
 inat.lrplugin/
 ├── Info.lua                   # Plugin identity, version, menu items
-├── PluginInit.lua             # Entry point; registers menus
+├── PluginInit.lua             # "Set Up Credentials" menu item
+├── InatAuth.lua               # Token acquisition and credential storage
+├── InatAPI.lua                # HTTP client for the iNaturalist REST API
 ├── ExportServiceProvider.lua  # Upload / publish service
 ├── SyncObservation.lua        # Sync taxon → Lightroom keywords
-├── InatAPI.lua                # HTTP helpers for iNaturalist REST API
-└── CustomMetadata.lua         # Custom metadata schema
+├── CustomMetadata.lua         # Custom metadata schema
+└── json.lua                   # Bundled JSON encoder/decoder
 ```
+
+`InatAPI.lua` is a deliberate mirror of `explore/inat_api.py`, which was used to
+verify every one of these calls against the live API. If you change behaviour in
+one, change it in the other. The API has several traps that are not visible from
+its responses — most notably that updating an observation deletes all of its
+photos unless a specific flag is sent, and returns success either way. These are
+documented at their call sites and in [docs/inat-api-notes.md](../docs/inat-api-notes.md).
 
 ### Reloading after edits
 
@@ -83,4 +129,6 @@ In Plug-in Manager, click **Reload Plug-in** after any Lua file change, or press
 
 ### Logging
 
-Set `LOG_LEVEL = "debug"` at the top of `PluginInit.lua` to enable verbose logging in Lightroom's log file (`~/Library/Logs/Adobe/Lightroom/LrClassicLogs/`).
+The plugin logs to `LrLogger("iNatLightroom")`. Logs land in Lightroom's log
+directory (`~/Documents/LrClassicLogs` on Windows,
+`~/Library/Logs/Adobe/Lightroom/LrClassicLogs/` on macOS).

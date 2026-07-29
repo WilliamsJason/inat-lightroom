@@ -15,16 +15,16 @@
 --]]
 
 local LrApplication    = import "LrApplication"
-local LrCatalog        = import "LrCatalog"
 local LrDialogs        = import "LrDialogs"
-local LrErrors         = import "LrErrors"
 local LrFunctionContext = import "LrFunctionContext"
 local LrLogger         = import "LrLogger"
 local LrProgressScope  = import "LrProgressScope"
 local LrTasks          = import "LrTasks"
 
-local InatAPI    = require "InatAPI"
-local PluginInit = require "PluginInit"
+-- Deliberately does not require PluginInit: that file is a menu-item script
+-- and opens the credentials dialog as soon as it is loaded.
+local InatAPI  = require "InatAPI"
+local InatAuth = require "InatAuth"
 
 local logger = LrLogger("iNatLightroom")
 
@@ -51,15 +51,10 @@ local function ensureKeywordPath(catalog, path)
   return leafKw
 end
 
---- Build keyword path from a taxon dict (mirrors build_keyword_path in Python).
+--- Build the keyword path from a taxon table.
+-- Delegates to InatAPI so the plugin and the Python harness agree on shape.
 local function buildKeywordPath(taxon)
-  local ancestors = taxon.ancestors or {}
-  local path = { "iNaturalist" }
-  for _, a in ipairs(ancestors) do
-    path[#path + 1] = a.name
-  end
-  path[#path + 1] = taxon.name
-  return path
+  return InatAPI.buildKeywordPath(taxon, "iNaturalist")
 end
 
 --------------------------------------------------------------------------------
@@ -127,7 +122,7 @@ end
 --------------------------------------------------------------------------------
 
 LrFunctionContext.callWithContext("inat_sync", function(context)
-  local catalog = LrCatalog.activeCatalog()
+  local catalog = LrApplication.activeCatalog()
   local photos  = catalog:getTargetPhotos()
 
   if not photos or #photos == 0 then
@@ -135,28 +130,17 @@ LrFunctionContext.callWithContext("inat_sync", function(context)
     return
   end
 
-  -- Get API client
-  local creds = PluginInit.getStoredCredentials()
-  if not creds then
-    LrDialogs.message(
-      "iNaturalist Sync",
-      "Credentials are not configured. Use Library → Plug-in Extras → iNaturalist: Set Up Credentials.",
-      "critical"
-    )
-    return
-  end
-
-  local InatAuth = require "InatAuth"
-  local token, authErr = InatAuth.getToken(creds)
-  if not token then
-    LrDialogs.message("iNaturalist Sync", "Authentication failed: " .. (authErr or "?"), "critical")
-    return
-  end
-
-  local api = InatAPI.new(token)
-
-  -- Run sync in a task so the UI stays responsive
+  -- Everything below touches the network, and LrHttp yields, so it all has to
+  -- happen inside an async task -- including acquiring the token.
   LrTasks.startAsyncTask(function()
+    local token, authErr = InatAuth.getToken()
+    if not token then
+      LrDialogs.message("iNaturalist Sync", authErr or "Authentication failed.", "critical")
+      return
+    end
+
+    local api = InatAPI.new(token)
+
     local progress = LrProgressScope {
       title           = "iNaturalist Sync",
       caption         = "Syncing…",

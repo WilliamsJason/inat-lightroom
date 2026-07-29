@@ -15,21 +15,20 @@
                             we upload them here
 --]]
 
+local LrApplication    = import "LrApplication"
 local LrBinding        = import "LrBinding"
-local LrCatalog        = import "LrCatalog"
+local LrDate           = import "LrDate"
 local LrDialogs        = import "LrDialogs"
 local LrErrors         = import "LrErrors"
-local LrExportContext  = import "LrExportContext"
-local LrFunctionContext = import "LrFunctionContext"
 local LrLogger         = import "LrLogger"
-local LrPathUtils      = import "LrPathUtils"
 local LrProgressScope  = import "LrProgressScope"
-local LrStringUtils    = import "LrStringUtils"
 local LrTasks          = import "LrTasks"
 local LrView           = import "LrView"
 
-local InatAPI    = require "InatAPI"
-local PluginInit = require "PluginInit"
+-- Deliberately does not require PluginInit: that file is a menu-item script
+-- and opens the credentials dialog as soon as it is loaded.
+local InatAPI  = require "InatAPI"
+local InatAuth = require "InatAuth"
 
 local logger = LrLogger("iNatLightroom")
 
@@ -44,57 +43,14 @@ local INAT_QUALITY  = 90
 -- Helpers
 --------------------------------------------------------------------------------
 
---- Return an authenticated InatAPI instance, or show an error and return nil.
+--- Return an authenticated InatAPI instance, or nil plus an error message.
+-- Must be called from inside an async task.
 local function requireAPI()
-  local creds = PluginInit.getStoredCredentials()
-  if not creds then
-    LrDialogs.message(
-      "iNaturalist",
-      "Credentials are not set up. Go to Library → Plug-in Extras → iNaturalist: Set Up Credentials.",
-      "critical"
-    )
-    return nil
-  end
-
-  -- Obtain OAuth token via resource-owner password grant.
-  -- In production this should be replaced with the authorization-code flow.
-  local InatAuth = require "InatAuth"
-  local token, err = InatAuth.getToken(creds)
+  local token, err = InatAuth.getToken()
   if not token then
-    LrDialogs.message("iNaturalist", "Authentication failed: " .. (err or "unknown error"), "critical")
-    return nil
+    return nil, err or "iNaturalist credentials are not set up."
   end
-
-  return InatAPI.new(token)
-end
-
---- Build a nested Lightroom keyword hierarchy and apply it to *photo*.
--- @param catalog  LrCatalog
--- @param photo    LrPhoto
--- @param path     ordered list of keyword names, e.g. {"iNaturalist","Plantae",…}
-local function applyKeywordHierarchy(catalog, photo, path)
-  local parentKw = nil
-  for _, name in ipairs(path) do
-    local kw = catalog:createKeyword(name, {}, true, parentKw, true)
-    parentKw = kw
-  end
-  -- parentKw is now the leaf (species) keyword
-  if parentKw then
-    catalog:withWriteAccessDo("iNat keyword", function()
-      photo:addKeyword(parentKw)
-    end)
-  end
-end
-
---- Build the keyword path from a taxon dict (mirrors sync_observation.py).
-local function buildKeywordPath(taxon)
-  local ancestors = taxon.ancestors or {}
-  local path = { "iNaturalist" }
-  for _, a in ipairs(ancestors) do
-    path[#path + 1] = a.name
-  end
-  path[#path + 1] = taxon.name
-  return path
+  return InatAPI.new(token), nil
 end
 
 --------------------------------------------------------------------------------
@@ -232,12 +188,12 @@ end
 function provider.processRenderedPhotos(functionContext, exportContext)
   local exportSession  = exportContext.exportSession
   local exportSettings = exportContext.propertyTable
-  local catalog        = LrCatalog.activeCatalog()
+  local catalog        = LrApplication.activeCatalog()
   local nPhotos        = exportSession:countRenditions()
 
-  local api = requireAPI()
+  local api, apiErr = requireAPI()
   if not api then
-    LrErrors.throwUserError("Cannot upload: credentials not configured.")
+    LrErrors.throwUserError(apiErr)
   end
 
   -- Determine taxon
@@ -253,7 +209,9 @@ function provider.processRenderedPhotos(functionContext, exportContext)
     if firstRendition then
       local dt = firstRendition.photo:getRawMetadata("dateTimeOriginal")
       if dt then
-        observedOn = os.date("%Y-%m-%d", dt)
+        -- Lightroom counts seconds from 2001-01-01, not the Unix epoch, so
+        -- os.date would be 31 years out. LrDate knows the difference.
+        observedOn = LrDate.timeToUserFormat(dt, "%Y-%m-%d")
       end
     end
   end
@@ -265,8 +223,13 @@ function provider.processRenderedPhotos(functionContext, exportContext)
     description        = exportSettings.inat_description or "",
     geoprivacy         = exportSettings.inat_geoprivacy or "open",
   }
-  if exportSettings.inat_latitude  ~= "" then obsParams.latitude  = tonumber(exportSettings.inat_latitude) end
-  if exportSettings.inat_longitude ~= "" then obsParams.longitude = tonumber(exportSettings.inat_longitude) end
+
+  local latitude  = tonumber(exportSettings.inat_latitude or "")
+  local longitude = tonumber(exportSettings.inat_longitude or "")
+  if latitude and longitude then
+    obsParams.latitude  = latitude
+    obsParams.longitude = longitude
+  end
 
   local progress = LrProgressScope {
     title    = "Uploading to iNaturalist…",
@@ -285,7 +248,10 @@ function provider.processRenderedPhotos(functionContext, exportContext)
 
   -- Upload each rendered photo
   local photoIndex = 0
-  for _, rendition in exportSession:renditions() do
+  local uploaded   = 0
+  local failures   = {}
+
+  for _, rendition in exportContext:renditions() do
     photoIndex = photoIndex + 1
     progress:setCaption("Uploading photo " .. photoIndex .. " of " .. nPhotos .. "…")
     progress:setPortionComplete(photoIndex - 1, nPhotos)
@@ -293,15 +259,29 @@ function provider.processRenderedPhotos(functionContext, exportContext)
     local success, pathOrMessage = rendition:waitForRender()
     if not success then
       logger:warn("Render failed: " .. tostring(pathOrMessage))
+      failures[#failures + 1] = "Photo " .. photoIndex .. ": render failed"
     else
       local filePath = pathOrMessage
 
       -- If iNat crop is requested, apply the stored crop before uploading
       -- TODO: crop the rendered file using the stored inat_crop metadata value
 
-      local _, photoErr = api:uploadPhoto(observationId, filePath)
+      -- Verified upload: iNaturalist returns 200 before the image has been
+      -- processed, so a successful response is not evidence the photo
+      -- attached. This polls until it can confirm the attachment, and retries
+      -- if it cannot.
+      local _, photoErr = api:uploadPhotoVerified(observationId, filePath, {
+        sleep = LrTasks.sleep,
+        onEvent = function(message)
+          logger:info("Photo " .. photoIndex .. ": " .. message)
+        end,
+      })
+
       if photoErr then
-        logger:warn("Photo upload error: " .. photoErr)
+        logger:warn("Photo upload error: " .. tostring(photoErr))
+        failures[#failures + 1] = "Photo " .. photoIndex .. ": " .. tostring(photoErr)
+      else
+        uploaded = uploaded + 1
       end
 
       -- Write observation ID back to the Lightroom photo
@@ -323,15 +303,35 @@ function provider.processRenderedPhotos(functionContext, exportContext)
   local projectId = tonumber(exportSettings.inat_project_id)
   if projectId and projectId > 0 then
     progress:setCaption("Adding to project…")
-    api:addToProject(observationId, projectId)
+    local _, projectErr = api:addToProject(observationId, projectId)
+    if projectErr then
+      logger:warn("Could not add to project: " .. tostring(projectErr))
+      failures[#failures + 1] = "Project: " .. tostring(projectErr)
+    end
   end
 
   progress:done()
 
+  local url = "https://www.inaturalist.org/observations/" .. tostring(observationId)
+
+  -- Report photo failures loudly. An observation with no photos is worse than
+  -- no observation at all: it stays at casual grade and nobody can identify it.
+  if #failures > 0 then
+    LrDialogs.message(
+      "iNaturalist Upload Incomplete",
+      string.format(
+        "Observation %s was created, but %d of %d photo(s) uploaded.\n\n%s\n\n%s",
+        tostring(observationId), uploaded, nPhotos,
+        table.concat(failures, "\n"), url),
+      "warning"
+    )
+    return
+  end
+
   LrDialogs.message(
     "iNaturalist Upload Complete",
-    "Observation " .. tostring(observationId) .. " created with " .. nPhotos .. " photo(s).\n\n"
-    .. "https://www.inaturalist.org/observations/" .. tostring(observationId),
+    "Observation " .. tostring(observationId) .. " created with "
+      .. uploaded .. " photo(s).\n\n" .. url,
     "info"
   )
 end
