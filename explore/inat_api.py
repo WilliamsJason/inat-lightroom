@@ -143,15 +143,37 @@ class InatApi:
         return self._first_result(payload)
 
     def update_observation(
-        self, observation_id: int, observation: dict[str, Any]
+        self,
+        observation_id: int,
+        observation: dict[str, Any],
+        *,
+        ignore_photos: bool = True,
     ) -> dict[str, Any]:
-        """Partially update an observation; only the supplied keys change."""
-        payload = self._request(
-            "PUT",
-            f"/observations/{observation_id}",
-            json={"observation": observation},
+        """
+        Partially update an observation; only the supplied keys change.
+
+        .. warning::
+           ``ignore_photos`` defaults to ``True`` here, and you almost
+           certainly want to leave it that way.
+
+           The underlying API treats a ``PUT`` as a *full replacement* of the
+           observation's nested associations. Omitting the flag detaches every
+           photo on the observation -- the request still returns ``200``, and
+           the photo files remain in iNaturalist's storage, but the links to
+           the observation are gone. The observation silently drops to
+           ``casual`` grade with no evidence attached.
+
+           This was verified directly: a PUT without the flag took an
+           observation from 1 photo to 0; the identical PUT with the flag left
+           it untouched.
+        """
+        payload: dict[str, Any] = {"observation": observation}
+        if ignore_photos:
+            payload["ignore_photos"] = True
+        result = self._request(
+            "PUT", f"/observations/{observation_id}", json=payload
         )
-        return self._first_result(payload)
+        return self._first_result(result)
 
     def delete_observation(self, observation_id: int) -> None:
         self._request("DELETE", f"/observations/{observation_id}")
@@ -212,11 +234,15 @@ class InatApi:
 
         iNaturalist accepts the multipart POST and returns ``200`` with a
         populated ``observation_photo`` record *before* the image has been
-        processed and stored.  If that asynchronous processing fails, the
-        record is quietly deleted -- leaving an observation with no photo and
-        a ``casual`` quality grade, despite the client having seen a success
-        response.  This was observed in practice, so treat the POST as a
-        request rather than a confirmation and verify afterwards.
+        processed and stored. The URLs in that response point at placeholder
+        graphics until processing completes, so the response body cannot tell
+        you whether the upload really succeeded.
+
+        Verifying here is cheap insurance. Note that by far the most common
+        cause of a photo going missing is not a failed upload at all, but a
+        subsequent ``PUT`` without ``ignore_photos`` -- see
+        :meth:`update_observation`. Always order operations so that photo
+        uploads come *after* any metadata update, or pass the flag.
 
         Returns the upload response for the attempt that verified.
         """
@@ -345,6 +371,30 @@ class InatApi:
             params={"observation_id": observation_id, "per_page": 100},
         )
         return payload.get("results", [])
+
+    def add_identification(
+        self, observation_id: int, taxon_id: int, body: str = ""
+    ) -> dict[str, Any]:
+        """
+        Add an identification to an observation.
+
+        This is the correct way to change what an observation is identified
+        as. Setting ``taxon_id`` via ``PUT /observations/{id}`` moves the
+        observation's own taxon but leaves the existing identification
+        standing, so the two disagree. Posting a new identification instead
+        makes iNaturalist withdraw the author's previous one automatically.
+        """
+        payload: dict[str, Any] = {
+            "identification": {
+                "observation_id": observation_id,
+                "taxon_id": taxon_id,
+            }
+        }
+        if body:
+            payload["identification"]["body"] = body
+        return self._first_result(
+            self._request("POST", "/identifications", json=payload)
+        )
 
     # ------------------------------------------------------------------
     # Derived helpers (these mirror what the plugin needs to produce)
