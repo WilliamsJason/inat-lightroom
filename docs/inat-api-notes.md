@@ -139,8 +139,7 @@ file=<binary>
 
 #### **[verified] A `200` response does *not* mean the photo is attached**
 
-This is the most dangerous behaviour we found. The upload is processed
-asynchronously:
+The upload is processed asynchronously:
 
 1. The POST returns `200` with a fully-populated `observation_photo` record,
    including a real `id` and correct `width`/`height` — iNaturalist has
@@ -148,15 +147,9 @@ asynchronously:
 2. All `*_url` fields in that response point at
    `https://www.inaturalist.org/attachment_defaults/local_photos/*.png`,
    i.e. placeholder graphics, because the file has not been stored yet.
-3. If the asynchronous processing then fails, **the record is silently
-   deleted.** The observation ends up with no photo and drops to `casual`
-   quality grade, while the client saw nothing but success.
 
-We hit exactly this: `observation_photo` 652907815 returned `200`, then
-vanished. An immediate retry (652911996) succeeded.
-
-**Therefore the plugin must verify after uploading, and retry on failure.**
-See `InatApi.upload_observation_photo_verified` in `explore/inat_api.py`.
+So the response body cannot confirm success. Verify afterwards — see
+`InatApi.upload_observation_photo_verified` in `explore/inat_api.py`.
 
 #### **[verified] Verify against Rails, not the v1 index**
 
@@ -179,6 +172,50 @@ Photos above roughly **20 MB** are rejected. A 33.8 MB camera-original JPEG
 produced a 0.66 MB file with EXIF intact — a 51× reduction. Since the plugin
 is an Export Service Provider, Lightroom's export pipeline handles this
 naturally; never upload the catalog original.
+
+---
+
+### ⚠️ Updating an observation destroys its photos
+
+**[verified] This is the single most dangerous behaviour in the API.**
+
+`PUT /v1/observations/{id}` treats the request as a *full replacement* of the
+observation's nested associations. If the payload does not carry the photos
+forward, **every photo is detached from the observation** — and the request
+still returns `200`.
+
+The photo files themselves survive in iNaturalist's storage and remain
+retrievable by photo ID; it is the `observation_photos` join records that are
+deleted. The observation is left with no evidence and silently drops to
+`casual` quality grade.
+
+The guard is a top-level `ignore_photos` flag, *outside* the `observation`
+object:
+
+```json
+PUT /v1/observations/386157650
+{
+  "observation": { "description": "Updated description" },
+  "ignore_photos": true
+}
+```
+
+Controlled test on a live observation:
+
+| Request | Photos before | Photos after |
+|---|---|---|
+| `PUT` with `ignore_photos: true` | 1 | **1** |
+| `PUT` without the flag | 1 | **0** |
+
+Both returned `200`.
+
+`InatApi.update_observation()` therefore defaults `ignore_photos=True`. Any
+Lua implementation must do the same. Note the flag's name is misleading: it
+does not mean "ignore photos in the payload", it means "leave the existing
+photos alone".
+
+This is easy to misdiagnose, because the v1 index lag means the damage does
+not surface for minutes, long after the update appears to have succeeded.
 
 ---
 
@@ -279,6 +316,17 @@ authoritative and the counts on the observation as advisory.
 identification by the observer, so a brand-new observation already has one.
 Its `category` is `null` until iNaturalist scores it against other
 identifications.
+
+**[verified] To change what an observation is identified as, POST a new
+identification** — do not set `taxon_id` via `PUT /observations/{id}`. Posting
+an identification makes iNaturalist withdraw the author's previous one
+automatically and recompute `category`. Updating the observation's `taxon_id`
+directly leaves the old identification standing, so the two disagree.
+
+```json
+POST /v1/identifications
+{ "identification": { "observation_id": 386157650, "taxon_id": 103486 } }
+```
 
 ---
 

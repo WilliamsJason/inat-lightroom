@@ -429,6 +429,20 @@ def main(argv: list[str] | None = None) -> int:
                 exit_code = 1
             info(f"positional_accuracy: {reread.get('positional_accuracy')}")
 
+            # Regression guard. A PUT without ignore_photos detaches every
+            # photo on the observation while still returning 200, and the
+            # lagging search index hides the damage for minutes. Check the
+            # authoritative source immediately.
+            still_attached = api.count_attached_photos(observation_id)
+            if still_attached >= attached and attached:
+                ok(f"Photos survived the update ({still_attached} still attached)")
+            elif attached:
+                fail(
+                    f"Update destroyed photos: {attached} -> {still_attached}. "
+                    "The PUT is missing ignore_photos."
+                )
+                exit_code = 1
+
         # -- 8. Determination --------------------------------------------
         step("Read the current determination")
         current = api.get_observation(observation_id)
