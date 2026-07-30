@@ -109,6 +109,71 @@ stubs.LrDate = {
   timeToUserFormat = function(_time, _format) return "2026-07-29" end,
 }
 
+-- UI modules. Enough shape to let the export provider load and to record what
+-- would have been shown to the user.
+local dialogMessages = {}
+stubs.LrDialogs = {
+  message = function(title, message, style)
+    dialogMessages[#dialogMessages + 1] =
+      { title = title, message = message, style = style }
+  end,
+  presentModalDialog = function() return "cancel" end,
+}
+
+stubs.LrErrors = {
+  throwUserError = function(message)
+    error({ userError = tostring(message) }, 0)
+  end,
+}
+
+local function passthroughFactory()
+  -- Every view constructor just records its arguments; nothing renders here.
+  return setmetatable({}, {
+    __index = function(_table, _key)
+      return function(_self, args) return args or {} end
+    end,
+  })
+end
+
+stubs.LrView = {
+  osFactory = passthroughFactory,
+  bind = function(spec) return { __bind = spec } end,
+}
+
+stubs.LrBinding = {
+  makePropertyTable = function() return {} end,
+  negativeOfKey = function(key) return { __negative = key } end,
+}
+
+stubs.LrProgressScope = function(args)
+  return {
+    setCaption = function() end,
+    setPortionComplete = function() end,
+    setCancelable = function() end,
+    isCanceled = function() return false end,
+    done = function() end,
+    _args = args,
+  }
+end
+
+stubs.LrFunctionContext = {
+  callWithContext = function(_name, fn) return fn({}) end,
+}
+
+local catalogWrites = {}
+stubs.LrApplication = {
+  activeCatalog = function()
+    return {
+      withWriteAccessDo = function(_self, name, fn)
+        catalogWrites[#catalogWrites + 1] = name
+        fn()
+      end,
+      createKeyword = function(_self, name) return { name = name } end,
+      getTargetPhotos = function() return {} end,
+    }
+  end,
+}
+
 -- Lightroom exposes 'import' as a global.
 function import(name)
   local stub = stubs[name]
@@ -124,6 +189,8 @@ return {
   prefs = prefs,
   logLines = logLines,
   httpCalls = httpCalls,
+  dialogMessages = dialogMessages,
+  catalogWrites = catalogWrites,
   resetHttp = function() httpCalls = {} end,
 }
 """
