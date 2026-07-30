@@ -30,11 +30,9 @@
 --]]
 
 local LrHttp   = import "LrHttp"
-local LrLogger = import "LrLogger"
 
-local json = require "json"
-
-local logger = LrLogger("iNatLightroom")
+local json   = require "json"
+local logger = require "Log"
 
 local API_V1   = "https://api.inaturalist.org/v1"
 local WWW_BASE = "https://www.inaturalist.org"
