@@ -251,8 +251,7 @@ local function passwordGrant(creds)
   }
 
   local respBody, respHeaders = LrHttp.post(
-    WWW_BASE .. "/oauth/token", body, headers,
-    "POST", "application/x-www-form-urlencoded")
+    WWW_BASE .. "/oauth/token", body, headers, "POST")
 
   if not respBody then
     return nil, "No response from the OAuth token endpoint"

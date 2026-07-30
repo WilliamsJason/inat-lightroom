@@ -81,7 +81,20 @@ end
 -- @return decoded table, or nil plus an error message
 local function handleResponse(method, url, body, respHeaders)
   if not body then
-    return nil, method .. " " .. url .. " failed: no response from the server"
+    -- On a transport failure LrHttp returns no body and puts the reason in
+    -- the headers table. Reporting only "no response" throws that away and
+    -- leaves nothing to act on.
+    local detail
+    if type(respHeaders) == "table" and type(respHeaders.error) == "table" then
+      local err = respHeaders.error
+      detail = tostring(err.name or "unknown error")
+      if err.errorCode then
+        detail = detail .. " (code " .. tostring(err.errorCode) .. ")"
+      end
+    end
+
+    return nil, method .. " " .. url .. " failed: "
+      .. (detail or "no response from the server")
   end
 
   local status = respHeaders and tonumber(respHeaders.status)
@@ -142,8 +155,9 @@ end
 local function apiSend(method, url, payload, token)
   local body = json.encode(payload)
   logger:debug(method .. " " .. url)
-  local respBody, respHeaders = LrHttp.post(
-    url, body, jsonHeaders(token), method, "application/json")
+  -- Content type goes in the headers. LrHttp.post's fifth parameter is a
+  -- timeout, and passing a string there stops the request being made at all.
+  local respBody, respHeaders = LrHttp.post(url, body, jsonHeaders(token), method)
   return handleResponse(method, url, respBody, respHeaders)
 end
 
@@ -209,7 +223,7 @@ local function postMultipart(url, fields, file, token)
   end
 
   logger:debug("POST (multipart) " .. url)
-  local respBody, respHeaders = LrHttp.post(url, body, headers, "POST", contentType)
+  local respBody, respHeaders = LrHttp.post(url, body, headers, "POST")
   return handleResponse("POST", url, respBody, respHeaders)
 end
 
@@ -329,7 +343,7 @@ function InatAPI:deleteObservation(observationId)
   local url = API_V1 .. "/observations/" .. tostring(observationId)
   logger:debug("DELETE " .. url)
   local respBody, respHeaders = LrHttp.post(
-    url, "", jsonHeaders(self.token), "DELETE", "application/json")
+    url, "", jsonHeaders(self.token), "DELETE")
   return handleResponse("DELETE", url, respBody, respHeaders)
 end
 
