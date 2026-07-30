@@ -25,14 +25,11 @@ local LrBinding         = import "LrBinding"
 local LrDialogs         = import "LrDialogs"
 local LrFunctionContext = import "LrFunctionContext"
 local LrHttp            = import "LrHttp"
-local LrLogger          = import "LrLogger"
 local LrTasks           = import "LrTasks"
 local LrView            = import "LrView"
 
 local InatAuth = require "InatAuth"
-
-local logger = LrLogger("iNatLightroom")
-logger:enable("logfile")
+local logger   = require "Log"
 
 local TOKEN_URL = "https://www.inaturalist.org/users/api_token"
 local APP_URL   = "https://www.inaturalist.org/oauth/applications/new"

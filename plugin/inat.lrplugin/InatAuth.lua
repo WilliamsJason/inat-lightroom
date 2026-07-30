@@ -32,13 +32,12 @@
 --]]
 
 local LrHttp    = import "LrHttp"
-local LrLogger  = import "LrLogger"
 local LrPasswords = import "LrPasswords"
 local LrPrefs   = import "LrPrefs"
 
 local json = require "json"
 
-local logger = LrLogger("iNatLightroom")
+local logger = require "Log"
 local prefs  = LrPrefs.prefsForPlugin()
 
 local WWW_BASE = "https://www.inaturalist.org"

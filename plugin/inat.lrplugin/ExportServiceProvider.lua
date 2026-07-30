@@ -20,7 +20,7 @@ local LrBinding        = import "LrBinding"
 local LrDate           = import "LrDate"
 local LrDialogs        = import "LrDialogs"
 local LrErrors         = import "LrErrors"
-local LrLogger         = import "LrLogger"
+local LrFunctionContext = import "LrFunctionContext"
 local LrProgressScope  = import "LrProgressScope"
 local LrTasks          = import "LrTasks"
 local LrView           = import "LrView"
@@ -29,8 +29,7 @@ local LrView           = import "LrView"
 -- and opens the credentials dialog as soon as it is loaded.
 local InatAPI  = require "InatAPI"
 local InatAuth = require "InatAuth"
-
-local logger = LrLogger("iNatLightroom")
+local logger   = require "Log"
 
 --------------------------------------------------------------------------------
 -- Export size defaults
@@ -51,6 +50,86 @@ local function requireAPI()
     return nil, err or "iNaturalist credentials are not set up."
   end
   return InatAPI.new(token), nil
+end
+
+--- Ask iNaturalist for taxa matching a name and let the user pick one.
+--
+-- Writes the chosen taxon into inat_taxon_id / inat_taxon_name on the export
+-- property table. Without this nothing ever sets inat_taxon_id and every
+-- export stops at the "select a species" check.
+local function showSpeciesPicker(propertyTable)
+  LrTasks.startAsyncTask(function()
+    local query = propertyTable.inat_species_guess
+
+    if not query or query == "" then
+      LrDialogs.message("iNaturalist",
+        "Type part of a species name first, then click Search.", "info")
+      return
+    end
+
+    local api, apiErr = requireAPI()
+    if not api then
+      LrDialogs.message("iNaturalist", apiErr, "critical")
+      return
+    end
+
+    local taxa, err = api:autocompleteTaxon(query)
+    if not taxa then
+      LrDialogs.message("iNaturalist", "Search failed:\n\n" .. tostring(err), "critical")
+      return
+    end
+
+    if #taxa == 0 then
+      LrDialogs.message("iNaturalist", "Nothing matched \"" .. query .. "\".", "info")
+      return
+    end
+
+    LrFunctionContext.callWithContext("inat_species_picker", function(context)
+      local f     = LrView.osFactory()
+      local props = LrBinding.makePropertyTable(context)
+
+      local items = {}
+      for _, taxon in ipairs(taxa) do
+        local label = taxon.name or "?"
+        if taxon.preferred_common_name then
+          label = taxon.preferred_common_name .. " (" .. label .. ")"
+        end
+        if taxon.rank then
+          label = label .. "  [" .. taxon.rank .. "]"
+        end
+        items[#items + 1] = { title = label, value = taxon.id }
+      end
+
+      props.chosen = items[1].value
+
+      local result = LrDialogs.presentModalDialog {
+        title    = "Choose a Taxon",
+        contents = f:column {
+          bind_to_object = props,
+          spacing = f:label_spacing(),
+          f:static_text { title = #taxa .. " match(es) for \"" .. query .. "\":" },
+          f:popup_menu {
+            value = LrView.bind("chosen"),
+            items = items,
+            width = 420,
+          },
+        },
+      }
+
+      if result ~= "ok" then return end
+
+      for _, taxon in ipairs(taxa) do
+        if taxon.id == props.chosen then
+          propertyTable.inat_taxon_id   = tostring(taxon.id)
+          propertyTable.inat_taxon_name = taxon.name or ""
+          propertyTable.inat_species_guess = taxon.name or query
+          logger:info("Selected taxon " .. tostring(taxon.id)
+            .. " (" .. tostring(taxon.name) .. ")")
+          return
+        end
+      end
+    end)
+  end)
 end
 
 --------------------------------------------------------------------------------
@@ -82,7 +161,8 @@ function provider.sectionsForTopOfDialog(f, propertyTable)
   return {
     {
       title = "iNaturalist Observation",
-      synopsis = LrBinding.negativeOfKey("inat_taxon_name"),
+      -- Shown collapsed in the export panel, so make it the chosen taxon.
+      synopsis = LrView.bind("inat_taxon_name"),
 
       -- Species search
       f:row {
@@ -95,9 +175,27 @@ function provider.sectionsForTopOfDialog(f, propertyTable)
         f:push_button {
           title  = "Search",
           action = function()
-            -- TODO: open species autocomplete picker dialog
-            LrDialogs.message("Species search", "Autocomplete picker – coming soon.", "info")
+            showSpeciesPicker(propertyTable)
           end,
+        },
+      },
+
+      -- Confirmation of what will actually be uploaded. The search field is
+      -- free text, so without this there is no way to tell whether a taxon was
+      -- ever resolved.
+      f:row {
+        f:static_text { title = "Selected:", width = 90, alignment = "right" },
+        f:static_text {
+          title = LrView.bind {
+            key = "inat_taxon_name",
+            transform = function(value)
+              if not value or value == "" then
+                return "none yet - click Search"
+              end
+              return value
+            end,
+          },
+          width = 320,
         },
       },
 

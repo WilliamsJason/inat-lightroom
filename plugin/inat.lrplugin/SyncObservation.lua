@@ -17,7 +17,6 @@
 local LrApplication    = import "LrApplication"
 local LrDialogs        = import "LrDialogs"
 local LrFunctionContext = import "LrFunctionContext"
-local LrLogger         = import "LrLogger"
 local LrProgressScope  = import "LrProgressScope"
 local LrTasks          = import "LrTasks"
 
@@ -25,8 +24,7 @@ local LrTasks          = import "LrTasks"
 -- and opens the credentials dialog as soon as it is loaded.
 local InatAPI  = require "InatAPI"
 local InatAuth = require "InatAuth"
-
-local logger = LrLogger("iNatLightroom")
+local logger   = require "Log"
 
 --------------------------------------------------------------------------------
 -- Build keyword hierarchy and return the leaf keyword object
