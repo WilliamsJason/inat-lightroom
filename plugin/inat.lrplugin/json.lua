@@ -128,20 +128,35 @@ local function decode_error(str, idx, msg)
   error(string.format("json.decode: %s at line %d col %d", msg, line_count, idx))
 end
 
+-- Lightroom embeds Lua 5.1, which has no bitwise operators. This has to be
+-- done with plain arithmetic; using | and >> here is what stopped the whole
+-- plugin from loading.
 local function codepoint_to_utf8(cp)
-  if cp < 0x80 then return string.char(cp) end
-  if cp < 0x800 then
-    return string.char(0xC0 | (cp >> 6), 0x80 | (cp & 0x3F))
+  local floor = math.floor
+
+  if cp <= 0x7F then
+    return string.char(cp)
   end
-  if cp < 0x10000 then
-    return string.char(0xE0 | (cp >> 12), 0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F))
+  if cp <= 0x7FF then
+    return string.char(
+      floor(cp / 64) + 192,
+      cp % 64 + 128)
   end
-  return string.char(
-    0xF0 | (cp >> 18),
-    0x80 | ((cp >> 12) & 0x3F),
-    0x80 | ((cp >> 6) & 0x3F),
-    0x80 | (cp & 0x3F)
-  )
+  if cp <= 0xFFFF then
+    return string.char(
+      floor(cp / 4096) + 224,
+      floor(cp % 4096 / 64) + 128,
+      cp % 64 + 128)
+  end
+  if cp <= 0x10FFFF then
+    return string.char(
+      floor(cp / 262144) + 240,
+      floor(cp % 262144 / 4096) + 128,
+      floor(cp % 4096 / 64) + 128,
+      cp % 64 + 128)
+  end
+
+  error(string.format("json.decode: invalid unicode codepoint '%x'", cp))
 end
 
 local function parse_unicode_escape(str, i)
