@@ -46,17 +46,20 @@ local function tokenStatusText()
     return "An OAuth application is configured. Tokens refresh automatically."
   end
 
-  local age = InatAuth.tokenAgeSeconds()
-  if not age then
+  local remaining = InatAuth.tokenSecondsRemaining()
+  if not remaining then
     return "No token stored yet."
   end
 
-  local hours = math.floor(age / 3600)
-  if hours >= 24 then
-    return "Stored token is " .. hours .. " hours old and has expired. Paste a new one."
+  if remaining <= 0 then
+    return "The stored token has expired. Paste a new one."
   end
 
-  return string.format("Stored token is %d hour(s) old. Tokens last 24 hours.", hours)
+  local hours = math.floor(remaining / 3600)
+  if hours < 1 then
+    return "The stored token expires in less than an hour."
+  end
+  return "The stored token is valid for about " .. hours .. " more hour(s)."
 end
 
 local function showSetupDialog()

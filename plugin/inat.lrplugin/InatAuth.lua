@@ -34,6 +34,7 @@
 local LrHttp    = import "LrHttp"
 local LrPasswords = import "LrPasswords"
 local LrPrefs   = import "LrPrefs"
+local LrStringUtils = import "LrStringUtils"
 
 local json = require "json"
 
@@ -75,11 +76,44 @@ local function store(key, value)
   LrPasswords.store(key, value or "")
 end
 
---- Store a JWT pasted by the user, recording when it was obtained.
+--- Read the expiry out of a JWT.
+--
+-- A JWT is three base64url segments separated by dots, the middle one being
+-- JSON with an "exp" claim holding a Unix timestamp. Reading it means expiry
+-- is known rather than inferred from when the user happened to paste, which
+-- matters when a token was copied some time before it was pasted in.
+--
+-- @return expiry as a Unix timestamp, or nil if it cannot be determined
+local function decodeExpiry(token)
+  local payload = token:match("^[^%.]+%.([^%.]+)%.")
+  if not payload then return nil end
+
+  -- base64url differs from base64 in two characters, and drops the padding.
+  payload = payload:gsub("%-", "+"):gsub("_", "/")
+
+  local remainder = #payload % 4
+  if remainder == 2 then
+    payload = payload .. "=="
+  elseif remainder == 3 then
+    payload = payload .. "="
+  elseif remainder == 1 then
+    return nil
+  end
+
+  local ok, decoded = pcall(LrStringUtils.decodeBase64, payload)
+  if not ok or not decoded then return nil end
+
+  local parsedOk, parsed = pcall(json.decode, decoded)
+  if not parsedOk or type(parsed) ~= "table" then return nil end
+
+  return tonumber(parsed.exp)
+end
+
+--- Store a JWT pasted by the user.
 -- Accepts either a bare token or the whole {"api_token":"..."} response body.
 function InatAuth.storeApiToken(raw)
   if not raw or raw == "" then
-    return false, "No token supplied"
+    return false, "No token supplied."
   end
 
   local token = raw:gsub("^%s+", ""):gsub("%s+$", "")
@@ -92,10 +126,26 @@ function InatAuth.storeApiToken(raw)
     token = decoded.api_token
   end
 
+  -- Catch the common paste mistakes -- grabbing the page text, the URL, or
+  -- only part of the token -- before they turn into a confusing API error.
+  if not token:match("^[%w%-_]+%.[%w%-_]+%.[%w%-_]+$") then
+    return false, "That does not look like an iNaturalist API token.\n\n"
+      .. "Expected three dot-separated blocks. Copy the value of the "
+      .. "\"api_token\" field from www.inaturalist.org/users/api_token."
+  end
+
+  local expiresAt = decodeExpiry(token)
+  if expiresAt and expiresAt <= os.time() then
+    return false, "That token has already expired.\n\n"
+      .. "Reload www.inaturalist.org/users/api_token to get a fresh one."
+  end
+
   store(KEY_API_TOKEN, token)
   prefs.apiTokenObtainedAt = os.time()
+  prefs.apiTokenExpiresAt  = expiresAt
   prefs.authMode = "manual_jwt"
-  logger:info("Stored a manually pasted JWT")
+  logger:info("Stored a manually pasted JWT"
+    .. (expiresAt and (", expires at " .. tostring(expiresAt)) or ""))
   return true, nil
 end
 
@@ -108,6 +158,7 @@ function InatAuth.storeOAuthApp(appId, appSecret, username, userPass)
   prefs.authMode = "oauth_app"
   -- Force the next call to mint a fresh token.
   prefs.apiTokenObtainedAt = nil
+  prefs.apiTokenExpiresAt  = nil
   logger:info("Stored OAuth application credentials")
   return true, nil
 end
@@ -129,26 +180,44 @@ function InatAuth.clear()
     store(key, "")
   end
   prefs.apiTokenObtainedAt = nil
+  prefs.apiTokenExpiresAt  = nil
   prefs.authMode = nil
   logger:info("Cleared stored credentials")
 end
 
---- Seconds until the cached JWT is considered stale; nil when none is stored.
+--- Seconds since the stored JWT was obtained; nil when none is stored.
 function InatAuth.tokenAgeSeconds()
   if not prefs.apiTokenObtainedAt then return nil end
   return os.time() - prefs.apiTokenObtainedAt
 end
 
-local function cachedTokenIsFresh()
+--- Seconds until the stored JWT expires. Negative when already expired,
+-- nil when there is no token or its expiry could not be determined.
+function InatAuth.tokenSecondsRemaining()
+  if prefs.apiTokenExpiresAt then
+    return prefs.apiTokenExpiresAt - os.time()
+  end
+
+  -- No decoded expiry: fall back to assuming the full lifetime from when it
+  -- was stored.
+  if prefs.apiTokenObtainedAt then
+    return (prefs.apiTokenObtainedAt + JWT_LIFETIME_SECONDS) - os.time()
+  end
+
+  return nil
+end
+
+--- Return the stored JWT if it is still usable, else nil.
+local function cachedTokenIfUsable()
   local token = retrieve(KEY_API_TOKEN)
   if not token then return nil end
 
-  local obtainedAt = prefs.apiTokenObtainedAt
-  if not obtainedAt then return nil end
+  local remaining = InatAuth.tokenSecondsRemaining()
+  if not remaining then return nil end
 
-  if os.time() - obtainedAt > (JWT_LIFETIME_SECONDS - JWT_REFRESH_MARGIN) then
-    return nil
-  end
+  -- Refresh early so a long export cannot have its token die mid-run.
+  if remaining <= JWT_REFRESH_MARGIN then return nil end
+
   return token
 end
 
@@ -239,22 +308,29 @@ end
 
 --- Return a JWT suitable for the v1 API.
 --
--- Resolution order: a cached, still-fresh JWT, then a refresh via stored
--- OAuth application credentials.
+-- Resolution order: the stored JWT while it remains valid, then a refresh via
+-- stored OAuth application credentials.
 --
 -- Must be called from inside an async task, because LrHttp yields.
 --
--- @param forceRefresh  Skip the cache and mint a new token.
+-- @param forceRefresh  Mint a new token rather than reusing the stored one.
+--                      Only meaningful with OAuth credentials configured; a
+--                      pasted token cannot be regenerated from within the
+--                      plugin, so this is ignored in that case. Honouring it
+--                      regardless is what previously made a token that had
+--                      just been pasted report itself as expired.
 -- @return token string, or nil plus an error message
 function InatAuth.getToken(forceRefresh)
-  if not forceRefresh then
-    local cached = cachedTokenIsFresh()
+  local canRefresh = InatAuth.hasOAuthApp()
+
+  if not (forceRefresh and canRefresh) then
+    local cached = cachedTokenIfUsable()
     if cached then
       return cached, nil
     end
   end
 
-  if not InatAuth.hasOAuthApp() then
+  if not canRefresh then
     if retrieve(KEY_API_TOKEN) then
       return nil, "Your iNaturalist token has expired. Tokens last 24 hours.\n\n"
         .. "Sign in at inaturalist.org, open www.inaturalist.org/users/api_token, "
@@ -284,6 +360,7 @@ function InatAuth.getToken(forceRefresh)
 
   store(KEY_API_TOKEN, jwt)
   prefs.apiTokenObtainedAt = os.time()
+  prefs.apiTokenExpiresAt  = decodeExpiry(jwt)
   logger:info("Refreshed JWT from stored OAuth application credentials")
 
   return jwt, nil
