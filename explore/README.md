@@ -139,5 +139,35 @@ in practice by `feasibility_test.py`, which uses the direct client.
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-Tests in `tests/` use `responses` for HTTP mocking, so no real API calls are
-made and no credentials are required.
+Two kinds of test live here.
+
+`tests/` covers the Python client and uses `responses` for HTTP mocking, so no
+real API calls are made and no credentials are required.
+
+`test_*_lua.py` covers **the plugin's actual Lua**, run outside Lightroom.
+`lua_harness.py` loads the real plugin files into a Lua 5.1 interpreter — the
+same version Lightroom embeds — against stubbed SDK modules:
+
+```python
+from lua_harness import LuaPlugin
+
+plugin = LuaPlugin()
+api = plugin.require("InatAPI")
+```
+
+This exists because every bug in the Lua so far could only be reproduced by
+installing the plugin, clicking through Lightroom and reading the error
+dialog. The stubs enforce the SDK's real constraints rather than being
+permissive — the catalog refuses writes outside a transaction, async tasks
+queue rather than running inline — because a stub that accepts anything gives
+a green suite and a broken plugin.
+
+`check_lua.py` parses every plugin file under Lua 5.1 and is worth running
+before asking Lightroom to reload:
+
+```powershell
+.\.venv\Scripts\python.exe check_lua.py
+```
+
+See [docs/lightroom-sdk-notes.md](../docs/lightroom-sdk-notes.md) for what
+these tests are guarding against.
