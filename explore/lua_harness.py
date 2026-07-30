@@ -89,9 +89,17 @@ stubs.LrHttp = {
     if HTTP_HANDLER then return HTTP_HANDLER("GET", url, nil, headers) end
     error("unexpected HTTP GET in test: " .. tostring(url))
   end,
-  post = function(url, body, headers, method, contentType)
-    httpCalls[#httpCalls + 1] =
-      { method = method or "POST", url = url, body = body, headers = headers }
+  -- The real LrHttp.post takes (url, body, headers, method, timeout). Anything
+  -- beyond the fourth argument is recorded so tests can assert we are not
+  -- passing a content type positionally, which silently stops the request.
+  post = function(url, body, headers, method, ...)
+    httpCalls[#httpCalls + 1] = {
+      method = method or "POST",
+      url = url,
+      body = body,
+      headers = headers,
+      extraArgs = select("#", ...),
+    }
     if HTTP_HANDLER then
       return HTTP_HANDLER(method or "POST", url, body, headers)
     end
@@ -259,11 +267,22 @@ class LuaPlugin:
     def http_calls(self) -> list[dict]:
         """Every request the plugin made, in order, as plain dicts."""
         calls = self.env["httpCalls"]
+
+        def headers_of(call) -> dict:
+            raw = call["headers"]
+            if raw is None:
+                return {}
+            return {
+                raw[i]["field"]: raw[i]["value"] for i in range(1, len(raw) + 1)
+            }
+
         return [
             {
                 "method": calls[i]["method"],
                 "url": calls[i]["url"],
                 "body": calls[i]["body"],
+                "headers": headers_of(calls[i]),
+                "extra_args": calls[i]["extraArgs"],
             }
             for i in range(1, len(calls) + 1)
         ]

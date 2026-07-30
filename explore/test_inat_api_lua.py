@@ -227,6 +227,81 @@ def test_identifications_are_posted_not_put(api_pair):
 
 
 # ---------------------------------------------------------------------------
+# LrHttp call convention
+# ---------------------------------------------------------------------------
+
+
+def test_post_does_not_pass_a_content_type_positionally(api_pair):
+    """LrHttp.post's fifth parameter is a timeout, not a content type.
+
+    Passing "application/json" there meant no request was made at all, and the
+    only symptom was "no response from the server".
+    """
+    plugin, api, fake = api_pair
+    fake.add("/observations", {"id": 1})
+    fake.add("/identifications", {"id": 2})
+    fake.add("/observation_photos", {"id": 3})
+
+    plugin.call(api.createObservation, api, plugin.eval("{}"))
+    plugin.call(api.updateObservation, api, 1, plugin.eval("{}"))
+    plugin.call(api.addIdentification, api, 1, 2)
+    plugin.call(api.deleteObservation, api, 1)
+
+    writes = [call for call in plugin.http_calls if call["method"] != "GET"]
+    assert writes, "expected some write requests"
+
+    for call in writes:
+        assert call["extra_args"] == 0, (
+            f"{call['method']} {call['url']} passed extra positional arguments "
+            "to LrHttp.post"
+        )
+
+
+def test_writes_declare_their_content_type_in_headers(api_pair):
+    """Content type has to travel in the headers, not as a positional arg."""
+    plugin, api, fake = api_pair
+    fake.add("/observations", {"id": 1})
+
+    plugin.call(api.createObservation, api, plugin.eval("{}"))
+
+    call = plugin.http_calls[-1]
+    assert call["headers"]["Content-Type"] == "application/json"
+
+
+def test_multipart_declares_its_boundary_in_headers(api_pair, tmp_path):
+    plugin, api, fake = api_pair
+    photo = tmp_path / "photo.jpg"
+    photo.write_bytes(b"data")
+    fake.add("/observation_photos", {"id": 3})
+
+    plugin.call(api.uploadPhoto, api, 9, str(photo))
+
+    call = plugin.http_calls[-1]
+    assert call["extra_args"] == 0
+    assert "multipart/form-data; boundary=" in call["headers"]["Content-Type"]
+
+    boundary = call["headers"]["Content-Type"].split("boundary=", 1)[1]
+    assert boundary in call["body"], "body must use the boundary it declares"
+
+
+def test_transport_failures_report_the_underlying_reason(api_pair):
+    """LrHttp puts the reason in the headers table when there is no body."""
+    plugin, api, fake = api_pair
+    plugin.set_http_handler(
+        lambda *_args: (
+            None,
+            plugin.eval('{error = {name = "Network is unreachable", errorCode = 6}}'),
+        )
+    )
+
+    observation, err = plugin.call(api.getObservation, api, 1)
+
+    assert observation is None
+    assert "Network is unreachable" in err
+    assert "6" in err
+
+
+# ---------------------------------------------------------------------------
 # Verified upload
 # ---------------------------------------------------------------------------
 
