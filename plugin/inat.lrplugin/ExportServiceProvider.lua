@@ -132,6 +132,50 @@ local function showSpeciesPicker(propertyTable)
   end)
 end
 
+--- Return the first photo in the export, or nil.
+--
+-- renditions() is a Lua iterator, so calling it directly yields the loop
+-- index rather than a rendition. Driving it with a for loop and returning
+-- immediately is the correct way to peek at the first entry.
+local function firstExportPhoto(exportSession)
+  -- photosToExport hands back LrPhoto objects and does not disturb the
+  -- rendition queue, which is what we want when only reading metadata.
+  local ok, photo = pcall(function()
+    for _, candidate in exportSession:photosToExport() do
+      return candidate
+    end
+    return nil
+  end)
+  if ok and photo then return photo end
+
+  local fallbackOk, fallback = pcall(function()
+    for _, rendition in exportSession:renditions() do
+      return rendition.photo
+    end
+    return nil
+  end)
+  if fallbackOk then return fallback end
+
+  return nil
+end
+
+--- Work out the observation date: the panel override, else the first photo.
+local function observedOnFor(exportSession, override)
+  if override and override ~= "" then
+    return override
+  end
+
+  local photo = firstExportPhoto(exportSession)
+  if not photo then return nil end
+
+  local captured = photo:getRawMetadata("dateTimeOriginal")
+  if not captured then return nil end
+
+  -- Lightroom counts seconds from 2001-01-01, not the Unix epoch, so os.date
+  -- would be 31 years out. LrDate knows the difference.
+  return LrDate.timeToUserFormat(captured, "%Y-%m-%d")
+end
+
 --------------------------------------------------------------------------------
 -- Export service provider table
 --------------------------------------------------------------------------------
@@ -301,18 +345,7 @@ function provider.processRenderedPhotos(functionContext, exportContext)
   end
 
   -- Determine observation date from settings or first photo EXIF
-  local observedOn = exportSettings.inat_date
-  if not observedOn or observedOn == "" then
-    local firstRendition = exportSession:renditions()()
-    if firstRendition then
-      local dt = firstRendition.photo:getRawMetadata("dateTimeOriginal")
-      if dt then
-        -- Lightroom counts seconds from 2001-01-01, not the Unix epoch, so
-        -- os.date would be 31 years out. LrDate knows the difference.
-        observedOn = LrDate.timeToUserFormat(dt, "%Y-%m-%d")
-      end
-    end
-  end
+  local observedOn = observedOnFor(exportSession, exportSettings.inat_date)
 
   -- Create observation (all selected photos share one observation)
   local obsParams = {
@@ -433,5 +466,13 @@ function provider.processRenderedPhotos(functionContext, exportContext)
     "info"
   )
 end
+
+-- Exposed for tests only. These are pure logic that would otherwise need a
+-- running export to reach, and one of them was the source of a crash that only
+-- appeared at upload time.
+provider._internal = {
+  firstExportPhoto = firstExportPhoto,
+  observedOnFor    = observedOnFor,
+}
 
 return provider
