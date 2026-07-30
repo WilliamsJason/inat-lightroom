@@ -108,13 +108,27 @@ stubs.LrHttp = {
   openUrlInBrowser = function() end,
 }
 
+-- Async tasks do not run inline in Lightroom: they are queued and run once the
+-- caller has returned. Modelling that is what makes a progress scope outliving
+-- its function context visible here instead of only in the host.
+local pendingTasks = {}
+
+local function runPendingTasks()
+  while #pendingTasks > 0 do
+    local fn = table.remove(pendingTasks, 1)
+    fn()
+  end
+end
+
 stubs.LrTasks = {
-  startAsyncTask = function(fn) fn() end,
+  startAsyncTask = function(fn) pendingTasks[#pendingTasks + 1] = fn end,
   sleep = function() end,
 }
 
 stubs.LrDate = {
   timeToUserFormat = function(_time, _format) return "2026-07-29" end,
+  timeToW3CDate = function(_time) return "2026-07-29T19:36:41Z" end,
+  currentTime = function() return 807126000 end,
 }
 
 -- UI modules. Enough shape to let the export provider load and to record what
@@ -153,7 +167,18 @@ stubs.LrBinding = {
   negativeOfKey = function(key) return { __negative = key } end,
 }
 
+-- A function context dies when the function owning it returns. Anything still
+-- holding one after that is holding a dead object, which is easy to do by
+-- pairing callWithContext with an async task.
+local function newContext()
+  return { alive = true }
+end
+
 stubs.LrProgressScope = function(args)
+  local context = args and args.functionContext
+  if context and context.alive == false then
+    error("LrProgressScope: its function context has already ended", 0)
+  end
   return {
     setCaption = function() end,
     setPortionComplete = function() end,
@@ -165,22 +190,88 @@ stubs.LrProgressScope = function(args)
 end
 
 stubs.LrFunctionContext = {
-  callWithContext = function(_name, fn) return fn({}) end,
+  callWithContext = function(_name, fn)
+    local context = newContext()
+    local result = fn(context)
+    context.alive = false
+    runPendingTasks()
+    return result
+  end,
+  -- The right tool when the work is asynchronous: the context lives exactly as
+  -- long as the task does.
+  postAsyncTaskWithContext = function(_name, fn)
+    pendingTasks[#pendingTasks + 1] = function()
+      local context = newContext()
+      fn(context)
+      context.alive = false
+    end
+  end,
 }
 
 local catalogWrites = {}
-stubs.LrApplication = {
-  activeCatalog = function()
-    return {
-      withWriteAccessDo = function(_self, name, fn)
-        catalogWrites[#catalogWrites + 1] = name
-        fn()
-      end,
-      createKeyword = function(_self, name) return { name = name } end,
-      getTargetPhotos = function() return {} end,
-    }
+local createdKeywords = {}
+local targetPhotos = {}
+local catalog
+
+-- The real catalog refuses writes outside a transaction. Letting them through
+-- here would mean the tests pass and Lightroom throws.
+local function requireWriteAccess(what)
+  if not catalog._writing then
+    error(what .. ": must be called inside a withWriteAccessDo block", 0)
+  end
+end
+
+local function newPhoto(props)
+  local photo = { _props = props or {}, keywords = {} }
+  photo.getPropertyForPlugin = function(self, _plugin, key)
+    return self._props[key]
+  end
+  photo.setPropertyForPlugin = function(self, _plugin, key, value)
+    requireWriteAccess("LrPhoto:setPropertyForPlugin")
+    self._props[key] = value
+  end
+  photo.addKeyword = function(self, keyword)
+    requireWriteAccess("LrPhoto:addKeyword")
+    self.keywords[#self.keywords + 1] = keyword
+  end
+  return photo
+end
+
+catalog = {
+  _writing = false,
+
+  withWriteAccessDo = function(self, name, fn)
+    catalogWrites[#catalogWrites + 1] = name
+    self._writing = true
+    local ok, err = pcall(fn)
+    self._writing = false
+    if not ok then error(err, 0) end
   end,
+
+  -- createKeyword(name, synonyms, includeOnExport, parent, returnExistingIfAny)
+  createKeyword = function(_self, name, _synonyms, _include, parent, returnExisting)
+    requireWriteAccess("LrCatalog:createKeyword")
+    local parentName = parent and parent.name or nil
+    for _, keyword in ipairs(createdKeywords) do
+      if keyword.name == name and keyword.parent == parentName then
+        if returnExisting then return keyword end
+        error("LrCatalog:createKeyword: keyword exists: " .. name, 0)
+      end
+    end
+    local keyword = { name = name, parent = parentName }
+    createdKeywords[#createdKeywords + 1] = keyword
+    return keyword
+  end,
+
+  getTargetPhotos = function() return targetPhotos end,
 }
+
+stubs.LrApplication = {
+  activeCatalog = function() return catalog end,
+}
+
+-- Lightroom exposes the plugin object as a global.
+_PLUGIN = { id = "com.github.inat-lightroom" }
 
 -- Lightroom exposes 'import' as a global.
 function import(name)
@@ -199,6 +290,10 @@ return {
   httpCalls = httpCalls,
   dialogMessages = dialogMessages,
   catalogWrites = catalogWrites,
+  createdKeywords = createdKeywords,
+  newPhoto = newPhoto,
+  setTargetPhotos = function(photos) targetPhotos = photos end,
+  runPendingTasks = runPendingTasks,
   resetHttp = function() httpCalls = {} end,
 }
 """
@@ -289,6 +384,46 @@ class LuaPlugin:
 
     def eval(self, source: str):
         return self.runtime.eval(source)
+
+    @property
+    def dialogs(self) -> list[dict]:
+        """Messages that would have been shown to the user."""
+        shown = self.env["dialogMessages"]
+        return [
+            {
+                "title": shown[i]["title"],
+                "message": shown[i]["message"],
+                "style": shown[i]["style"],
+            }
+            for i in range(1, len(shown) + 1)
+        ]
+
+    @property
+    def catalog_writes(self) -> list[str]:
+        """Names of the write transactions opened, in order."""
+        writes = self.env["catalogWrites"]
+        return [writes[i] for i in range(1, len(writes) + 1)]
+
+    @property
+    def keywords(self) -> list[dict]:
+        """Keywords created, as {"name", "parent"} with parent names."""
+        created = self.env["createdKeywords"]
+        return [
+            {"name": created[i]["name"], "parent": created[i]["parent"]}
+            for i in range(1, len(created) + 1)
+        ]
+
+    def new_photo(self, **properties):
+        """Build a stub LrPhoto carrying the given plugin metadata."""
+        return self.env["newPhoto"](self.runtime.table_from(properties))
+
+    def set_target_photos(self, photos) -> None:
+        """Set what catalog:getTargetPhotos() returns."""
+        self.env["setTargetPhotos"](self.runtime.table_from(list(photos)))
+
+    def run_pending_tasks(self) -> None:
+        """Run queued async tasks, as Lightroom would once the caller returns."""
+        self.env["runPendingTasks"]()
 
     def set_http_handler(self, handler) -> None:
         """Swap the HTTP stub mid-test."""
