@@ -133,7 +133,16 @@ class LuaPlugin:
     """A Lua 5.1 runtime preloaded with fake Lightroom SDK modules."""
 
     def __init__(self, http_handler: Any = None) -> None:
-        self.runtime = lua51.LuaRuntime(unpack_returned_tuples=False)
+        # unpack_returned_tuples lets a Python HTTP stub return (body, headers)
+        # and have Lua see two values, matching LrHttp.
+        #
+        # latin-1 rather than utf-8 because multipart bodies carry raw JPEG
+        # bytes. It maps every byte to exactly one character and never fails,
+        # so binary survives the round trip while ASCII (all our JSON) is
+        # unaffected. utf-8 raises on the first 0xFF of a JPEG header.
+        self.runtime = lua51.LuaRuntime(
+            unpack_returned_tuples=True, encoding="latin-1"
+        )
         globals_ = self.runtime.globals()
 
         globals_["PY_B64DECODE"] = lambda value: base64.b64decode(value)
@@ -179,8 +188,25 @@ class LuaPlugin:
         lines = self.env["logLines"]
         return [lines[i] for i in range(1, len(lines) + 1)]
 
+    @property
+    def http_calls(self) -> list[dict]:
+        """Every request the plugin made, in order, as plain dicts."""
+        calls = self.env["httpCalls"]
+        return [
+            {
+                "method": calls[i]["method"],
+                "url": calls[i]["url"],
+                "body": calls[i]["body"],
+            }
+            for i in range(1, len(calls) + 1)
+        ]
+
     def eval(self, source: str):
         return self.runtime.eval(source)
+
+    def set_http_handler(self, handler) -> None:
+        """Swap the HTTP stub mid-test."""
+        self.runtime.globals()["HTTP_HANDLER"] = handler
 
 
 def make_jwt(expires_at: int | None, *, payload: dict | None = None) -> str:
