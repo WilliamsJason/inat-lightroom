@@ -113,6 +113,7 @@ inat.lrplugin/
 ├── ExportServiceProvider.lua  # Upload / publish service
 ├── SyncObservation.lua        # Sync taxon → Lightroom keywords
 ├── CustomMetadata.lua         # Custom metadata schema
+├── Log.lua                    # Shared, enabled logger
 └── json.lua                   # Bundled JSON encoder/decoder
 ```
 
@@ -126,6 +127,29 @@ documented at their call sites and in [docs/inat-api-notes.md](../docs/inat-api-
 ### Reloading after edits
 
 In Plug-in Manager, click **Reload Plug-in** after any Lua file change, or press **Ctrl+Alt+Shift+,** (Mac: **⌘⌥⇧,**) in Lightroom Classic.
+
+### Testing before reloading
+
+Lightroom embeds **Lua 5.1**, and a single 5.3-only operator anywhere stops the
+whole plugin loading. The plugin's Lua can be parsed and exercised outside
+Lightroom:
+
+```powershell
+cd ..\explore
+.\.venv\Scripts\python.exe check_lua.py    # parse every file under Lua 5.1
+.\.venv\Scripts\python.exe -m pytest       # run the plugin's Lua against SDK stubs
+```
+
+`explore/lua_harness.py` loads these real files into a Lua 5.1 interpreter with
+stubbed `Lr*` modules, so token handling, HTTP shapes, keyword building and
+error paths are all testable without installing anything. It cannot tell you
+whether the real SDK matches the stubs, so new SDK calls still need one pass
+through Lightroom.
+
+The SDK behaviours that have actually broken this plugin — and how each is
+guarded — are written up in
+[docs/lightroom-sdk-notes.md](../docs/lightroom-sdk-notes.md). Worth reading
+before adding SDK calls.
 
 ### Logging
 
