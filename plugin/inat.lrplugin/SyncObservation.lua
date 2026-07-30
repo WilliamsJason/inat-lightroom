@@ -15,10 +15,10 @@
 --]]
 
 local LrApplication    = import "LrApplication"
+local LrDate           = import "LrDate"
 local LrDialogs        = import "LrDialogs"
 local LrFunctionContext = import "LrFunctionContext"
 local LrProgressScope  = import "LrProgressScope"
-local LrTasks          = import "LrTasks"
 
 -- Deliberately does not require PluginInit: that file is a menu-item script
 -- and opens the credentials dialog as soon as it is loaded.
@@ -87,12 +87,12 @@ local function syncPhoto(catalog, photo, api)
     end
   end
 
-  -- Build and apply keyword hierarchy
-  local path   = buildKeywordPath(taxon)
-  local leafKw = ensureKeywordPath(catalog, path)
+  -- Build and apply keyword hierarchy. createKeyword needs write access just
+  -- as the metadata setters do, so it shares the one transaction.
+  local path = buildKeywordPath(taxon)
 
-  -- Write back metadata and keyword in a single write transaction
   catalog:withWriteAccessDo("iNat sync", function()
+    local leafKw = ensureKeywordPath(catalog, path)
     if leafKw then
       photo:addKeyword(leafKw)
     end
@@ -108,7 +108,7 @@ local function syncPhoto(catalog, photo, api)
     photo:setPropertyForPlugin(_PLUGIN, "inat_observation_url",
       "https://www.inaturalist.org/observations/" .. tostring(obsId))
     photo:setPropertyForPlugin(_PLUGIN, "inat_last_synced",
-      os.date("!%Y-%m-%dT%H:%M:%SZ"))
+      LrDate.timeToW3CDate(LrDate.currentTime()))
   end)
 
   logger:info("Synced photo → obs=" .. obsId .. " taxon=" .. (taxon.name or "?"))
@@ -119,7 +119,11 @@ end
 -- Entry point – runs when the menu item is selected
 --------------------------------------------------------------------------------
 
-LrFunctionContext.callWithContext("inat_sync", function(context)
+-- The whole job is asynchronous: LrHttp yields, so the token fetch and every
+-- request have to run in a task. postAsyncTaskWithContext is what pairs the two
+-- correctly -- callWithContext would return the moment the task was queued,
+-- leaving the progress scope holding a context that had already ended.
+LrFunctionContext.postAsyncTaskWithContext("inat_sync", function(context)
   local catalog = LrApplication.activeCatalog()
   local photos  = catalog:getTargetPhotos()
 
@@ -128,55 +132,50 @@ LrFunctionContext.callWithContext("inat_sync", function(context)
     return
   end
 
-  -- Everything below touches the network, and LrHttp yields, so it all has to
-  -- happen inside an async task -- including acquiring the token.
-  LrTasks.startAsyncTask(function()
-    local token, authErr = InatAuth.getToken()
-    if not token then
-      LrDialogs.message("iNaturalist Sync", authErr or "Authentication failed.", "critical")
-      return
+  local token, authErr = InatAuth.getToken()
+  if not token then
+    LrDialogs.message("iNaturalist Sync", authErr or "Authentication failed.", "critical")
+    return
+  end
+
+  local api = InatAPI.new(token)
+
+  local progress = LrProgressScope {
+    title           = "iNaturalist Sync",
+    caption         = "Syncing…",
+    functionContext = context,
+  }
+  progress:setCancelable(true)
+
+  local synced  = 0
+  local skipped = 0
+  local errors  = {}
+
+  for i, photo in ipairs(photos) do
+    if progress:isCanceled() then break end
+
+    progress:setCaption("Photo " .. i .. " of " .. #photos .. "…")
+    progress:setPortionComplete(i - 1, #photos)
+
+    local ok, err = syncPhoto(catalog, photo, api)
+    if ok then
+      synced = synced + 1
+    elseif err and err:find("No iNaturalist observation ID") then
+      skipped = skipped + 1
+    else
+      errors[#errors + 1] = err
+      logger:warn("Sync error for photo " .. i .. ": " .. (err or "?"))
     end
+  end
 
-    local api = InatAPI.new(token)
+  progress:done()
 
-    local progress = LrProgressScope {
-      title           = "iNaturalist Sync",
-      caption         = "Syncing…",
-      functionContext = context,
-    }
-    progress:setCancelable(true)
-
-    local synced  = 0
-    local skipped = 0
-    local errors  = {}
-
-    for i, photo in ipairs(photos) do
-      if progress:isCanceled() then break end
-
-      progress:setCaption("Photo " .. i .. " of " .. #photos .. "…")
-      progress:setPortionComplete(i - 1, #photos)
-
-      local ok, err = syncPhoto(catalog, photo, api)
-      if ok then
-        synced = synced + 1
-      elseif err and err:find("No iNaturalist observation ID") then
-        skipped = skipped + 1
-      else
-        errors[#errors + 1] = err
-        logger:warn("Sync error for photo " .. i .. ": " .. (err or "?"))
-      end
-    end
-
-    progress:done()
-
-    -- Summary dialog
-    local msg = string.format(
-      "Sync complete.\n\nSynced: %d\nSkipped (no ID): %d\nErrors: %d",
-      synced, skipped, #errors
-    )
-    if #errors > 0 then
-      msg = msg .. "\n\nFirst error:\n" .. errors[1]
-    end
-    LrDialogs.message("iNaturalist Sync", msg, #errors > 0 and "warning" or "info")
-  end)
+  local msg = string.format(
+    "Sync complete.\n\nSynced: %d\nSkipped (no ID): %d\nErrors: %d",
+    synced, skipped, #errors
+  )
+  if #errors > 0 then
+    msg = msg .. "\n\nFirst error:\n" .. errors[1]
+  end
+  LrDialogs.message("iNaturalist Sync", msg, #errors > 0 and "warning" or "info")
 end)
