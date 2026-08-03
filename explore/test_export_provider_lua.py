@@ -18,11 +18,15 @@ one observation or get one each.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 pytest.importorskip("lupa.lua51", reason="lupa is not installed")
 
-from lua_harness import LuaPlugin
+from lua_harness import LuaPlugin, make_jwt
+
+FUTURE = 4_102_444_800  # 2100-01-01, comfortably unexpired
 
 
 @pytest.fixture
@@ -482,3 +486,132 @@ def test_publishing_cannot_send_a_file_larger_than_inaturalist_accepts(provider)
     assert export_settings["LR_format"] == "JPEG"
     assert export_settings["LR_size_maxWidth"] == 2048
     assert export_settings["LR_size_resizeType"] == "longEdge"
+
+
+
+# ---------------------------------------------------------------------------
+# A whole publish run
+# ---------------------------------------------------------------------------
+
+
+def fake_inaturalist(plugin):
+    """Answer just enough of the API to get a photo published.
+
+    The verification poll reads the Rails .json endpoint rather than v1, so the
+    attached-photo count has to grow as uploads arrive or the upload is treated
+    as never having landed.
+    """
+    attached = {}
+
+    def handler(method, url, body=None, headers=None):
+        if method == "POST" and url.endswith("/v1/observations"):
+            obs_id = 700 + len(attached)
+            attached[obs_id] = 0
+            payload = {"results": [{"id": obs_id, "uuid": "u-%d" % obs_id}]}
+        elif method == "POST" and url.endswith("/observation_photos"):
+            obs_id = max(attached)
+            attached[obs_id] += 1
+            payload = {"results": [{"id": 9000 + attached[obs_id]}]}
+        elif url.endswith(".json"):
+            obs_id = int(url.rsplit("/", 1)[-1].split(".")[0])
+            payload = {"observation_photos": [{}] * attached.get(obs_id, 0)}
+        else:
+            payload = {"results": []}
+        return json.dumps(payload), plugin.runtime.table_from({"status": 200})
+
+    plugin.set_http_handler(handler)
+
+
+def export_context(plugin, photos, files, **service_settings):
+    """A stub LrExportContext yielding one already-rendered rendition each."""
+    builder = plugin.eval(
+        '''
+        function(photos, files, settings)
+          local renditions = {}
+          for i, photo in ipairs(photos) do
+            local r = { photo = photo, wasSkipped = false, recorded = {} }
+            function r:waitForRender() return true, files[i] end
+            function r:recordPublishedPhotoId(id) self.recorded.id = id end
+            function r:recordPublishedPhotoUrl(url) self.recorded.url = url end
+            function r:uploadFailed(m) self.recorded.failed = m end
+            renditions[i] = r
+          end
+
+          local progress = {}
+          function progress:setPortionComplete() end
+          function progress:setCaption() end
+          function progress:done() end
+
+          return {
+            propertyTable = settings,
+            exportSession = { countRenditions = function() return #renditions end },
+            configureProgress = function() return progress end,
+            renditions = function()
+              local i = 0
+              return function()
+                i = i + 1
+                if renditions[i] then return i, renditions[i] end
+              end
+            end,
+          }
+        end
+        '''
+    )
+    return builder(
+        plugin.runtime.table_from(list(photos)),
+        plugin.runtime.table_from(list(files)),
+        settings(plugin, **service_settings),
+    )
+
+
+def test_publishing_syncs_what_it_published_not_the_library_selection(tmp_path):
+    """Sync-on-publish used to call syncTargetPhotos, which reads the Library
+    selection. The Publish button is in the left panel, nowhere near the
+    filmstrip, so after a publish the selection is rarely the set that was just
+    uploaded: it synced the wrong photos, or none at all."""
+    plugin = LuaPlugin()
+    plugin.call(plugin.require("InatAuth")["storeApiToken"], make_jwt(FUTURE))
+    fake_inaturalist(plugin)
+
+    published = plugin.new_photo()
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="555")])
+
+    rendered = tmp_path / "render.jpg"
+    rendered.write_bytes(b"not really a jpeg")
+
+    provider = plugin.require("ExportServiceProvider")
+    provider["processRenderedPhotos"](
+        None,
+        export_context(plugin, [published], [str(rendered)],
+                       inat_sync_on_publish=True),
+    )
+    plugin.run_pending_tasks()
+
+    fetched = [c["url"] for c in plugin.http_calls if c["method"] == "GET"]
+    assert any(u.endswith("/v1/observations/700") for u in fetched)
+    assert not any("555" in u for u in fetched)
+
+
+def test_a_published_photo_ends_up_linked_to_its_observation(tmp_path):
+    """The end-to-end shape: an observation is created, the render is uploaded
+    and verified against it, and the photo carries the ID, UUID and URL that
+    every later republish and sync depends on."""
+    plugin = LuaPlugin()
+    plugin.call(plugin.require("InatAuth")["storeApiToken"], make_jwt(FUTURE))
+    fake_inaturalist(plugin)
+
+    photo = plugin.new_photo()
+    rendered = tmp_path / "render.jpg"
+    rendered.write_bytes(b"not really a jpeg")
+
+    provider = plugin.require("ExportServiceProvider")
+    provider["processRenderedPhotos"](
+        None,
+        export_context(plugin, [photo], [str(rendered)]),
+    )
+
+    props = photo["_props"]
+    assert props["inat_observation_id"] == "700"
+    assert props["inat_observation_uuid"] == "u-700"
+    assert props["inat_observation_url"].endswith("/observations/700")
+    assert plugin.dialogs == [], "a clean publish should report nothing"

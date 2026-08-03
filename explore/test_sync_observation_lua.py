@@ -222,16 +222,47 @@ def test_a_photo_without_an_observation_id_is_skipped_not_failed():
     assert summary["style"] == "info"
 
 
-def test_an_observation_with_no_taxon_yet_is_reported_as_an_error():
-    """Freshly created observations lag the search index by minutes."""
+def test_an_unidentified_observation_is_a_normal_outcome_not_an_error():
+    """Nobody has identified a brand-new observation, so with sync-on-publish
+    turned on this is what almost every first publish looks like. Counting it
+    as an error meant a warning dialog after a publish that went perfectly."""
     plugin = make_plugin({"/observations/999": observation()})
     plugin.set_target_photos([plugin.new_photo(inat_observation_id="999")])
 
     run_sync(plugin)
 
     summary = plugin.dialogs[-1]
-    assert "has no taxon data yet" in summary["message"]
-    assert summary["style"] == "warning"
+    assert "Not identified yet: 1" in summary["message"]
+    assert "Errors: 0" in summary["message"]
+    assert summary["style"] == "info"
+
+
+def test_an_unidentified_observation_still_records_its_uuid_and_url():
+    """This is the whole reason to sync a photo that was linked by pasting an
+    ID: without the UUID its next publish creates a second observation. Bailing
+    out before the write, because no taxon had arrived yet, lost exactly the
+    field that mattered."""
+    plugin = make_plugin({"/observations/999": observation()})
+    photo = plugin.new_photo(inat_observation_id="999")
+    plugin.set_target_photos([photo])
+
+    run_sync(plugin)
+
+    props = photo["_props"]
+    assert props["inat_observation_uuid"] == "0e1d2c3b-4a59-6879-8a9b-0c1d2e3f4a5b"
+    assert props["inat_observation_url"].endswith("/observations/999")
+    assert props["inat_last_synced"]
+
+
+def test_an_unidentified_observation_adds_no_keywords():
+    """A taxon-less observation has nothing to file under, and an "iNaturalist"
+    root keyword on its own is just clutter."""
+    plugin = make_plugin({"/observations/999": observation()})
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="999")])
+
+    run_sync(plugin)
+
+    assert plugin.keywords == []
 
 
 def test_ancestors_are_fetched_when_the_observation_omits_them():
@@ -250,10 +281,11 @@ def test_ancestors_are_fetched_when_the_observation_omits_them():
 
 
 def test_one_failing_photo_does_not_stop_the_rest():
+    """A deleted or private observation should cost that photo and no other."""
     plugin = make_plugin(
         {
             "/observations/999": observation(community=DAMSELFLY),
-            "/observations/888": observation(obs_id=888),
+            "/observations/888": {"results": []},
         }
     )
     plugin.set_target_photos(
