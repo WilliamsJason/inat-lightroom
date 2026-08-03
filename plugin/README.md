@@ -69,9 +69,15 @@ the Metadata panel's iNaturalist preset.
 
 Lightroom then tracks the collection for you: photos are New, Modified or
 Published, and editing a photo's species guess or crop marks it for republish.
-Republishing replaces the uploaded image on the existing observation rather than
-creating a second one, and removing a photo from the collection detaches it on
-iNaturalist too.
+Republishing pushes the photo's current details to the existing observation and
+replaces the uploaded image on it, rather than creating a second one; removing
+a photo from the collection detaches it on iNaturalist too.
+
+The connection's **Default taxon** is a fallback only. A photo with its own
+species guess keeps it — iNaturalist prefers a taxon ID over free text, so
+sending both would mean the connection-wide default silently won. The default
+is also never re-sent on a republish, where the observation may already carry
+identifications from other people.
 
 The export settings (JPEG, 2048 px long edge, sRGB, quality 90) are locked by
 the plugin. iNaturalist rejects uploads over roughly 20 MB and displays at most
