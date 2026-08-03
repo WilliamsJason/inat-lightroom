@@ -151,6 +151,23 @@ def test_metadata_is_written_back():
     assert props["inat_last_synced"]
 
 
+def test_a_synced_photo_gets_its_panel_action_links():
+    """The Metadata panel renders a url field as a clickable row, which is the
+    only button this plugin can put in the Library panel. A field with no value
+    renders nothing, so syncing has to fill them in."""
+    plugin = make_plugin(
+        {"/observations/999": observation(community=DAMSELFLY)}
+    )
+    photo = plugin.new_photo(inat_observation_id="999")
+    plugin.set_target_photos([photo])
+
+    run_sync(plugin)
+
+    props = photo["_props"]
+    assert props["inat_action_sync"] == "lightroom://com.github.inat-lightroom/sync"
+    assert props["inat_action_link"] == "lightroom://com.github.inat-lightroom/link"
+
+
 def test_the_community_taxon_wins_over_the_uploader_s_own():
     """The point of syncing is to pick up what other people decided."""
     mine = taxon("Ischnura", 111, ancestors=["Animalia"])

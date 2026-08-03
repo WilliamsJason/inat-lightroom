@@ -273,6 +273,19 @@ stubs.LrApplication = {
 -- Lightroom exposes the plugin object as a global.
 _PLUGIN = { id = "com.github.inat-lightroom" }
 
+-- LOC is a global in Lightroom, not a module, and every Info.lua / tagset /
+-- metadata definition calls it at load time. Without it those files cannot be
+-- required here at all. The real one looks up a translation and falls back to
+-- the default text after the '='; with no translations loaded that fallback is
+-- exactly what Lightroom itself returns.
+function LOC(key, ...)
+  local text = tostring(key):match("^%$%$%$/[^=]*=(.*)$") or tostring(key)
+  local args = { ... }
+  return (text:gsub("%^(%d)", function(index)
+    return tostring(args[tonumber(index)] or "")
+  end))
+end
+
 -- Lightroom exposes 'import' as a global.
 function import(name)
   local stub = stubs[name]
@@ -294,6 +307,7 @@ return {
   newPhoto = newPhoto,
   setTargetPhotos = function(photos) targetPhotos = photos end,
   runPendingTasks = runPendingTasks,
+  pendingTaskCount = function() return #pendingTasks end,
   resetHttp = function() httpCalls = {} end,
 }
 """
@@ -413,6 +427,11 @@ class LuaPlugin:
             for i in range(1, len(created) + 1)
         ]
 
+    @property
+    def catalog(self):
+        """The stub LrCatalog, for code that takes one as an argument."""
+        return self.env["stubs"]["LrApplication"]["activeCatalog"]()
+
     def new_photo(self, **properties):
         """Build a stub LrPhoto carrying the given plugin metadata."""
         return self.env["newPhoto"](self.runtime.table_from(properties))
@@ -424,6 +443,15 @@ class LuaPlugin:
     def run_pending_tasks(self) -> None:
         """Run queued async tasks, as Lightroom would once the caller returns."""
         self.env["runPendingTasks"]()
+
+    @property
+    def pending_tasks(self) -> int:
+        """How many async tasks are queued but not yet run.
+
+        Useful for asserting that something dispatched work, when running that
+        work would need more of Lightroom than the stubs provide.
+        """
+        return self.env["pendingTaskCount"]()
 
     def set_http_handler(self, handler) -> None:
         """Swap the HTTP stub mid-test."""

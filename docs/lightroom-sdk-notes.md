@@ -116,6 +116,91 @@ for _, rendition in exportSession:renditions() do ... end
 To look at the photos without disturbing the rendition queue, use
 `exportSession:photosToExport()`, which returns `LrPhoto` objects directly.
 
+## A plugin cannot add a panel to the Library right side
+
+There is no Info.lua key for it, and looking for one costs an afternoon because
+plugins like Assisted Culling visibly have panels between Histogram and Quick
+Develop. They are not using the SDK. Dumping the shipped binaries settles it:
+
+| Binary | Info.lua keys it recognises |
+|---|---|
+| `substrate.dll` (plugin loader) | `LrSdkVersion`, `LrSdkMinimumVersion`, `LrToolkitIdentifier`, `LrPluginName`, `LrInitPlugin`, `LrShutdownPlugin`, `LrEnablePlugin`, `LrDisablePlugin`, `LrExportServiceProvider`, `LrMetadataProvider`, `URLHandler` |
+| `Library.lrmodule` | `LrLibraryMenuItems`, `LrExportMenuItems`, `LrHelpMenuItems`, `LrFilterPresetFactory`, `LrForceInitPlugin` |
+| `LibraryToolkit.dll` | `LrMetadataTagsetFactory`, `LrPublishService` |
+
+```powershell
+$txt = [System.Text.Encoding]::ASCII.GetString(
+  [System.IO.File]::ReadAllBytes("C:\Program Files\Adobe\Adobe Lightroom Classic\substrate.dll"))
+[regex]::Matches($txt, 'Lr[A-Za-z]{3,45}') | ForEach-Object { $_.Value } | Sort-Object -Unique
+```
+
+Nothing resembling `LrLibraryPanelSections` exists anywhere in the product. A
+third-party panel is a companion application's own window, positioned over the
+panel column — not available to a pure Lua plugin.
+
+The closest legitimate surface is `LrMetadataTagsetFactory`: a preset in the
+Metadata panel's dropdown that shows a chosen set of fields. It is a preset,
+not a new panel, so selecting it replaces whatever the user had there. Ship a
+combined preset alongside the plugin-only one or nobody will leave it selected.
+
+## `URLHandler` is a real Info.lua key
+
+Undocumented in most places you would look, but Adobe's own bundled
+`Flickr.lrplugin` uses it, and `lightroom://` is registered as a system
+protocol handler pointing at `Lightroom.exe`. The contract is confirmed by the
+constant table of Flickr's compiled `URLHandler.lua` chunk (`import`,
+`LrErrors`, `LrLogger`, `FlickrAPI`, `URLHandler`):
+
+```lua
+-- Info.lua
+URLHandler = "URLHandler.lua",
+
+-- URLHandler.lua
+return { URLHandler = function(url) ... end }
+```
+
+A bare function, or a differently named key, is never called.
+
+This matters because the Metadata panel renders a custom field of
+`dataType = "url"` as a clickable row, and a row is the nearest thing to a
+button that panel offers. A field holding
+`lightroom://com.github.inat-lightroom/sync` is therefore a candidate panel
+button. Whether Lightroom actually routes a click on a *metadata* URL back into
+the plugin is still unverified in the host.
+
+A custom metadata field has no default value, so a field nothing has written to
+renders nothing at all. Action links have to be written onto each photo before
+they appear.
+
+## Valid tagset field IDs come from Lightroom's own tagsets
+
+A tagset naming a field ID Lightroom does not accept misbehaves without raising,
+and the list of valid `com.adobe.*` IDs is not published anywhere convenient.
+
+It is tempting to grep the binaries for `com.adobe.*` strings and use whatever
+comes back. That is wrong, and quietly so: a string being present does not make
+it a valid *tagset item*. `com.adobe.label` looks like the colour label and is
+actually a section-heading formatter, only meaningful in table form with a
+`label =` attribute; the colour label is `com.adobe.colorLabels`. Likewise
+`com.adobe.keywords` exists as a string and is not a tagset item.
+
+The authority is `AgMetadataTagsets.lua`, compiled into `LibraryToolkit.dll`,
+which defines the built-in presets. Its string constants are readable in order,
+so the Default preset's item list can be read straight out:
+
+```powershell
+$txt = [System.Text.Encoding]::ASCII.GetString(
+  [System.IO.File]::ReadAllBytes("C:\Program Files\Adobe\Adobe Lightroom Classic\LibraryToolkit.dll"))
+$i = $txt.IndexOf("com.adobe.tagsets.default")
+($txt.Substring($i, 3000) -replace '[^\x20-\x7E]','.') -replace '\.{3,}',' | '
+```
+
+Anything the built-in tagsets use is safe. `explore/test_panel_actions_lua.py`
+holds that list and asserts this plugin's tagsets stay inside it.
+
+Plugin fields are addressed as `<LrToolkitIdentifier>.<field id>`; a bare field
+ID silently resolves to nothing.
+
 ## `LrLogger` writes nothing until it is enabled
 
 `LrLogger("name")` returns a logger that silently discards everything until
@@ -153,8 +238,15 @@ and `LrDate.currentTime()` for "now".
 ## Menu-item scripts run on load
 
 Anything in `LrLibraryMenuItems` executes its file top to bottom when clicked.
-Never `require` such a file from another module — this plugin's `PluginInit.lua`
-opens the credentials dialog as a side effect of loading.
+Never `require` such a file from another module. This is not theoretical: the
+sync used to live in `SyncObservation.lua`, which made it unreachable from
+anywhere except its own menu item, and adding a second caller meant extracting
+the logic into `SyncCore.lua` first. `PluginInit.lua` had the same problem —
+requiring it opened the credentials dialog as a side effect.
+
+The pattern that works is a module holding the logic and a two-line script
+holding the entry point. `explore/test_panel_actions_lua.py` asserts no module
+requires a menu script.
 
 ## `LrBinding.negativeOfKey` returns a boolean
 

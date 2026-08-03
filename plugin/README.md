@@ -15,8 +15,8 @@ This directory contains the **inat.lrplugin** Adobe Lightroom Classic plugin.
 
 ## First-time setup
 
-Go to **Library → Plug-in Extras → iNaturalist: Set Up Credentials**. There are
-two ways to authenticate, and the dialog offers both.
+Go to **Library → Plug-in Extras → iNaturalist…** and choose *Set up
+credentials*. There are two ways to authenticate, and the dialog offers both.
 
 ### Option 1 — paste an API token (works today)
 
@@ -75,26 +75,60 @@ silently empty observation.
 ### Sync taxon data back to Lightroom
 
 1. Select photos that already have an iNaturalist observation ID.
-2. Go to **Library → Plug-in Extras → iNaturalist: Sync Selected Photos**.
+2. Click **Sync from iNaturalist** in the Metadata panel (see below), or use
+   **Library → Plug-in Extras → iNaturalist…**.
 3. The plugin fetches the latest community determination from iNaturalist and:
    - Creates/updates the taxonomic keyword hierarchy under an **iNaturalist** root keyword.
    - Updates the custom metadata fields (taxon name, common name, quality grade, etc.).
 
 ---
 
-## Custom metadata fields
+## The iNaturalist panel
 
-These fields appear in the **Metadata** panel under the *iNaturalist* panel set:
+Lightroom does not let a plugin add its own panel to the Library right side, so
+the plugin lives in the **Metadata** panel instead. Open the drop-down at the
+top left of that panel and choose one of:
+
+| Preset | What it shows |
+|---|---|
+| **iNaturalist + Default** | Your usual metadata fields, then the iNaturalist ones |
+| **iNaturalist** | The iNaturalist fields only |
+
+**iNaturalist + Default** is the one to leave selected — it is a superset of the
+fields most people keep in *Default*.
+
+### Actions
+
+Two rows in that panel are clickable:
+
+- **Sync from iNaturalist** — same as the menu item, for the selected photos.
+- **Link to Observation…** — paste an observation ID or URL to attach the
+  selected photos to an observation that already exists on iNaturalist, then
+  sync it. This is the way to adopt observations you made in the app or on the
+  web.
+
+These rows only appear on photos the plugin has touched. To add them to photos
+that have no iNaturalist data yet, use **Library → Plug-in Extras →
+iNaturalist…** and choose *Add iNaturalist actions to selected photos*.
+
+The **Observation ID** field is editable: typing an ID there and syncing does
+the same job as *Link to Observation…*. Everything else is read-only, because it
+mirrors iNaturalist and the next sync would overwrite an edit.
+
+---
+
+## Custom metadata fields
 
 | Field | Description |
 |---|---|
-| **Observation ID** | iNaturalist observation ID |
+| **Observation ID** | iNaturalist observation ID (editable) |
 | **Observation URL** | Direct link to the observation |
 | **Taxon ID** | ID of the community-determined taxon |
 | **Taxon Name** | Scientific name |
 | **Common Name** | Vernacular/common name |
 | **Quality Grade** | `casual`, `needs_id`, or `research` |
 | **Last Synced** | Timestamp of the last sync |
+| **iNat Crop** | Crop used only for the uploaded image |
 
 ---
 
@@ -106,16 +140,29 @@ The plugin is written in **Lua** using the [Lightroom Classic SDK](https://www.a
 
 ```
 inat.lrplugin/
-├── Info.lua                   # Plugin identity, version, menu items
-├── PluginInit.lua             # "Set Up Credentials" menu item
+├── Info.lua                   # Plugin identity, version, menu, tagsets, URL handler
+├── InatMenu.lua               # The single Plug-in Extras entry
+├── PluginInit.lua             # Legacy "Set Up Credentials" menu item
+├── SyncObservation.lua        # Menu script: launches a sync
+├── CredentialsDialog.lua      # The credentials dialog itself
+├── SyncCore.lua               # Sync logic, callable from any entry point
 ├── InatAuth.lua               # Token acquisition and credential storage
 ├── InatAPI.lua                # HTTP client for the iNaturalist REST API
 ├── ExportServiceProvider.lua  # Upload / publish service
-├── SyncObservation.lua        # Sync taxon → Lightroom keywords
+├── PanelActions.lua           # lightroom:// action links for the Metadata panel
+├── URLHandler.lua             # Receives those links and dispatches
+├── TagsetInat.lua             # Metadata panel preset: iNaturalist only
+├── TagsetInatCombined.lua     # Metadata panel preset: everyday + iNaturalist
 ├── CustomMetadata.lua         # Custom metadata schema
 ├── Log.lua                    # Shared, enabled logger
 └── json.lua                   # Bundled JSON encoder/decoder
 ```
+
+Lightroom runs a menu-item script top to bottom when the item is clicked, which
+means such a file cannot be required from anywhere else without performing its
+action as a side effect. `InatMenu.lua`, `PluginInit.lua` and
+`SyncObservation.lua` are therefore thin launchers; the logic they run lives in
+`SyncCore.lua` and `CredentialsDialog.lua`.
 
 `InatAPI.lua` is a deliberate mirror of `explore/inat_api.py`, which was used to
 verify every one of these calls against the live API. If you change behaviour in

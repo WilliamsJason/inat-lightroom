@@ -25,17 +25,35 @@ return {
   -- Custom metadata panel shown in the Metadata panel set
   LrMetadataProvider = "CustomMetadata.lua",
 
-  -- Library menu extras
+  -- Metadata panel presets.
+  --
+  -- Lightroom has no SDK hook for adding a panel to the Library right panel
+  -- stack -- the plugin loader (substrate.dll) and Library.lrmodule between
+  -- them recognise only the keys used in this file, and none of them are panel
+  -- sections. The Metadata panel's preset dropdown is as close as a plugin
+  -- gets to owning a section of that column, so that is where this plugin's UI
+  -- lives.
+  LrMetadataTagsetFactory = {
+    "TagsetInat.lua",
+    "TagsetInatCombined.lua",
+  },
+
+  -- Handles lightroom://com.github.inat-lightroom/<action> URLs, which is how
+  -- the clickable rows in the Metadata panel invoke plugin code. Undocumented
+  -- but real: Adobe's own bundled Flickr.lrplugin uses the same key.
+  URLHandler = "URLHandler.lua",
+
+  -- Library menu extras.
+  --
+  -- One item on purpose. A menu is a bad home for this and everything it can
+  -- do is reachable from the Metadata panel; what has to stay is a way to arm
+  -- photos that have no iNaturalist data yet, which the panel cannot do for
+  -- itself.
   LrLibraryMenuItems = {
     {
-      title   = LOC "$$$/iNatLightroom/Menu/Sync=iNaturalist: Sync Selected Photos",
-      file    = "SyncObservation.lua",
-      enabledWhen = "photosSelected",
-    },
-    {
-      title   = LOC "$$$/iNatLightroom/Menu/Setup=iNaturalist: Set Up Credentials",
-      file    = "PluginInit.lua",
-      id      = "setup_credentials",
+      title = LOC "$$$/iNatLightroom/Menu/Main=iNaturalist…",
+      file  = "InatMenu.lua",
+      id    = "inat_menu",
     },
   },
 

@@ -13,29 +13,99 @@ The plugin is an **Adobe Lightroom Classic** plugin written in Lua using the [Li
 
 ```
 inat.lrplugin/
-├── Info.lua                   # Plugin identity, SDK version, menu items
-├── PluginInit.lua             # Entry point: called when Lightroom loads the plugin
+├── Info.lua                   # Plugin identity, SDK version, menu, tagsets, URL handler
+├── PluginInit.lua             # Menu script: opens the credentials dialog
+├── InatMenu.lua               # Menu script: the single Plug-in Extras entry
+├── SyncObservation.lua        # Menu script: launches a sync
+├── CredentialsDialog.lua      # The credentials dialog itself
+├── SyncCore.lua               # Sync logic, callable from any entry point
 ├── ExportServiceProvider.lua  # Publish service (upload to iNaturalist)
-├── SyncObservation.lua        # Sync taxon keywords from iNaturalist → Lightroom
+├── PanelActions.lua           # lightroom:// action links for the Metadata panel
+├── URLHandler.lua             # Receives those links and dispatches
+├── TagsetInat.lua             # Metadata panel preset: iNaturalist fields only
+├── TagsetInatCombined.lua     # Metadata panel preset: everyday fields + iNaturalist
 ├── InatAPI.lua                # HTTP helpers wrapping iNaturalist REST API (LrHttp)
 └── CustomMetadata.lua         # Custom metadata schema definition
 ```
+
+The three menu scripts are deliberately thin. Lightroom executes a menu-item
+file top to bottom when the item is clicked, so a file registered as a menu item
+cannot be required from anywhere else without performing its action as a side
+effect. Logic lives in `SyncCore.lua` and `CredentialsDialog.lua`; the scripts
+only launch it.
+
+---
+
+## Where the plugin lives in the UI
+
+Lightroom Classic has **no SDK hook for adding a panel to the Library right
+panel stack**. This was checked against the shipped binaries, not assumed — see
+[lightroom-sdk-notes.md](lightroom-sdk-notes.md). Third-party products that
+appear to have one are companion applications drawing their own window over the
+panel column.
+
+So the plugin's home is the **Metadata panel**, via two presets in its dropdown:
+
+| Preset | Contents |
+|---|---|
+| `iNaturalist` | Only this plugin's fields |
+| `iNaturalist + Default` | The everyday Lightroom fields, then iNaturalist |
+
+The combined preset is the one meant for daily use. A preset *replaces* the
+panel's contents rather than adding to it, so a plugin-only preset is something
+users switch away from and never switch back.
+
+### Actions in the panel
+
+The Metadata panel renders no buttons, but it renders a field of
+`dataType = "url"` as a clickable row. `PanelActions.lua` writes plugin URLs
+into two such fields:
+
+```
+inat_action_sync  →  lightroom://com.github.inat-lightroom/sync
+inat_action_link  →  lightroom://com.github.inat-lightroom/link
+```
+
+`URLHandler.lua`, registered through the `URLHandler` key in `Info.lua`,
+receives the click and dispatches. `link` asks for an observation ID and
+attaches it to the selection — the workflow for adopting an observation created
+outside Lightroom, which nothing else offered.
+
+A custom metadata field has no default, so these rows only appear once
+something has written to them. Sync does it on the way past; for photos with no
+iNaturalist data yet, `Library > Plug-in Extras > iNaturalist…` has an option
+to arm the selection. That is the only reason a menu item still exists.
+
+> **Unverified in the host.** Whether Lightroom routes a click on a *metadata*
+> URL back into the plugin's `URLHandler` has not yet been confirmed by running
+> it. If it does not, the fields are inert text and the fallback is a persistent
+> floating dialog (`LrInitPlugin` + `presentFloatingDialog{ blockTask = false,
+> save_frame = … }`), which has OS window chrome and cannot dock.
 
 ---
 
 ## Custom metadata schema (`CustomMetadata.lua`)
 
-| Field ID | Type | Description |
-|---|---|---|
-| `inat_observation_id` | `string` | iNaturalist observation ID |
-| `inat_observation_url` | `string` | Direct URL to the observation |
-| `inat_taxon_id` | `string` | Taxon ID of the community determination |
-| `inat_taxon_name` | `string` | Scientific name of the taxon |
-| `inat_common_name` | `string` | Vernacular/common name |
-| `inat_quality_grade` | `string` | `casual`, `needs_id`, or `research` |
-| `inat_last_synced` | `string` | ISO 8601 timestamp of last sync |
+| Field ID | Type | Access | Description |
+|---|---|---|---|
+| `inat_observation_id` | `string` | editable | iNaturalist observation ID |
+| `inat_observation_url` | `url` | read-only | Direct URL to the observation |
+| `inat_taxon_id` | `string` | read-only | Taxon ID of the community determination |
+| `inat_taxon_name` | `string` | read-only | Scientific name of the taxon |
+| `inat_common_name` | `string` | read-only | Vernacular/common name |
+| `inat_quality_grade` | `string` | read-only | `casual`, `needs_id`, or `research` |
+| `inat_last_synced` | `string` | read-only | ISO 8601 timestamp of last sync |
+| `inat_crop` | `string` | editable | iNat-specific crop, `x,y,w,h` |
+| `inat_action_sync` | `url` | read-only | Panel action link |
+| `inat_action_link` | `url` | read-only | Panel action link |
 
-These fields appear in Lightroom's **Metadata** panel under the "iNaturalist" panel set.
+Everything mirroring iNaturalist state is read-only: an edit would be silently
+overwritten by the next sync, which is worse than not being editable. The
+observation ID stays editable on purpose — pasting one is how a photo adopts an
+observation that already exists.
+
+These fields appear in Lightroom's **Metadata** panel under either iNaturalist
+preset.
 
 ---
 
@@ -89,7 +159,7 @@ Lightroom does not expose per-export crop to Lua directly. The approach:
 User selects photos with inat_observation_id set
         │
         ▼
-SyncObservation.lua reads inat_observation_id from each photo
+SyncCore.lua reads inat_observation_id from each photo
         │
         ▼
 GET /observations/{id}  →  returns observation + community_taxon + ancestors
