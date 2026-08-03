@@ -22,8 +22,7 @@ inat.lrplugin/
 ├── ExportServiceProvider.lua  # Publish service (upload to iNaturalist)
 ├── PanelActions.lua           # lightroom:// action links for the Metadata panel
 ├── URLHandler.lua             # Receives those links and dispatches
-├── TagsetInat.lua             # Metadata panel preset: iNaturalist fields only
-├── TagsetInatCombined.lua     # Metadata panel preset: everyday fields + iNaturalist
+├── TagsetInat.lua             # Metadata panel preset: the plugin's fields
 ├── InatAPI.lua                # HTTP helpers wrapping iNaturalist REST API (LrHttp)
 └── CustomMetadata.lua         # Custom metadata schema definition
 ```
@@ -44,16 +43,15 @@ panel stack**. This was checked against the shipped binaries, not assumed — se
 appear to have one are companion applications drawing their own window over the
 panel column.
 
-So the plugin's home is the **Metadata panel**, via two presets in its dropdown:
+So the plugin's home is the **Metadata panel**, via a preset named
+`iNaturalist` in its dropdown. It shows this plugin's fields and the file name,
+and nothing else.
 
-| Preset | Contents |
-|---|---|
-| `iNaturalist` | Only this plugin's fields |
-| `iNaturalist + Default` | The everyday Lightroom fields, then iNaturalist |
-
-The combined preset is the one meant for daily use. A preset *replaces* the
-panel's contents rather than adding to it, so a plugin-only preset is something
-users switch away from and never switch back.
+A preset *replaces* the panel's contents rather than adding to it, so selecting
+`iNaturalist` costs the user their ordinary metadata view. An earlier version
+shipped a second `iNaturalist + Default` preset to avoid that. It was dropped:
+Default is one dropdown away, and a copy of Default is a second thing to keep
+in step with Lightroom for no real gain.
 
 ### Actions in the panel
 
@@ -76,11 +74,8 @@ something has written to them. Sync does it on the way past; for photos with no
 iNaturalist data yet, `Library > Plug-in Extras > iNaturalist…` has an option
 to arm the selection. That is the only reason a menu item still exists.
 
-> **Unverified in the host.** Whether Lightroom routes a click on a *metadata*
-> URL back into the plugin's `URLHandler` has not yet been confirmed by running
-> it. If it does not, the fields are inert text and the fallback is a persistent
-> floating dialog (`LrInitPlugin` + `presentFloatingDialog{ blockTask = false,
-> save_frame = … }`), which has OS window chrome and cannot dock.
+This was the design's one real unknown, and it is **confirmed working in
+Lightroom Classic**: clicking the row does reach `URLHandler.lua`.
 
 ---
 

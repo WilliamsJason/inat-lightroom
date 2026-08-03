@@ -140,8 +140,13 @@ panel column — not available to a pure Lua plugin.
 
 The closest legitimate surface is `LrMetadataTagsetFactory`: a preset in the
 Metadata panel's dropdown that shows a chosen set of fields. It is a preset,
-not a new panel, so selecting it replaces whatever the user had there. Ship a
-combined preset alongside the plugin-only one or nobody will leave it selected.
+not a new panel, so selecting it replaces whatever the user had there.
+
+The temptation is to also ship a combined preset — plugin fields plus the
+everyday Lightroom ones — so users are not giving anything up by leaving it
+selected. This plugin tried that and dropped it. Default is one dropdown away,
+a copy of Default is a second thing to keep in step with Lightroom, and two
+near-identical entries in that menu is worse than switching.
 
 ## `URLHandler` is a real Info.lua key
 
@@ -164,9 +169,11 @@ A bare function, or a differently named key, is never called.
 This matters because the Metadata panel renders a custom field of
 `dataType = "url"` as a clickable row, and a row is the nearest thing to a
 button that panel offers. A field holding
-`lightroom://com.github.inat-lightroom/sync` is therefore a candidate panel
-button. Whether Lightroom actually routes a click on a *metadata* URL back into
-the plugin is still unverified in the host.
+`lightroom://com.github.inat-lightroom/sync` is therefore a panel button.
+
+**Confirmed in the host.** Clicking such a row in the Metadata panel does reach
+the plugin's `URLHandler`, in a running Lightroom Classic with the plugin
+installed. This is the mechanism the plugin's panel actions rely on.
 
 A custom metadata field has no default value, so a field nothing has written to
 renders nothing at all. Action links have to be written onto each photo before

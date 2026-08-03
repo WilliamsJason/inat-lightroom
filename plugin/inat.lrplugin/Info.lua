@@ -25,7 +25,7 @@ return {
   -- Custom metadata panel shown in the Metadata panel set
   LrMetadataProvider = "CustomMetadata.lua",
 
-  -- Metadata panel presets.
+  -- Metadata panel preset.
   --
   -- Lightroom has no SDK hook for adding a panel to the Library right panel
   -- stack -- the plugin loader (substrate.dll) and Library.lrmodule between
@@ -33,9 +33,12 @@ return {
   -- sections. The Metadata panel's preset dropdown is as close as a plugin
   -- gets to owning a section of that column, so that is where this plugin's UI
   -- lives.
+  --
+  -- One preset, not two. A preset replaces the panel contents rather than
+  -- adding to them, and the answer to wanting the ordinary fields back is to
+  -- select Default -- not for this plugin to ship its own copy of it.
   LrMetadataTagsetFactory = {
     "TagsetInat.lua",
-    "TagsetInatCombined.lua",
   },
 
   -- Handles lightroom://com.github.inat-lightroom/<action> URLs, which is how
