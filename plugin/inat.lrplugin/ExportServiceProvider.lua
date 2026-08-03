@@ -573,7 +573,7 @@ function provider.processRenderedPhotos(_functionContext, exportContext)
   -- uuid -> observation id, so photos grouped into one observation resolve it
   -- once rather than once each.
   local seen      = {}
-  local published = 0
+  local published = {}
   local failures  = {}
   local index     = 0
 
@@ -593,7 +593,7 @@ function provider.processRenderedPhotos(_functionContext, exportContext)
           api, settings, catalog, rendition, pathOrMessage, seen, index)
 
         if ok then
-          published = published + 1
+          published[#published + 1] = rendition.photo
         else
           logger:warn("Publish failed for photo " .. index .. ": " .. tostring(message))
           failures[#failures + 1] = "Photo " .. index .. ": " .. tostring(message)
@@ -627,14 +627,18 @@ function provider.processRenderedPhotos(_functionContext, exportContext)
     LrDialogs.message(
       "iNaturalist Publish Incomplete",
       string.format("%d of %d photo(s) published.\n\n%s",
-        published, nPhotos, table.concat(failures, "\n")),
+        #published, nPhotos, table.concat(failures, "\n")),
       "warning")
   end
 
-  if settings.inat_sync_on_publish and published > 0 then
+  -- Sync the photos that were just published, not whatever happens to be
+  -- selected in the Library -- after a publish those are rarely the same set,
+  -- and the Publish button is nowhere near the filmstrip.
+  if settings.inat_sync_on_publish and #published > 0 then
+    local justPublished = published
     LrFunctionContext.postAsyncTaskWithContext("inat_sync_after_publish",
       function(context)
-        SyncCore.syncTargetPhotos(context)
+        SyncCore.syncPhotos(context, justPublished, { quiet = true })
       end)
   end
 end
