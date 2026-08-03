@@ -148,6 +148,112 @@ selected. This plugin tried that and dropped it. Default is one dropdown away,
 a copy of Default is a second thing to keep in step with Lightroom, and two
 near-identical entries in that menu is worse than switching.
 
+## The Metadata panel is the least capable surface in the SDK
+
+Worth knowing before designing around it, because it looks like the most
+promising one. A plugin's field becomes a panel row through
+`makeFormatterFromFieldDeclaration`, and the *only* keys that function derives
+from a field declaration are:
+
+```
+id ("%s.%s"), isSdkItem, title, data_type, rating/mixed_value,
+enum_values (from `values`), format_image, readOnly, set_image,
+and for dataType "url": a hardcoded
+action_title = "$$$/AgPhotoPropertySpec/GoURL=Go to URL" plus a fixed action
+```
+
+Consequences, all of them load-bearing:
+
+- The `→` button on a `url` row is Lightroom's own "Go to URL". A plugin cannot
+  relabel it, replace its action, or add one to a non-`url` field.
+- The row displays the field's **value**. For a `url` field that means the raw
+  URL is on screen. There is no display-text-vs-target split and no
+  `format_value` for SDK fields, so an action row always shows its URL.
+- The `→` renders even when the value is empty, and clicking it hands the OS an
+  empty target — on Windows that opens Explorer. An unwritten `url` field is an
+  actively broken button, not an inert one.
+- No `validate` and no change callback reach a plugin's metadata field, so the
+  panel cannot react to the user typing into one.
+
+Lightroom's internal formatter spec is far richer than what plugins are given —
+it has `action`, `action_title`, `action_type`, `action_icon`, `always_visible`,
+`format_value`, `hidden` — which is why built-in rows have real buttons. None of
+it is reachable through `LrMetadataProvider`.
+
+```powershell
+$txt = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes(
+  "C:\Program Files\Adobe\Adobe Lightroom Classic\LibraryToolkit.dll"))
+$i = $txt.IndexOf("makeFormatterFromFieldDeclaration")   # and "CustomMetadataFormatters"
+```
+
+Treat the Metadata panel as **read/write text fields and nothing more**.
+
+## Where the real UI surfaces are
+
+Complete `LrView.osFactory()` control list, from `ui.dll`:
+
+```
+row column spacer checkbox radio_button color_well edit_field edit_text
+combo_box password_field group_box catalog_photo picture popup_menu
+simple_list scrolled_view push_button square_button separator slider
+static_text tab_view tab_view_item view path_control
+```
+
+Complete `LrDialogs` export list, same binary:
+
+```
+message confirm runOpenPanel runSavePanel messageWithDoNotShow
+promptForActionWithDoNotShow resetDoNotShowFlag presentModalDialog
+presentFloatingDialog closeFloatingDialogsForPlugin presentWebViewDialog
+showBezel stopModalWithResult showModalProgressDialog showError
+attachErrorDialogToFunctionContext showStringsDialog
+```
+
+**No canvas, no drawing primitives, and no mouse coordinates anywhere.**
+`mouse_down` exists on some controls but carries no position, so draggable
+handles and hit-testing are impossible in pure Lua. Nobody in the ecosystem has
+done it.
+
+`LrDialogs.presentFloatingDialog(_PLUGIN, { ... })` is the closest thing to a
+panel: a non-blocking OS window that stays open while the user works, with
+`save_frame` for position persistence and — the useful part — a
+`selectionChangeObserver` callback that fires when the filmstrip selection
+changes. Focus Points v4 ships this. Windows caveats: always-on-top, and it
+steals focus every time it is opened.
+
+`f:catalog_photo { photo, width, height }` renders a live catalog photo with
+develop settings and Lightroom's own crop applied; it cannot show a custom crop
+region and is not interactive. Overlays are done with
+`f:view { place = "overlapping" }` plus `f:picture` positioned by `margin_left`
+/ `margin_top`. On Windows transparent PNGs over `catalog_photo` have alpha
+bugs, which is why Focus Points falls back to exporting a temp JPEG and drawing
+overlays into it with a bundled ImageMagick.
+
+`presentWebViewDialog` is unexplored and possibly significant: the backing
+`AgWebView` has `runScript`, an HTML `source`, and strings for a `lua URL`
+callback and `pushNextLuaChunk()`, which imply JavaScript can call back into
+Lua. That would give real mouse events. On Windows it is the legacy
+`Internet Explorer_Server` (MSHTML) control, and no known plugin uses it.
+
+`LrSocket` (in `net_client.dll`) is real and is the escape hatch for a companion
+process.
+
+## `LrPublishService` gives a plugin more UI than an export target
+
+A publish service is an `LrExportServiceProvider` with
+`supportsIncrementalPublish = "only"`. It adds, over a plain export target:
+
+- A persistent entry in the Library **left** panel, visible while working
+- A **Publish** button, and per-photo *New / Modified / Published* state that
+  Lightroom tracks for free
+- `metadataThatTriggersRepublish` to mark photos dirty when chosen fields change
+- `rendition:recordPublishedPhotoId` / `recordPublishedPhotoUrl`
+- `viewForCollectionSettings` in addition to `sectionsForTopOfDialog`
+
+The panel entry's layout is fixed — arbitrary widgets go in the settings dialog,
+not the panel row. `rcloran/lr-inaturalist-publish` is the reference
+implementation and is worth reading.
+
 ## `URLHandler` is a real Info.lua key
 
 Undocumented in most places you would look, but Adobe's own bundled
