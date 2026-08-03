@@ -148,6 +148,22 @@ All paths below are relative to this base URL.
 
 Response includes the new observation's `id` – **this is the ID we store in Lightroom**.
 
+It also includes a `uuid`, which is the more useful handle: `GET
+/observations?uuid=…` looks one up, and the field is client-supplyable — the
+same UUID can be sent on a later create to reunite a photo with an observation.
+(That is how `rcloran/lr-inaturalist-publish` works; this plugin's
+recreate-under-the-same-UUID path has not yet been exercised in the host.)
+Nothing needs to generate one to create an observation: omit it and read the
+server's back.
+
+**`taxon_id` overrides `species_guess` in what people see.** Both are stored,
+but a taxon makes the observation's identification and that is what the site
+displays; the free text is then invisible. **Not verified against the live API**
+— reasoned from the data model, and worth checking. The plugin behaves as if it
+is true: a connection-wide default taxon is sent only when the photo has no
+species guess of its own, so the general fallback can never mask the specific
+thing the user typed.
+
 ---
 
 ### Observation photos
