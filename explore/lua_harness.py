@@ -123,6 +123,9 @@ end
 stubs.LrTasks = {
   startAsyncTask = function(fn) pendingTasks[#pendingTasks + 1] = fn end,
   sleep = function() end,
+  -- Lightroom's own pcall, which unlike Lua's can be used around code that
+  -- yields. Same contract, so the plain one is a faithful stand-in.
+  pcall = function(fn, ...) return pcall(fn, ...) end,
 }
 
 stubs.LrDate = {
@@ -150,9 +153,15 @@ stubs.LrErrors = {
 
 local function passthroughFactory()
   -- Every view constructor just records its arguments; nothing renders here.
+  -- The constructor's own name is recorded too, so a test can tell a
+  -- push_button from a static_text when walking a dialog's sections.
   return setmetatable({}, {
-    __index = function(_table, _key)
-      return function(_self, args) return args or {} end
+    __index = function(_table, key)
+      return function(_self, args)
+        args = args or {}
+        if type(args) == "table" then args._viewType = key end
+        return args
+      end
     end,
   })
 end
@@ -211,6 +220,7 @@ stubs.LrFunctionContext = {
 local catalogWrites = {}
 local createdKeywords = {}
 local targetPhotos = {}
+local publishedCollections = {}
 local catalog
 
 -- The real catalog refuses writes outside a transaction. Letting them through
@@ -221,14 +231,25 @@ local function requireWriteAccess(what)
   end
 end
 
-local function newPhoto(props)
-  local photo = { _props = props or {}, keywords = {} }
+local function newPhoto(props, raw, formatted)
+  local photo = {
+    _props = props or {},
+    _raw = raw or {},
+    _formatted = formatted or {},
+    keywords = {},
+  }
   photo.getPropertyForPlugin = function(self, _plugin, key)
     return self._props[key]
   end
   photo.setPropertyForPlugin = function(self, _plugin, key, value)
     requireWriteAccess("LrPhoto:setPropertyForPlugin")
     self._props[key] = value
+  end
+  photo.getRawMetadata = function(self, key)
+    return self._raw[key]
+  end
+  photo.getFormattedMetadata = function(self, key)
+    return self._formatted[key]
   end
   photo.addKeyword = function(self, keyword)
     requireWriteAccess("LrPhoto:addKeyword")
@@ -242,6 +263,17 @@ catalog = {
 
   withWriteAccessDo = function(self, name, fn)
     catalogWrites[#catalogWrites + 1] = name
+    self._writing = true
+    local ok, err = pcall(fn)
+    self._writing = false
+    if not ok then error(err, 0) end
+  end,
+
+  -- The variant an export task must use: the ordinary write can block on a
+  -- transaction the export itself is holding. It takes no name, which is the
+  -- easiest way for a test to tell the two apart.
+  withPrivateWriteAccessDo = function(self, fn)
+    catalogWrites[#catalogWrites + 1] = "<private>"
     self._writing = true
     local ok, err = pcall(fn)
     self._writing = false
@@ -264,6 +296,10 @@ catalog = {
   end,
 
   getTargetPhotos = function() return targetPhotos end,
+
+  getPublishedCollectionByLocalIdentifier = function(_self, localId)
+    return publishedCollections[localId]
+  end,
 }
 
 stubs.LrApplication = {
@@ -306,6 +342,22 @@ return {
   createdKeywords = createdKeywords,
   newPhoto = newPhoto,
   setTargetPhotos = function(photos) targetPhotos = photos end,
+
+  -- Build the object tree deletePhotosFromPublishedCollection walks: a
+  -- collection of published photos, each pairing a remote ID with a catalog
+  -- photo. Keyed by the local collection ID Lightroom passes back.
+  setPublishedCollection = function(localId, entries)
+    local published = {}
+    for i, entry in ipairs(entries) do
+      published[i] = {
+        getRemoteId = function() return entry.remoteId end,
+        getPhoto    = function() return entry.photo end,
+      }
+    end
+    publishedCollections[localId] = {
+      getPublishedPhotos = function() return published end,
+    }
+  end,
   runPendingTasks = runPendingTasks,
   pendingTaskCount = function() return #pendingTasks end,
   resetHttp = function() httpCalls = {} end,
@@ -432,9 +484,30 @@ class LuaPlugin:
         """The stub LrCatalog, for code that takes one as an argument."""
         return self.env["stubs"]["LrApplication"]["activeCatalog"]()
 
-    def new_photo(self, **properties):
-        """Build a stub LrPhoto carrying the given plugin metadata."""
-        return self.env["newPhoto"](self.runtime.table_from(properties))
+    def new_photo(self, raw=None, formatted=None, **properties):
+        """Build a stub LrPhoto.
+
+        ``properties`` become plugin custom metadata; ``raw`` and ``formatted``
+        become getRawMetadata / getFormattedMetadata, which is what the publish
+        path reads a photo's capture time, GPS and caption from.
+        """
+        return self.env["newPhoto"](
+            self.runtime.table_from(properties),
+            self.runtime.table_from(raw or {}),
+            self.runtime.table_from(formatted or {}),
+        )
+
+    def set_published_collection(self, local_id, entries) -> None:
+        """Populate catalog:getPublishedCollectionByLocalIdentifier(local_id).
+
+        ``entries`` is a list of {"remoteId": ..., "photo": ...}.
+        """
+        self.env["setPublishedCollection"](
+            local_id,
+            self.runtime.table_from(
+                [self.runtime.table_from(entry) for entry in entries]
+            ),
+        )
 
     def set_target_photos(self, photos) -> None:
         """Set what catalog:getTargetPhotos() returns."""

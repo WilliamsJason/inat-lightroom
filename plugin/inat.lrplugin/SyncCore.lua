@@ -5,10 +5,9 @@
 
   This used to live in SyncObservation.lua, which Lightroom runs top to bottom
   the moment its menu item is clicked. That makes it impossible to require:
-  loading it *is* running it. Now that a click in the Metadata panel can also
-  ask for a sync (see PanelActions.lua), the logic has to be callable from more
-  than one entry point, so it lives here and SyncObservation.lua is a two-line
-  wrapper.
+  loading it *is* running it. The sync is now started from a button in the
+  publish service's settings dialog and from a lightroom:// URL, so the logic
+  has to be callable from more than one entry point and lives here.
 
   For each photo that has an inat_observation_id stored in custom metadata:
 
@@ -17,7 +16,7 @@
     3. Creates / reuses a hierarchical keyword tree under an "iNaturalist" root
     4. Applies the leaf keyword to the photo
     5. Updates the custom metadata fields (taxon name, common name, quality
-       grade, last-synced timestamp) and the panel action links
+       grade, observation UUID, last-synced timestamp)
 --]]
 
 local LrApplication   = import "LrApplication"
@@ -27,7 +26,6 @@ local LrProgressScope = import "LrProgressScope"
 
 local InatAPI      = require "InatAPI"
 local InatAuth     = require "InatAuth"
-local PanelActions = require "PanelActions"
 local logger       = require "Log"
 
 local SyncCore = {}
@@ -116,9 +114,13 @@ function SyncCore.syncPhoto(catalog, photo, api)
     photo:setPropertyForPlugin(_PLUGIN, "inat_last_synced",
       LrDate.timeToW3CDate(LrDate.currentTime()))
 
-    -- A synced photo is one the user will come back to in the panel, so this
-    -- is the natural moment to make sure its action links are there.
-    PanelActions.armPhoto(photo)
+    -- The UUID is how a photo finds its observation again at publish time, and
+    -- a photo linked by pasting an observation ID has never had one. Storing
+    -- it here is what makes an adopted observation behave like a published one
+    -- rather than getting a duplicate on its next publish.
+    if obs.uuid and obs.uuid ~= "" then
+      photo:setPropertyForPlugin(_PLUGIN, "inat_observation_uuid", obs.uuid)
+    end
   end)
 
   logger:info("Synced photo → obs=" .. obsId .. " taxon=" .. (taxon.name or "?"))

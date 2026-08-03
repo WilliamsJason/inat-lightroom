@@ -14,6 +14,11 @@
   away when the ordinary fields are wanted; shipping our own copy of Default
   would only be a second thing to keep in step with Lightroom.
 
+  Data only. There were two clickable "url" rows here that acted as buttons;
+  they are gone, because Lightroom owns that row entirely -- it labels the
+  arrow "Go to URL", shows the raw URL as the value, and fires on an empty
+  field. Actions belong to the publish service now.
+
   Plugin fields are addressed as "<LrToolkitIdentifier>.<field id>". Built-in
   Lightroom fields use their "com.adobe.*" IDs, and only IDs that Lightroom's
   own built-in tagsets use are safe -- see docs/lightroom-sdk-notes.md.
@@ -31,12 +36,15 @@ return {
     "com.adobe.filename",
     "com.adobe.separator",
 
-    prefix .. "inat_action_sync",
-    prefix .. "inat_action_link",
+    -- What will be uploaded, first: it is the only row here you type into
+    -- before publishing, and everything below it is a result.
+    prefix .. "inat_species_guess",
+    prefix .. "inat_crop",
     "com.adobe.separator",
 
     prefix .. "inat_observation_id",
     prefix .. "inat_observation_url",
+    prefix .. "inat_observation_uuid",
     prefix .. "inat_quality_grade",
     prefix .. "inat_last_synced",
     "com.adobe.separator",
@@ -44,8 +52,5 @@ return {
     prefix .. "inat_taxon_name",
     prefix .. "inat_common_name",
     prefix .. "inat_taxon_id",
-    "com.adobe.separator",
-
-    prefix .. "inat_crop",
   },
 }

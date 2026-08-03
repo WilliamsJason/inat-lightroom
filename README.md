@@ -26,19 +26,24 @@ Any other useful functionality identified as the project matures.
 
 ## Status
 
-The plugin does the full round trip today: export a photo from Lightroom, have
+The plugin does the full round trip today: publish a photo from Lightroom, have
 it become an iNaturalist observation with the image attached, and sync the
 community determination back as a taxonomic keyword tree. Verified end to end
 against the live API — there is no iNaturalist sandbox, so every test writes to
 a real account.
 
+It lives in the **Publish Services** panel, so Lightroom tracks what is new,
+modified and published, and republishing an edited photo replaces the uploaded
+image rather than creating a duplicate observation.
+
 Authentication is currently a pasted API token, which expires daily. The
 frictionless path needs an approved iNaturalist application, and since 2022
 those are reviewed manually. See [`plugin/README.md`](plugin/README.md).
 
-Rough edges worth knowing: single-photo observations only so far, the iNat crop
-and project fields are not wired up yet, and the AI species suggestions are
-prototyped in Python but not in the plugin.
+Rough edges worth knowing: one photo is one observation so far (grouping several
+photos into a single observation is next), the iNat crop is stored but not yet
+applied at upload, and the AI species suggestions are prototyped in Python but
+not in the plugin.
 
 ---
 
@@ -68,10 +73,10 @@ inat-lightroom/
         ├── CredentialsDialog.lua # The credentials dialog itself
         ├── InatAuth.lua         # Token acquisition and credential storage
         ├── InatAPI.lua          # HTTP client for the iNaturalist REST API
-        ├── ExportServiceProvider.lua  # Upload service
+        ├── ExportServiceProvider.lua  # Publish service (upload to iNaturalist)
         ├── SyncCore.lua         # Sync taxon data → Lightroom keywords
-        ├── PanelActions.lua     # Clickable actions for the Metadata panel
-        ├── URLHandler.lua       # Receives those clicks and dispatches
+        ├── PluginUrls.lua       # Builds and parses lightroom:// plugin URLs
+        ├── URLHandler.lua       # Receives those URLs and dispatches
         ├── TagsetInat.lua       # Metadata panel preset
         ├── CustomMetadata.lua   # Custom metadata schema
         ├── Log.lua              # Shared logger

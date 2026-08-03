@@ -1,18 +1,15 @@
-"""Tests for the Library-panel surface: tagsets, action links, URL handling.
+"""Tests for where the plugin lives in Lightroom: tagsets, URLs, the manifest.
 
 Lightroom Classic has no SDK hook for adding a panel to the Library right panel
-stack -- the shipped binaries recognise no such Info.lua key -- so this plugin's
-presence there is the Metadata panel plus a preset, and its only "buttons" are
-custom metadata fields of dataType "url" holding lightroom:// links that route
-back through URLHandler.lua.
+stack -- the shipped binaries recognise no such Info.lua key -- so this plugin
+appears there in two places: the Metadata panel via a preset, which can hold
+data and nothing else, and the Publish Services list, which is where the
+actions are.
 
-That arrangement has one failure mode the host will not report: a tagset naming
-a field that does not exist, or an action URL whose plugin ID has drifted from
-LrToolkitIdentifier. Both leave the panel quietly wrong rather than raising, so
-they are asserted here.
-
-That Lightroom routes a click on a metadata URL into the plugin's URLHandler is
-confirmed in the host; these tests cover everything downstream of it.
+That arrangement has failure modes the host will not report: a tagset naming a
+field that does not exist, a field defined but shown nowhere, or a lightroom://
+URL whose plugin ID has drifted from LrToolkitIdentifier. All of them leave the
+plugin quietly wrong rather than raising, so they are asserted here.
 """
 
 from __future__ import annotations
@@ -34,33 +31,47 @@ def plugin():
     return LuaPlugin()
 
 
+def metadata_fields(plugin) -> dict:
+    return {
+        field["id"]: field
+        for field in lua_list(
+            plugin.require("CustomMetadata")["metadataFieldsForPhotos"]
+        )
+    }
+
+
 # ---------------------------------------------------------------------------
-# Action URLs
+# Plugin URLs
 # ---------------------------------------------------------------------------
 
 
-def test_action_urls_use_the_toolkit_identifier(plugin):
-    """Lightroom routes lightroom:// by plugin ID; a drifted ID goes nowhere."""
-    actions = plugin.require("PanelActions")
+def test_plugin_urls_use_the_toolkit_identifier(plugin):
+    """Lightroom routes lightroom:// by plugin ID; a drifted ID goes nowhere.
+
+    This matters more than it used to. The same mechanism will carry the OAuth
+    authorization code back from iNaturalist, and a redirect that lands
+    nowhere is a sign-in that hangs with no way to tell why.
+    """
+    urls = plugin.require("PluginUrls")
     info = plugin.require("Info")
 
-    assert actions["PLUGIN_ID"] == info["LrToolkitIdentifier"]
-    assert actions["urlFor"]("sync") == f"lightroom://{TOOLKIT_ID}/sync"
+    assert urls["PLUGIN_ID"] == info["LrToolkitIdentifier"]
+    assert urls["urlFor"]("sync") == f"lightroom://{TOOLKIT_ID}/sync"
 
 
-def test_an_action_url_parses_back_to_its_action(plugin):
-    actions = plugin.require("PanelActions")
+@pytest.mark.parametrize("action", ["sync", "link", "authorization-redirect"])
+def test_a_plugin_url_parses_back_to_its_action(plugin, action):
+    urls = plugin.require("PluginUrls")
 
-    for entry in lua_list(actions["FIELDS"]):
-        url = actions["urlFor"](entry["action"])
-        assert actions["parse"](url) == entry["action"]
+    assert urls["parse"](urls["urlFor"](action)) == action
 
 
 def test_a_query_string_does_not_become_part_of_the_action(plugin):
-    actions = plugin.require("PanelActions")
-    url = actions["urlFor"]("sync") + "?photo=42"
+    """The OAuth redirect arrives as .../authorization-redirect?code=..., so
+    without this the action name would never match a handler."""
+    urls = plugin.require("PluginUrls")
 
-    assert actions["parse"](url) == "sync"
+    assert urls["parse"](urls["urlFor"]("sync") + "?photo=42") == "sync"
 
 
 @pytest.mark.parametrize(
@@ -74,15 +85,15 @@ def test_a_query_string_does_not_become_part_of_the_action(plugin):
 )
 def test_urls_that_are_not_ours_are_rejected(plugin, url):
     """The handler is offered every lightroom:// URL, not only ours."""
-    actions = plugin.require("PanelActions")
+    urls = plugin.require("PluginUrls")
 
-    assert actions["parse"](url) is None
+    assert urls["parse"](url) is None
 
 
 def test_parse_survives_a_non_string(plugin):
-    actions = plugin.require("PanelActions")
+    urls = plugin.require("PluginUrls")
 
-    assert actions["parse"](None) is None
+    assert urls["parse"](None) is None
 
 
 # ---------------------------------------------------------------------------
@@ -103,50 +114,17 @@ def test_parse_survives_a_non_string(plugin):
 )
 def test_an_observation_id_is_read_from_whatever_was_pasted(plugin, pasted):
     """People copy the URL out of the browser far more often than the number."""
-    actions = plugin.require("PanelActions")
+    urls = plugin.require("PluginUrls")
 
-    assert actions["parseObservationId"](pasted) == "12345"
+    assert urls["parseObservationId"](pasted) == "12345"
 
 
 @pytest.mark.parametrize("pasted", ["", "   ", "not a number", "obs 12 and 34", None])
 def test_unusable_input_is_rejected_rather_than_guessed(plugin, pasted):
     """Storing a wrong ID fails later, during a sync, a long way from here."""
-    actions = plugin.require("PanelActions")
+    urls = plugin.require("PluginUrls")
 
-    assert actions["parseObservationId"](pasted) is None
-
-
-# ---------------------------------------------------------------------------
-# Arming photos
-# ---------------------------------------------------------------------------
-
-
-def test_arming_a_photo_fills_every_action_field(plugin):
-    """A metadata field has no default, so a blank field renders no link."""
-    actions = plugin.require("PanelActions")
-    photo = plugin.new_photo()
-
-    actions["armPhotos"](plugin.catalog, plugin.runtime.table_from([photo]))
-
-    props = photo["_props"]
-    for entry in lua_list(actions["FIELDS"]):
-        assert props[entry["field"]] == actions["urlFor"](entry["action"])
-
-
-def test_arming_opens_a_write_transaction(plugin):
-    """setPropertyForPlugin outside withWriteAccessDo is an error in the SDK."""
-    actions = plugin.require("PanelActions")
-
-    actions["armPhotos"](plugin.catalog, plugin.runtime.table_from([plugin.new_photo()]))
-
-    assert plugin.catalog_writes == ["iNat panel actions"]
-
-
-def test_arming_nothing_is_not_an_empty_transaction(plugin):
-    actions = plugin.require("PanelActions")
-
-    assert actions["armPhotos"](plugin.catalog, plugin.runtime.table_from([])) == 0
-    assert plugin.catalog_writes == []
+    assert urls["parseObservationId"](pasted) is None
 
 
 # ---------------------------------------------------------------------------
@@ -157,8 +135,7 @@ TAGSETS = ["TagsetInat"]
 
 
 def declared_field_ids(plugin) -> set[str]:
-    fields = plugin.require("CustomMetadata")["metadataFieldsForPhotos"]
-    return {field["id"] for field in lua_list(fields)}
+    return set(metadata_fields(plugin))
 
 
 @pytest.mark.parametrize("module", TAGSETS)
@@ -252,13 +229,26 @@ def test_the_tagsets_have_distinct_ids(plugin):
 
 
 @pytest.mark.parametrize("module", TAGSETS)
-def test_a_tagset_offers_the_actions(plugin, module):
-    """The actions are the reason to look at the panel at all."""
-    actions = lua_list(plugin.require("PanelActions")["FIELDS"])
-    wanted = {TOOLKIT_ID + "." + entry["field"] for entry in actions}
-    items = set(lua_list(plugin.require(module)["items"]))
+def test_the_only_url_field_shown_is_one_we_always_fill_in(plugin, module):
+    """Lightroom draws a "Go to URL" arrow on every url field and fires it even
+    when the field is empty -- on Windows that opens Explorer. So a url row is
+    only safe for a field that either holds a real URL or is not shown at all.
 
-    assert wanted <= items, f"{module} is missing action rows"
+    This is the guard against reintroducing the action rows that used to live
+    here: they were url fields holding lightroom:// links, and on a photo that
+    had never been published they were live buttons that did the wrong thing.
+    """
+    fields = metadata_fields(plugin)
+    prefix = TOOLKIT_ID + "."
+
+    for item in lua_list(plugin.require(module)["items"]):
+        if not item.startswith(prefix):
+            continue
+        field = fields[item[len(prefix):]]
+        if field["dataType"] == "url":
+            assert field["id"] == "inat_observation_url", (
+                f"{field['id']} is a url row; its arrow will fire even when empty"
+            )
 
 
 @pytest.mark.parametrize("module", TAGSETS)
@@ -277,46 +267,30 @@ def test_every_metadata_field_is_reachable_from_a_tagset(plugin, module):
 # ---------------------------------------------------------------------------
 
 
-def test_action_fields_are_urls(plugin):
-    """dataType 'url' is what makes the Metadata panel render a clickable row.
-    Anything else and the action is unreachable text."""
-    fields = {
-        field["id"]: field
-        for field in lua_list(
-            plugin.require("CustomMetadata")["metadataFieldsForPhotos"]
-        )
-    }
-
-    for entry in lua_list(plugin.require("PanelActions")["FIELDS"]):
-        assert fields[entry["field"]]["dataType"] == "url"
-
-
 def test_synced_fields_are_read_only(plugin):
     """They mirror iNaturalist state; an edit would be silently overwritten by
     the next sync, which is worse than not being editable."""
-    fields = {
-        field["id"]: field
-        for field in lua_list(
-            plugin.require("CustomMetadata")["metadataFieldsForPhotos"]
-        )
-    }
+    fields = metadata_fields(plugin)
 
     for field_id in ("inat_taxon_name", "inat_common_name", "inat_taxon_id",
                      "inat_quality_grade", "inat_last_synced",
-                     "inat_observation_url"):
+                     "inat_observation_url", "inat_observation_uuid"):
         assert fields[field_id]["readOnly"] is True, field_id
+
+
+def test_the_species_guess_is_editable_and_separate_from_the_synced_taxon(plugin):
+    """One field says what to upload, the other says what the community
+    decided. Merging them would mean a sync silently changed what the next
+    publish sends."""
+    fields = metadata_fields(plugin)
+
+    assert fields["inat_species_guess"]["readOnly"] is False
+    assert fields["inat_taxon_name"]["readOnly"] is True
 
 
 def test_the_observation_id_stays_editable(plugin):
     """Pasting an ID is how a photo adopts an observation made elsewhere."""
-    fields = {
-        field["id"]: field
-        for field in lua_list(
-            plugin.require("CustomMetadata")["metadataFieldsForPhotos"]
-        )
-    }
-
-    assert fields["inat_observation_id"]["readOnly"] is False
+    assert metadata_fields(plugin)["inat_observation_id"]["readOnly"] is False
 
 
 def test_a_bumped_schema_version_brings_a_migration_hook(plugin):
@@ -324,7 +298,7 @@ def test_a_bumped_schema_version_brings_a_migration_hook(plugin):
     turns a version bump into a load-time failure."""
     metadata = plugin.require("CustomMetadata")
 
-    assert metadata["schemaVersion"] >= 2
+    assert metadata["schemaVersion"] >= 3
     assert metadata["updateFromEarlierSchemaVersion"] is not None
 
 
@@ -351,30 +325,27 @@ def test_a_foreign_url_is_ignored_rather_than_acted_on(plugin):
 
 def test_an_unknown_action_reports_instead_of_failing_silently(plugin):
     handler = plugin.require("URLHandler")
-    actions = plugin.require("PanelActions")
+    urls = plugin.require("PluginUrls")
 
-    handler["URLHandler"](actions["urlFor"]("nonsense"))
+    handler["URLHandler"](urls["urlFor"]("nonsense"))
 
     assert "Unknown action" in plugin.dialogs[-1]["message"]
 
 
-def test_every_action_field_has_a_handler(plugin):
-    """A link with no handler behind it is a dead row in the panel.
-
-    Asserting only "no unknown-action dialog" would pass for a handler that
-    silently did nothing, so this also checks each click actually dispatched
-    work. The tasks are left queued deliberately: running them would need more
-    of Lightroom than the stubs provide.
+@pytest.mark.parametrize("action", ["sync", "link"])
+def test_a_known_action_dispatches_work(plugin, action):
+    """Asserting only "no unknown-action dialog" would pass for a handler that
+    silently did nothing, so this also checks the click reached a task. The
+    task is left queued deliberately: running it would need more of Lightroom
+    than the stubs provide.
     """
     handler = plugin.require("URLHandler")
-    actions = plugin.require("PanelActions")
-    entries = lua_list(actions["FIELDS"])
+    urls = plugin.require("PluginUrls")
 
-    for entry in entries:
-        handler["URLHandler"](actions["urlFor"](entry["action"]))
+    handler["URLHandler"](urls["urlFor"](action))
 
-    assert plugin.dialogs == [], "an action fell through to the unknown branch"
-    assert plugin.pending_tasks == len(entries), "an action dispatched no work"
+    assert plugin.dialogs == [], "the action fell through to the unknown branch"
+    assert plugin.pending_tasks == 1, "the action dispatched no work"
 
 
 # ---------------------------------------------------------------------------
@@ -390,15 +361,65 @@ def test_info_registers_the_tagset_and_url_handler(plugin):
 
 
 def test_the_menu_is_a_single_credentials_entry(plugin):
-    """Everything else moved into the Metadata panel. Credentials stay because
-    you need them before the panel does anything, and a metadata row is a poor
-    place to type a token into."""
+    """Everything else moved to the Publish Service, whose settings dialog can
+    run code. Credentials stay in the menu because you need them before a
+    publish service is any use, and because they are the one thing you want to
+    reach without first creating a connection."""
     info = plugin.require("Info")
     items = lua_list(info["LrLibraryMenuItems"])
 
     assert len(items) == 1
     assert items[0]["file"] == "CredentialsMenu.lua"
     assert "Credentials" in items[0]["title"]
+
+
+def test_the_publish_service_is_registered_as_an_export_service(plugin):
+    """There is no LrPublishService manifest key -- Adobe's own Flickr plugin
+    registers under LrExportServiceProvider and becomes a publish service by
+    setting supportsIncrementalPublish on the provider table."""
+    info = plugin.require("Info")
+    provider = plugin.require("ExportServiceProvider")
+
+    assert info["LrExportServiceProvider"]["file"] == "ExportServiceProvider.lua"
+    assert provider["supportsIncrementalPublish"] == "only"
+
+
+# ---------------------------------------------------------------------------
+# The publish settings dialog
+# ---------------------------------------------------------------------------
+
+
+def walk_views(node):
+    """Yield every view table in a sections tree."""
+    if not hasattr(node, "keys"):
+        return
+    yield node
+    for key in list(node.keys()):
+        if isinstance(key, int):
+            yield from walk_views(node[key])
+
+
+def dialog_views(plugin):
+    provider = plugin.require("ExportServiceProvider")
+    factory = plugin.runtime.eval('import "LrView".osFactory()')
+    sections = provider["sectionsForTopOfDialog"](factory, plugin.runtime.table_from({}))
+
+    return [view for section in lua_list(sections) for view in walk_views(section)]
+
+
+def test_the_settings_dialog_carries_a_sync_button(plugin):
+    """Sync used to be a fake button in the Metadata panel: a url field holding
+    a lightroom:// link. Removing that machinery is only safe because the
+    settings dialog is a place that can run code on click, so the button has to
+    actually be there -- and it has to have an action, since a push_button
+    without one is a dead control the host renders happily."""
+    buttons = [
+        view for view in dialog_views(plugin)
+        if view["_viewType"] == "push_button" and "Sync" in (view["title"] or "")
+    ]
+
+    assert buttons, "no Sync button in the publish settings dialog"
+    assert buttons[0]["action"] is not None
 
 
 def test_menu_scripts_are_never_required_by_other_modules():

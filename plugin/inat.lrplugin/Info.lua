@@ -15,7 +15,11 @@ return {
   LrPluginName        = LOC "$$$/iNatLightroom/PluginName=iNaturalist",
   LrPluginInfoUrl     = "https://github.com/WilliamsJason/inat-lightroom",
 
-  -- Export / publish service (upload to iNaturalist)
+  -- Publish service (upload photos to iNaturalist as observations).
+  --
+  -- There is no separate LrPublishService manifest key: a publish service is
+  -- an export service provider whose table sets supportsIncrementalPublish.
+  -- Adobe's own bundled Flickr.lrplugin declares itself exactly this way.
   LrExportServiceProvider = {
     title          = LOC "$$$/iNatLightroom/ExportTitle=iNaturalist",
     file           = "ExportServiceProvider.lua",
@@ -31,8 +35,9 @@ return {
   -- stack -- the plugin loader (substrate.dll) and Library.lrmodule between
   -- them recognise only the keys used in this file, and none of them are panel
   -- sections. The Metadata panel's preset dropdown is as close as a plugin
-  -- gets to owning a section of that column, so that is where this plugin's UI
-  -- lives.
+  -- gets to owning a section of that column, so that is where this plugin's
+  -- data lives. Only its data: the panel renders text fields and nothing a
+  -- plugin can turn into a control, so actions belong to the publish service.
   --
   -- One preset, not two. A preset replaces the panel contents rather than
   -- adding to them, and the answer to wanting the ordinary fields back is to
@@ -41,16 +46,16 @@ return {
     "TagsetInat.lua",
   },
 
-  -- Handles lightroom://com.github.inat-lightroom/<action> URLs, which is how
-  -- the clickable rows in the Metadata panel invoke plugin code. Undocumented
-  -- but real: Adobe's own bundled Flickr.lrplugin uses the same key.
+  -- Handles lightroom://com.github.inat-lightroom/<action> URLs. Undocumented
+  -- but real: Adobe's own bundled Flickr.lrplugin uses the same key, for the
+  -- same reason we will -- receiving an OAuth authorization code.
   URLHandler = "URLHandler.lua",
 
   -- Library menu extras.
   --
   -- One item, and only because credentials have to be entered before anything
-  -- else works and a metadata row is a poor place to type a token. Every other
-  -- action lives in the Metadata panel, which is in front of you while you
+  -- else works and there is nowhere better to start from. Everything else is
+  -- on the publish service, which is in the Library's left panel while you
   -- work; a menu is not.
   LrLibraryMenuItems = {
     {
