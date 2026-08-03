@@ -9,46 +9,44 @@
   the contract this file follows: return a table with a single URLHandler
   function taking the whole URL as a string.
 
-  The reason this exists is the Metadata panel. Lightroom offers no way to put
-  a button there, but it renders a custom metadata field of dataType "url" as
-  a clickable link -- so a field holding one of our own lightroom:// URLs is
-  the closest thing to a panel button available. See PanelActions.lua.
+  This was built to give the Metadata panel something like a button: a custom
+  field of dataType "url" renders as a clickable row, and clicking one really
+  does route back into the plugin -- confirmed in a running Lightroom Classic.
+  Those rows are gone now, because the panel gives a plugin no say over the
+  row's label, its value, or what the arrow does, and the actions moved to the
+  publish service.
 
-  Whether Lightroom routes a click on a *metadata* URL back into the plugin
-  was the open question behind this design. It does: confirmed by clicking the
-  row in a running Lightroom Classic. The stubs cannot prove that, so it is
-  recorded here.
-
-  The handler also fires for URLs opened any other way (a browser, a shortcut),
-  which is a bonus rather than a problem: every action operates on the current
-  selection, so it behaves the same either way.
+  The handler stays for two reasons. It is how a shortcut or a browser can
+  drive the plugin, and OAuth needs exactly this: iNaturalist will send the
+  authorization code back to a lightroom:// redirect, which is what lets a
+  public client work without shipping a secret.
 --]]
 
 local LrApplication     = import "LrApplication"
 local LrDialogs         = import "LrDialogs"
 local LrFunctionContext = import "LrFunctionContext"
 
-local PanelActions = require "PanelActions"
-local logger       = require "Log"
+local PluginUrls = require "PluginUrls"
+local logger     = require "Log"
 
 --------------------------------------------------------------------------------
 -- Actions
 --------------------------------------------------------------------------------
 
---- Sync the selected photos. This is the panel's Sync row, and since the menu
--- lost its sync entry it is the only way to start one.
+--- Sync the selected photos.
 local function doSync()
   local SyncCore = require "SyncCore"
-  LrFunctionContext.postAsyncTaskWithContext("inat_panel_sync", function(context)
+  LrFunctionContext.postAsyncTaskWithContext("inat_url_sync", function(context)
     SyncCore.syncTargetPhotos(context)
   end)
 end
 
 --- Ask for an observation ID and attach it to the selection, then sync.
--- This is the workflow the Metadata panel could not otherwise offer: adopting
--- an observation that already exists on iNaturalist.
+-- Adopting an observation that already exists on iNaturalist: publishing can
+-- only ever create new ones, so without this there is no way to connect a
+-- Lightroom photo to an observation made in the field on a phone.
 local function doLink()
-  LrFunctionContext.postAsyncTaskWithContext("inat_panel_link", function(context)
+  LrFunctionContext.postAsyncTaskWithContext("inat_url_link", function(context)
     local LrBinding = import "LrBinding"
     local LrView    = import "LrView"
 
@@ -89,7 +87,7 @@ local function doLink()
       return
     end
 
-    local obsId = PanelActions.parseObservationId(props.obs_id)
+    local obsId = PluginUrls.parseObservationId(props.obs_id)
 
     if not obsId then
       LrDialogs.message("iNaturalist",
@@ -100,7 +98,6 @@ local function doLink()
     catalog:withWriteAccessDo("iNat link", function()
       for _, photo in ipairs(photos) do
         photo:setPropertyForPlugin(_PLUGIN, "inat_observation_id", obsId)
-        PanelActions.armPhoto(photo)
       end
     end)
 
@@ -122,7 +119,7 @@ local handlers = {
 
 return {
   URLHandler = function(url)
-    local action = PanelActions.parse(url)
+    local action = PluginUrls.parse(url)
 
     if not action then
       logger:warn("Ignoring URL that is not ours: " .. tostring(url))
@@ -131,13 +128,13 @@ return {
 
     local handler = handlers[action]
     if not handler then
-      logger:warn("Unknown panel action: " .. tostring(action))
+      logger:warn("Unknown action: " .. tostring(action))
       LrDialogs.message("iNaturalist",
         "Unknown action: " .. tostring(action), "warning")
       return
     end
 
-    logger:info("Panel action: " .. action)
+    logger:info("Plugin URL action: " .. action)
     handler()
   end,
 }

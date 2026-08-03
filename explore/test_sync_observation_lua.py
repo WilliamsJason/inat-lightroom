@@ -1,9 +1,10 @@
-"""Tests for syncing an observation, driven through the Metadata panel action.
+"""Tests for syncing an observation, driven through the plugin's URL handler.
 
-Sync used to be a menu item (`SyncObservation.lua`). It is now started by
-clicking the Sync row in the Metadata panel, so these tests go in through
-`URLHandler` with the same URL that row holds -- the actual production entry
-point rather than a convenient side door.
+Sync used to be a menu item (`SyncObservation.lua`), then a clickable row in
+the Metadata panel. It is now a button in the publish service's settings
+dialog, but the lightroom:// URL still reaches it and is the one entry point a
+test can drive without a running Lightroom, so that is the door these tests
+come in through.
 
 Each test drains the task queue afterwards, which is what Lightroom does once
 the handler returns.
@@ -55,9 +56,9 @@ def make_plugin(responses):
 
 
 def run_sync(plugin):
-    """Click the panel's Sync row."""
-    actions = plugin.require("PanelActions")
-    url, _ = plugin.call(actions["urlFor"], "sync")
+    """Start a sync the way anything outside the settings dialog does."""
+    urls = plugin.require("PluginUrls")
+    url, _ = plugin.call(urls["urlFor"], "sync")
     handler = plugin.require("URLHandler")
 
     plugin.call(handler["URLHandler"], url)
@@ -72,8 +73,9 @@ DAMSELFLY = taxon(
 )
 
 
-def observation(obs_id=999, community=None, taxon_=None, grade="research"):
-    obs = {"id": obs_id, "quality_grade": grade}
+def observation(obs_id=999, community=None, taxon_=None, grade="research",
+                uuid="0e1d2c3b-4a59-6879-8a9b-0c1d2e3f4a5b"):
+    obs = {"id": obs_id, "quality_grade": grade, "uuid": uuid}
     if community:
         obs["community_taxon"] = community
     if taxon_:
@@ -160,10 +162,10 @@ def test_metadata_is_written_back():
     assert props["inat_last_synced"]
 
 
-def test_a_synced_photo_gets_its_panel_action_links():
-    """The Metadata panel renders a url field as a clickable row, which is the
-    only button this plugin can put in the Library panel. A field with no value
-    renders nothing, so syncing has to fill them in."""
+def test_syncing_records_the_observations_uuid():
+    """The UUID is how a photo finds its observation again at publish time, and
+    a photo linked by pasting an ID has never had one. Without this, adopting an
+    existing observation and then publishing creates a second, duplicate one."""
     plugin = make_plugin(
         {"/observations/999": observation(community=DAMSELFLY)}
     )
@@ -172,9 +174,25 @@ def test_a_synced_photo_gets_its_panel_action_links():
 
     run_sync(plugin)
 
-    props = photo["_props"]
-    assert props["inat_action_sync"] == "lightroom://com.github.inat-lightroom/sync"
-    assert props["inat_action_link"] == "lightroom://com.github.inat-lightroom/link"
+    assert (
+        photo["_props"]["inat_observation_uuid"]
+        == "0e1d2c3b-4a59-6879-8a9b-0c1d2e3f4a5b"
+    )
+
+
+@pytest.mark.parametrize("uuid", [None, ""])
+def test_an_observation_with_no_usable_uuid_leaves_the_field_alone(uuid):
+    """Storing an empty UUID would look like a grouping key and quietly join
+    every such photo into one observation."""
+    plugin = make_plugin(
+        {"/observations/999": observation(community=DAMSELFLY, uuid=uuid)}
+    )
+    photo = plugin.new_photo(inat_observation_id="999")
+    plugin.set_target_photos([photo])
+
+    run_sync(plugin)
+
+    assert photo["_props"]["inat_observation_uuid"] is None
 
 
 def test_the_community_taxon_wins_over_the_uploader_s_own():

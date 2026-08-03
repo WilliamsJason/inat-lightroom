@@ -308,7 +308,7 @@ $i = $txt.IndexOf("com.adobe.tagsets.default")
 ($txt.Substring($i, 3000) -replace '[^\x20-\x7E]','.') -replace '\.{3,}',' | '
 ```
 
-Anything the built-in tagsets use is safe. `explore/test_panel_actions_lua.py`
+Anything the built-in tagsets use is safe. `explore/test_plugin_surface_lua.py`
 holds that list and asserts this plugin's tagsets stay inside it.
 
 Plugin fields are addressed as `<LrToolkitIdentifier>.<field id>`; a bare field
@@ -358,7 +358,7 @@ the logic into `SyncCore.lua` first. `PluginInit.lua` had the same problem —
 requiring it opened the credentials dialog as a side effect.
 
 The pattern that works is a module holding the logic and a two-line script
-holding the entry point. `explore/test_panel_actions_lua.py` asserts no module
+holding the entry point. `explore/test_plugin_surface_lua.py` asserts no module
 requires a menu script.
 
 ## `LrBinding.negativeOfKey` returns a boolean

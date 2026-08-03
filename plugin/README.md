@@ -50,17 +50,28 @@ plugin. Use **Clear Stored Credentials** in the same dialog to remove it all.
 
 ## Usage
 
-### Upload photos as an iNaturalist observation
+### Upload photos as iNaturalist observations
 
-1. Select one or more photos in Lightroom that are of the same species.
-2. Go to **File → Export** (or right-click → **Export**).
-3. Choose **iNaturalist** in the Export To drop-down on the left.
-4. In the export panel:
-   - **Species** – type to autocomplete; pick from the suggestions.
-   - **iNat crop** – optionally set a crop used only for the uploaded image.
-   - **Date / Location** – override if the EXIF values are wrong.
-   - **Project** – optionally add to an iNaturalist project.
-5. Click **Export**.  The observation ID is written back to each photo's custom metadata.
+1. In the **Publish Services** panel on the left of the Library module, click
+   the **+** next to **iNaturalist** (or **Set Up…** the first time) to create a
+   connection.
+2. In the settings dialog:
+   - **Default taxon** – a fallback for photos with no species guess of their own.
+   - **Geoprivacy** – open, obscured, or private.
+   - **Project ID** – optionally add every observation to a project.
+   - Whether to upload the photo's GPS location, and whether to sync taxa back
+     after publishing.
+3. Drag photos into the collection and click **Publish**.
+
+Each photo becomes its own observation. Species, date, location and description
+come from the photo itself — set the species with **Species Guess (upload)** in
+the Metadata panel's iNaturalist preset.
+
+Lightroom then tracks the collection for you: photos are New, Modified or
+Published, and editing a photo's species guess or crop marks it for republish.
+Republishing replaces the uploaded image on the existing observation rather than
+creating a second one, and removing a photo from the collection detaches it on
+iNaturalist too.
 
 The export settings (JPEG, 2048 px long edge, sRGB, quality 90) are locked by
 the plugin. iNaturalist rejects uploads over roughly 20 MB and displays at most
@@ -75,39 +86,55 @@ silently empty observation.
 ### Sync taxon data back to Lightroom
 
 1. Select photos that already have an iNaturalist observation ID.
-2. Click **Sync from iNaturalist** in the Metadata panel (see below).
+2. Click **Sync selected photos now** in the publish service's settings dialog
+   (right-click the service → **Edit Settings…**).
 3. The plugin fetches the latest community determination from iNaturalist and:
    - Creates/updates the taxonomic keyword hierarchy under an **iNaturalist** root keyword.
    - Updates the custom metadata fields (taxon name, common name, quality grade, etc.).
 
+Ticking **Sync taxa back from iNaturalist after publishing** does this
+automatically at the end of every publish.
+
 ---
 
-## The iNaturalist panel
+## The iNaturalist metadata preset
 
 Lightroom does not let a plugin add its own panel to the Library right side, so
-the plugin lives in the **Metadata** panel instead. Open the drop-down at the
-top left of that panel and choose **iNaturalist**. The panel then shows the
-file name and every iNaturalist field, including the clickable actions below.
+the plugin's fields live in the **Metadata** panel. Open the drop-down at the
+top left of that panel and choose **iNaturalist**. The panel then shows the file
+name and every iNaturalist field.
 
 Switching back to **Default** gets your usual metadata fields back — the two
 presets are one drop-down apart, so use whichever suits what you are doing.
 
-### Actions
+Two fields are yours to edit:
 
-Two rows in that panel are clickable:
+- **Species Guess (upload)** — what to upload this photo as. Kept separate from
+  **Taxon Name**, which holds what the iNaturalist community decided and is
+  overwritten by every sync.
+- **Observation ID** — pasting an ID here attaches the photo to an observation
+  that already exists on iNaturalist, which is how you adopt observations made
+  in the app or on the web. Sync afterwards to pull its data in.
 
-- **Sync from iNaturalist** — fetch the latest data for the selected photos.
-- **Link to Observation…** — paste an observation ID or URL to attach the
-  selected photos to an observation that already exists on iNaturalist, then
-  sync it. This is the way to adopt observations you made in the app or on the
-  web.
+Everything else is read-only, because it mirrors iNaturalist and the next sync
+would overwrite an edit.
 
-These rows only appear on photos the plugin has touched — uploading or syncing
-adds them. A photo the plugin has never seen shows no action rows.
+---
 
-The **Observation ID** field is editable: typing an ID there and syncing does
-the same job as *Link to Observation…*. Everything else is read-only, because it
-mirrors iNaturalist and the next sync would overwrite an edit.
+## Custom metadata fields
+
+| Field | Description |
+|---|---|
+| **Species Guess (upload)** | What to upload this photo as (editable) |
+| **Observation ID** | iNaturalist observation ID (editable) |
+| **Observation UUID** | Identifies the observation across republishes |
+| **Observation URL** | Direct link to the observation |
+| **Taxon ID** | ID of the community-determined taxon |
+| **Taxon Name** | Scientific name |
+| **Common Name** | Vernacular/common name |
+| **Quality Grade** | `casual`, `needs_id`, or `research` |
+| **Last Synced** | Timestamp of the last sync |
+| **iNat Crop** | Crop used only for the uploaded image |
 
 ---
 
@@ -140,9 +167,9 @@ inat.lrplugin/
 ├── SyncCore.lua               # Sync logic, callable from any entry point
 ├── InatAuth.lua               # Token acquisition and credential storage
 ├── InatAPI.lua                # HTTP client for the iNaturalist REST API
-├── ExportServiceProvider.lua  # Upload / publish service
-├── PanelActions.lua           # lightroom:// action links for the Metadata panel
-├── URLHandler.lua             # Receives those links and dispatches
+├── ExportServiceProvider.lua  # Publish service (upload to iNaturalist)
+├── PluginUrls.lua             # Builds and parses lightroom:// plugin URLs
+├── URLHandler.lua             # Receives those URLs and dispatches
 ├── TagsetInat.lua             # Metadata panel preset: the plugin's fields
 ├── CustomMetadata.lua         # Custom metadata schema
 ├── Log.lua                    # Shared, enabled logger
