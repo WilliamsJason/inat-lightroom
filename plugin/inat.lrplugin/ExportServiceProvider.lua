@@ -29,6 +29,7 @@ local LrView           = import "LrView"
 -- and opens the credentials dialog as soon as it is loaded.
 local InatAPI  = require "InatAPI"
 local InatAuth = require "InatAuth"
+local PanelActions = require "PanelActions"
 local logger   = require "Log"
 
 --------------------------------------------------------------------------------
@@ -426,6 +427,10 @@ function provider.processRenderedPhotos(functionContext, exportContext)
         photo:setPropertyForPlugin(_PLUGIN, "inat_taxon_id",   tostring(taxonId))
         photo:setPropertyForPlugin(_PLUGIN, "inat_taxon_name", exportSettings.inat_taxon_name or "")
         photo:setPropertyForPlugin(_PLUGIN, "inat_last_synced", os.date("!%Y-%m-%dT%H:%M:%SZ"))
+
+        -- An uploaded photo is one the user will look at in the Metadata
+        -- panel, so give it the action links while the transaction is open.
+        PanelActions.armPhoto(photo)
       end)
     end
   end

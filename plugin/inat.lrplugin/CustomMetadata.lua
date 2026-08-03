@@ -9,6 +9,13 @@
 
   Field IDs must be unique and stable; changing them will break existing
   catalogs that already have values stored.
+
+  Almost everything here is readOnly because it mirrors state that lives on
+  iNaturalist: a user editing the synced taxon name in Lightroom would have it
+  silently overwritten by the next sync, which is worse than not letting them
+  type at all. The two deliberate exceptions are the observation ID -- pasting
+  one is how you link a photo to an observation that already exists -- and the
+  crop, which the export dialog writes but a user may want to clear.
 --]]
 
 return {
@@ -16,6 +23,10 @@ return {
 
     -- -----------------------------------------------------------------------
     -- Primary link to iNaturalist
+    --
+    -- The ID stays editable on purpose: typing an existing observation ID into
+    -- the Metadata panel and syncing is the only way to adopt an observation
+    -- that was created outside Lightroom.
     -- -----------------------------------------------------------------------
     {
       id          = "inat_observation_id",
@@ -23,6 +34,7 @@ return {
       dataType    = "string",
       searchable  = true,
       browsable   = false,
+      readOnly    = false,
     },
     {
       id          = "inat_observation_url",
@@ -30,6 +42,7 @@ return {
       dataType    = "url",
       searchable  = false,
       browsable   = false,
+      readOnly    = true,
     },
 
     -- -----------------------------------------------------------------------
@@ -41,6 +54,7 @@ return {
       dataType    = "string",
       searchable  = true,
       browsable   = false,
+      readOnly    = true,
     },
     {
       id          = "inat_taxon_name",
@@ -48,6 +62,7 @@ return {
       dataType    = "string",
       searchable  = true,
       browsable   = true,
+      readOnly    = true,
     },
     {
       id          = "inat_common_name",
@@ -55,6 +70,7 @@ return {
       dataType    = "string",
       searchable  = true,
       browsable   = true,
+      readOnly    = true,
     },
 
     -- -----------------------------------------------------------------------
@@ -66,6 +82,7 @@ return {
       dataType    = "string",
       searchable  = true,
       browsable   = true,
+      readOnly    = true,
     },
 
     -- -----------------------------------------------------------------------
@@ -77,6 +94,7 @@ return {
       dataType    = "string",
       searchable  = false,
       browsable   = false,
+      readOnly    = true,
     },
 
     -- -----------------------------------------------------------------------
@@ -89,9 +107,43 @@ return {
       dataType    = "string",
       searchable  = false,
       browsable   = false,
+      readOnly    = false,
+    },
+
+    -- -----------------------------------------------------------------------
+    -- Panel actions
+    --
+    -- Not data: these hold "lightroom://com.github.inat-lightroom/<action>"
+    -- URLs so the Metadata panel renders a clickable row, which is the closest
+    -- thing to a button the panel offers. See PanelActions.lua.
+    -- -----------------------------------------------------------------------
+    {
+      id          = "inat_action_sync",
+      title       = LOC "$$$/iNatLightroom/Meta/ActionSync=Sync from iNaturalist",
+      dataType    = "url",
+      searchable  = false,
+      browsable   = false,
+      readOnly    = true,
+    },
+    {
+      id          = "inat_action_link",
+      title       = LOC "$$$/iNatLightroom/Meta/ActionLink=Link to Observation…",
+      dataType    = "url",
+      searchable  = false,
+      browsable   = false,
+      readOnly    = true,
     },
   },
 
-  -- Schema version; increment when adding/removing fields to allow migration
-  schemaVersion = 1,
+  -- Schema version; increment when adding/removing fields to allow migration.
+  -- v2 added the two panel action fields and marked the synced fields
+  -- readOnly. Both are additive, so there is nothing to rewrite -- but the SDK
+  -- still wants the hook present once the version moves.
+  schemaVersion = 2,
+
+  updateFromEarlierSchemaVersion = function(_catalog, _previousSchemaVersion, _progressScope)
+    -- v1 -> v2 adds fields and tightens permissions. Existing values stay
+    -- valid, and the action URLs are written lazily by PanelActions rather
+    -- than backfilled here, so this deliberately does nothing.
+  end,
 }
