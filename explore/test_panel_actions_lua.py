@@ -153,7 +153,7 @@ def test_arming_nothing_is_not_an_empty_transaction(plugin):
 # Tagsets
 # ---------------------------------------------------------------------------
 
-TAGSETS = ["TagsetInat", "TagsetInatCombined"]
+TAGSETS = ["TagsetInat"]
 
 
 def declared_field_ids(plugin) -> set[str]:
@@ -251,25 +251,25 @@ def test_the_tagsets_have_distinct_ids(plugin):
     assert len(set(ids)) == len(ids)
 
 
-def test_both_tagsets_offer_the_actions(plugin):
+@pytest.mark.parametrize("module", TAGSETS)
+def test_a_tagset_offers_the_actions(plugin, module):
     """The actions are the reason to look at the panel at all."""
     actions = lua_list(plugin.require("PanelActions")["FIELDS"])
     wanted = {TOOLKIT_ID + "." + entry["field"] for entry in actions}
+    items = set(lua_list(plugin.require(module)["items"]))
 
-    for module in TAGSETS:
-        items = set(lua_list(plugin.require(module)["items"]))
-        assert wanted <= items, f"{module} is missing action rows"
+    assert wanted <= items, f"{module} is missing action rows"
 
 
-def test_the_combined_tagset_keeps_the_everyday_lightroom_fields(plugin):
-    """The iNat-only preset costs the user their normal metadata view, so the
-    combined one has to be usable as a permanent replacement for Default."""
-    items = set(lua_list(plugin.require("TagsetInatCombined")["items"]))
+@pytest.mark.parametrize("module", TAGSETS)
+def test_every_metadata_field_is_reachable_from_a_tagset(plugin, module):
+    """A field defined but in no preset is invisible: the plugin's own presets
+    are the only place its fields appear, so anything missing here is data the
+    user has no way to see."""
+    items = set(lua_list(plugin.require(module)["items"]))
 
-    for field in ("com.adobe.filename", "com.adobe.rating",
-                  "com.adobe.caption", "com.adobe.colorLabels",
-                  "com.adobe.dateTimeOriginal"):
-        assert field in items
+    for field_id in declared_field_ids(plugin):
+        assert TOOLKIT_ID + "." + field_id in items, f"{field_id} is not shown"
 
 
 # ---------------------------------------------------------------------------
@@ -382,13 +382,10 @@ def test_every_action_field_has_a_handler(plugin):
 # ---------------------------------------------------------------------------
 
 
-def test_info_registers_the_tagsets_and_url_handler(plugin):
+def test_info_registers_the_tagset_and_url_handler(plugin):
     info = plugin.require("Info")
 
-    assert set(lua_list(info["LrMetadataTagsetFactory"])) == {
-        "TagsetInat.lua",
-        "TagsetInatCombined.lua",
-    }
+    assert set(lua_list(info["LrMetadataTagsetFactory"])) == {"TagsetInat.lua"}
     assert info["URLHandler"] == "URLHandler.lua"
 
 

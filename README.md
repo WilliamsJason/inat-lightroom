@@ -74,7 +74,7 @@ inat-lightroom/
         ├── SyncCore.lua         # Sync taxon data → Lightroom keywords
         ├── PanelActions.lua     # Clickable actions for the Metadata panel
         ├── URLHandler.lua       # Receives those clicks and dispatches
-        ├── TagsetInat*.lua      # Metadata panel presets
+        ├── TagsetInat.lua       # Metadata panel preset
         ├── CustomMetadata.lua   # Custom metadata schema
         ├── Log.lua              # Shared logger
         └── json.lua             # Bundled JSON encoder/decoder

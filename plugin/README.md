@@ -87,15 +87,11 @@ silently empty observation.
 
 Lightroom does not let a plugin add its own panel to the Library right side, so
 the plugin lives in the **Metadata** panel instead. Open the drop-down at the
-top left of that panel and choose one of:
+top left of that panel and choose **iNaturalist**. The panel then shows the
+file name and every iNaturalist field, including the clickable actions below.
 
-| Preset | What it shows |
-|---|---|
-| **iNaturalist + Default** | Your usual metadata fields, then the iNaturalist ones |
-| **iNaturalist** | The iNaturalist fields only |
-
-**iNaturalist + Default** is the one to leave selected — it is a superset of the
-fields most people keep in *Default*.
+Switching back to **Default** gets your usual metadata fields back — the two
+presets are one drop-down apart, so use whichever suits what you are doing.
 
 ### Actions
 
@@ -151,8 +147,7 @@ inat.lrplugin/
 ├── ExportServiceProvider.lua  # Upload / publish service
 ├── PanelActions.lua           # lightroom:// action links for the Metadata panel
 ├── URLHandler.lua             # Receives those links and dispatches
-├── TagsetInat.lua             # Metadata panel preset: iNaturalist only
-├── TagsetInatCombined.lua     # Metadata panel preset: everyday + iNaturalist
+├── TagsetInat.lua             # Metadata panel preset: the plugin's fields
 ├── CustomMetadata.lua         # Custom metadata schema
 ├── Log.lua                    # Shared, enabled logger
 └── json.lua                   # Bundled JSON encoder/decoder
