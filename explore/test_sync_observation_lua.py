@@ -1,8 +1,12 @@
-"""Tests for SyncObservation.lua, the "Sync Selected Photos" menu item.
+"""Tests for syncing an observation, driven through the Metadata panel action.
 
-This file runs at load time rather than exposing functions, so each test loads
-it into a fresh runtime and drains the task queue, which is what Lightroom does
-once the menu handler returns.
+Sync used to be a menu item (`SyncObservation.lua`). It is now started by
+clicking the Sync row in the Metadata panel, so these tests go in through
+`URLHandler` with the same URL that row holds -- the actual production entry
+point rather than a convenient side door.
+
+Each test drains the task queue afterwards, which is what Lightroom does once
+the handler returns.
 
 The catalog stub enforces the SDK's write-access rule, so a keyword created
 outside a transaction fails here rather than in the host.
@@ -51,7 +55,12 @@ def make_plugin(responses):
 
 
 def run_sync(plugin):
-    plugin.require("SyncObservation")
+    """Click the panel's Sync row."""
+    actions = plugin.require("PanelActions")
+    url, _ = plugin.call(actions["urlFor"], "sync")
+    handler = plugin.require("URLHandler")
+
+    plugin.call(handler["URLHandler"], url)
     plugin.run_pending_tasks()
 
 

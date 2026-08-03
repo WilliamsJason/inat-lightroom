@@ -14,9 +14,7 @@ The plugin is an **Adobe Lightroom Classic** plugin written in Lua using the [Li
 ```
 inat.lrplugin/
 ├── Info.lua                   # Plugin identity, SDK version, menu, tagsets, URL handler
-├── PluginInit.lua             # Menu script: opens the credentials dialog
-├── InatMenu.lua               # Menu script: the single Plug-in Extras entry
-├── SyncObservation.lua        # Menu script: launches a sync
+├── CredentialsMenu.lua        # Menu script: opens the credentials dialog
 ├── CredentialsDialog.lua      # The credentials dialog itself
 ├── SyncCore.lua               # Sync logic, callable from any entry point
 ├── ExportServiceProvider.lua  # Publish service (upload to iNaturalist)
@@ -27,11 +25,16 @@ inat.lrplugin/
 └── CustomMetadata.lua         # Custom metadata schema definition
 ```
 
-The three menu scripts are deliberately thin. Lightroom executes a menu-item
-file top to bottom when the item is clicked, so a file registered as a menu item
-cannot be required from anywhere else without performing its action as a side
-effect. Logic lives in `SyncCore.lua` and `CredentialsDialog.lua`; the scripts
-only launch it.
+There is one menu script and it is deliberately thin. Lightroom executes a
+menu-item file top to bottom when the item is clicked, so a file registered as a
+menu item cannot be required from anywhere else without performing its action as
+a side effect. `CredentialsMenu.lua` only opens `CredentialsDialog.lua`.
+
+`Library > Plug-in Extras` holds a single item, **Set Up Credentials…**. Sync
+and linking used to be there too and moved to the Metadata panel, where they
+belong: the panel is in front of you while you cull. Credentials stayed because
+you need them before the panel does anything, and a metadata row is a poor place
+to type a token into.
 
 ---
 
@@ -69,13 +72,31 @@ receives the click and dispatches. `link` asks for an observation ID and
 attaches it to the selection — the workflow for adopting an observation created
 outside Lightroom, which nothing else offered.
 
-A custom metadata field has no default, so these rows only appear once
-something has written to them. Sync does it on the way past; for photos with no
-iNaturalist data yet, `Library > Plug-in Extras > iNaturalist…` has an option
-to arm the selection. That is the only reason a menu item still exists.
-
 This was the design's one real unknown, and it is **confirmed working in
 Lightroom Classic**: clicking the row does reach `URLHandler.lua`.
+
+A custom metadata field has no default, so these rows only appear once something
+has written to them. Uploading and syncing both arm photos on the way past, so
+any photo the plugin has handled has them. A photo it has never handled does
+not — and with the menu reduced to credentials, there is no longer a command
+### Arming, and the gap it leaves
+
+`PanelActions.armPhoto` writes the two action URLs onto a photo. It runs from
+the upload path and the sync path, so the rows appear as a side effect of using
+the plugin at all.
+
+The case it does not cover is a photo the plugin has never touched, where the
+user wants *Link to Observation…* to adopt an observation made on the phone or
+the web. There is no row to click, and no menu command to create one. Known and
+unresolved; the candidates are:
+
+- Put an "Add iNaturalist actions to selected photos" button in the credentials
+  dialog. Keeps one menu item, but the dialog is the wrong place for it.
+- Arm the whole catalog once from `updateFromEarlierSchemaVersion`. Plugin
+  metadata lives in the catalog and is not written to XMP, so this does not
+  dirty files — but it is a write per photo on every schema bump.
+- Accept it, and document typing the ID into the editable **Observation ID**
+  field. That still needs a Sync row to exist, so on its own it is not enough.
 
 ---
 

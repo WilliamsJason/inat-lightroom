@@ -2,17 +2,17 @@
 
 Lightroom Classic has no SDK hook for adding a panel to the Library right panel
 stack -- the shipped binaries recognise no such Info.lua key -- so this plugin's
-presence there is the Metadata panel plus two presets, and its only "buttons"
-are custom metadata fields of dataType "url" holding lightroom:// links that
-route back through URLHandler.lua.
+presence there is the Metadata panel plus a preset, and its only "buttons" are
+custom metadata fields of dataType "url" holding lightroom:// links that route
+back through URLHandler.lua.
 
 That arrangement has one failure mode the host will not report: a tagset naming
 a field that does not exist, or an action URL whose plugin ID has drifted from
 LrToolkitIdentifier. Both leave the panel quietly wrong rather than raising, so
 they are asserted here.
 
-What these tests cannot answer is whether Lightroom routes a click on a
-metadata URL into the plugin's URLHandler at all. That needs the host.
+That Lightroom routes a click on a metadata URL into the plugin's URLHandler is
+confirmed in the host; these tests cover everything downstream of it.
 """
 
 from __future__ import annotations
@@ -389,12 +389,16 @@ def test_info_registers_the_tagset_and_url_handler(plugin):
     assert info["URLHandler"] == "URLHandler.lua"
 
 
-def test_the_menu_is_a_single_entry(plugin):
-    """Everything else moved into the Metadata panel; what remains is the one
-    thing the panel cannot bootstrap for itself."""
+def test_the_menu_is_a_single_credentials_entry(plugin):
+    """Everything else moved into the Metadata panel. Credentials stay because
+    you need them before the panel does anything, and a metadata row is a poor
+    place to type a token into."""
     info = plugin.require("Info")
+    items = lua_list(info["LrLibraryMenuItems"])
 
-    assert len(lua_list(info["LrLibraryMenuItems"])) == 1
+    assert len(items) == 1
+    assert items[0]["file"] == "CredentialsMenu.lua"
+    assert "Credentials" in items[0]["title"]
 
 
 def test_menu_scripts_are_never_required_by_other_modules():
@@ -404,7 +408,11 @@ def test_menu_scripts_are_never_required_by_other_modules():
     from pathlib import Path
 
     plugin_dir = Path(__file__).resolve().parent.parent / "plugin" / "inat.lrplugin"
-    menu_scripts = {"SyncObservation", "PluginInit", "InatMenu"}
+    declared = {
+        item["file"]
+        for item in lua_list(LuaPlugin().require("Info")["LrLibraryMenuItems"])
+    }
+    menu_scripts = {Path(name).stem for name in declared}
 
     for path in plugin_dir.glob("*.lua"):
         if path.stem in menu_scripts:
