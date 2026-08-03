@@ -55,14 +55,15 @@ def settings(plugin, **overrides):
     return plugin.runtime.table_from(values)
 
 
-def fake_api(plugin, *, created=None, found=None, upload=None, upload_error=None):
+def fake_api(plugin, *, created=None, found=None, upload=None, upload_error=None,
+             update_error=None):
     """An InatAPI stand-in that records every call made against it.
 
     Returns (api, calls); ``calls`` is a Lua list of {method, arg} tables.
     """
     builder = plugin.eval(
         """
-        function(created, found, upload, uploadError)
+        function(created, found, upload, uploadError, updateError)
           local calls = {}
           local function record(method, arg)
             calls[#calls + 1] = { method = method, arg = arg }
@@ -89,6 +90,12 @@ def fake_api(plugin, *, created=None, found=None, upload=None, upload_error=None
             return upload, nil
           end
 
+          function api:updateObservation(id, params, ignorePhotos)
+            record("update", { id = id, params = params, ignorePhotos = ignorePhotos })
+            if updateError then return nil, updateError end
+            return { id = id }, nil
+          end
+
           function api:deleteObservationPhoto(id)
             record("deletePhoto", id)
             return {}, nil
@@ -108,7 +115,7 @@ def fake_api(plugin, *, created=None, found=None, upload=None, upload_error=None
         end
         """
     )
-    return builder(created, found, upload, upload_error)
+    return builder(created, found, upload, upload_error, update_error)
 
 
 def methods(calls) -> list[str]:
@@ -161,6 +168,7 @@ def test_an_empty_species_guess_is_not_sent(plugin, internal):
 
 
 def test_the_connections_default_taxon_is_used(plugin, internal):
+    """A fallback for photos that say nothing about themselves."""
     photo = plugin.new_photo()
 
     params = internal["observationParamsFor"](
@@ -168,6 +176,22 @@ def test_the_connections_default_taxon_is_used(plugin, internal):
     )
 
     assert params["taxon_id"] == 12345
+
+
+def test_the_default_taxon_gives_way_to_the_photos_own_species_guess(plugin, internal):
+    """iNaturalist prefers taxon_id, so sending both means the connection's
+    fallback silently wins and what the user typed on the photo never appears.
+
+    That fallback is set once for the whole connection; the guess is set on the
+    photo in front of them. The specific one has to win."""
+    photo = plugin.new_photo(inat_species_guess="Apis mellifera")
+
+    params = internal["observationParamsFor"](
+        settings(plugin, inat_default_taxon_id="12345"), photo
+    )
+
+    assert params["species_guess"] == "Apis mellifera"
+    assert params["taxon_id"] is None
 
 
 def test_the_caption_becomes_the_description(plugin, internal):
@@ -256,7 +280,83 @@ def test_a_previously_published_photo_reuses_its_observation(plugin, internal):
     )
 
     assert (obs_id, uuid, err) == (99, "known", None)
-    assert methods(calls) == ["find"]
+    assert methods(calls) == ["find", "update"]
+
+
+def test_republishing_pushes_the_photos_current_details(plugin, internal):
+    """Editing the species guess is what puts a photo back into Modified, so a
+    republish that reused the observation and sent nothing threw away the only
+    change the user made -- and iNaturalist showed no species."""
+    api, calls = fake_api(
+        plugin, found=plugin.runtime.table_from({"id": 99, "uuid": "known"})
+    )
+
+    internal["resolveObservation"](
+        api,
+        settings(plugin),
+        plugin.new_photo(
+            inat_observation_uuid="known", inat_species_guess="Apis mellifera"
+        ),
+        plugin.eval("{}"),
+    )
+
+    update = calls[2]["arg"]
+    assert update["id"] == 99
+    assert update["params"]["species_guess"] == "Apis mellifera"
+
+
+def test_an_update_never_turns_off_ignore_photos(plugin, internal):
+    """A PUT without ignore_photos detaches EVERY photo from the observation
+    and still returns 200, leaving it at casual grade with no evidence. The
+    API defaults the flag on; passing false explicitly is the way to lose it."""
+    api, calls = fake_api(
+        plugin, found=plugin.runtime.table_from({"id": 99, "uuid": "known"})
+    )
+
+    internal["resolveObservation"](
+        api, settings(plugin), plugin.new_photo(inat_observation_uuid="known"),
+        plugin.eval("{}")
+    )
+
+    assert calls[2]["arg"]["ignorePhotos"] is not False
+
+
+def test_an_update_does_not_re_assert_the_default_taxon(plugin, internal):
+    """By republish time the observation may carry identifications. Pushing a
+    Lightroom connection's fallback taxon over them on every republish would
+    be an argument the user never asked to have."""
+    api, calls = fake_api(
+        plugin, found=plugin.runtime.table_from({"id": 99, "uuid": "known"})
+    )
+
+    internal["resolveObservation"](
+        api,
+        settings(plugin, inat_default_taxon_id="630955"),
+        plugin.new_photo(inat_observation_uuid="known"),
+        plugin.eval("{}"),
+    )
+
+    assert calls[2]["arg"]["params"]["taxon_id"] is None
+
+
+def test_a_failed_update_warns_but_still_publishes_the_photo(plugin, internal):
+    """The image reaching iNaturalist matters more than the caption following
+    it, but silently dropping what the user typed is what this whole change is
+    about -- so it has to be said out loud."""
+    api, _ = fake_api(
+        plugin,
+        found=plugin.runtime.table_from({"id": 99, "uuid": "known"}),
+        update_error="422 Unprocessable Entity",
+    )
+    warnings = plugin.eval("{}")
+
+    obs_id, _, err = internal["resolveObservation"](
+        api, settings(plugin), plugin.new_photo(inat_observation_uuid="known"),
+        plugin.eval("{}"), warnings
+    )
+
+    assert (obs_id, err) == (99, None)
+    assert "422" in warnings[1]
 
 
 def test_an_observation_deleted_on_the_website_is_recreated(plugin, internal):
@@ -386,8 +486,8 @@ def test_republishing_removes_the_copy_it_replaced(plugin, internal):
     )
 
     # The old copy goes only after the new one is verified, never before.
-    assert methods(calls) == ["find", "upload", "deletePhoto"]
-    assert calls[3]["arg"] == "555"
+    assert methods(calls) == ["find", "update", "upload", "deletePhoto"]
+    assert calls[4]["arg"] == "555"
 
 
 def test_a_failed_upload_is_not_recorded_as_published(plugin, internal):

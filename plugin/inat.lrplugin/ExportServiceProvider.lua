@@ -100,7 +100,9 @@ end
 -- for every photo in the collection and for every future re-publish. Only the
 -- things that really are per-connection preferences -- geoprivacy, the project
 -- to file into, a fallback taxon -- come from the service settings.
-local function observationParamsFor(settings, photo)
+local function observationParamsFor(settings, photo, options)
+  options = options or {}
+
   local params = {
     geoprivacy = settings.inat_geoprivacy or "open",
   }
@@ -113,11 +115,6 @@ local function observationParamsFor(settings, photo)
   local guess = pluginField(photo, "inat_species_guess")
   if guess then
     params.species_guess = guess
-  end
-
-  local taxonId = tonumber(settings.inat_default_taxon_id or "")
-  if taxonId and taxonId > 0 then
-    params.taxon_id = taxonId
   end
 
   local caption = photo:getFormattedMetadata("caption")
@@ -133,16 +130,33 @@ local function observationParamsFor(settings, photo)
     end
   end
 
+  -- The connection's default taxon is a fallback for photos that say nothing
+  -- about themselves. It is not sent when the photo has its own species guess:
+  -- iNaturalist prefers taxon_id, so sending both would quietly discard what
+  -- the user actually typed.
+  --
+  -- It is never sent on an update at all. By then the observation may carry
+  -- identifications, and re-asserting a default from a Lightroom connection
+  -- would argue with them on every republish.
+  if not options.update and not params.species_guess then
+    local taxonId = tonumber(settings.inat_default_taxon_id or "")
+    if taxonId and taxonId > 0 then
+      params.taxon_id = taxonId
+    end
+  end
+
   return params
 end
 
 --- Find or create the observation a photo belongs to.
 --
--- @param seen  uuid -> observation id for observations already resolved in
---              this publish run, so a second photo in the same group does not
---              go back to the server or create a duplicate.
+-- @param seen      uuid -> observation id for observations already resolved in
+--                  this publish run, so a second photo in the same group does
+--                  not go back to the server or create a duplicate.
+-- @param warnings  Collects things worth telling the user that are not bad
+--                  enough to fail the photo.
 -- @return observation id, uuid, error message
-local function resolveObservation(api, settings, photo, seen)
+local function resolveObservation(api, settings, photo, seen, warnings)
   local uuid = pluginField(photo, "inat_observation_uuid")
 
   if uuid then
@@ -160,6 +174,23 @@ local function resolveObservation(api, settings, photo, seen)
     end
     if existing then
       seen[uuid] = existing.id
+
+      -- A republish means the photo's data has changed -- that is the only
+      -- thing that puts it back into Modified. Creating the observation once
+      -- and never updating it meant an edited species guess was written to
+      -- the catalog, marked for republish, uploaded, and then thrown away.
+      local _, updateErr = api:updateObservation(
+        existing.id, observationParamsFor(settings, photo, { update = true }))
+      if updateErr then
+        logger:warn("Could not update observation " .. tostring(existing.id)
+          .. ": " .. tostring(updateErr))
+        if warnings then
+          warnings[#warnings + 1] = "Observation " .. tostring(existing.id)
+            .. ": the photo uploaded, but its details could not be updated ("
+            .. tostring(updateErr) .. ")"
+        end
+      end
+
       return existing.id, uuid, nil
     end
   end
@@ -488,10 +519,10 @@ end
 
 --- Upload one rendered file and record the result against the rendition.
 -- @return true on success, or false plus a message
-local function publishRendition(api, settings, catalog, rendition, filePath, seen, index)
+local function publishRendition(api, settings, catalog, rendition, filePath, seen, index, warnings)
   local photo = rendition.photo
 
-  local observationId, uuid, obsErr = resolveObservation(api, settings, photo, seen)
+  local observationId, uuid, obsErr = resolveObservation(api, settings, photo, seen, warnings)
   if not observationId then
     return false, "could not create the observation: " .. tostring(obsErr)
   end
@@ -575,6 +606,7 @@ function provider.processRenderedPhotos(_functionContext, exportContext)
   local seen      = {}
   local published = {}
   local failures  = {}
+  local warnings  = {}
   local index     = 0
 
   for _, rendition in exportContext:renditions { stopIfCanceled = true } do
@@ -590,7 +622,7 @@ function provider.processRenderedPhotos(_functionContext, exportContext)
         rendition:uploadFailed("Lightroom could not render this photo")
       else
         local ok, message = publishRendition(
-          api, settings, catalog, rendition, pathOrMessage, seen, index)
+          api, settings, catalog, rendition, pathOrMessage, seen, index, warnings)
 
         if ok then
           published[#published + 1] = rendition.photo
@@ -623,11 +655,25 @@ function provider.processRenderedPhotos(_functionContext, exportContext)
 
   -- Report failures loudly. An observation with no photos is worse than no
   -- observation at all: it stays at casual grade and nobody can identify it.
-  if #failures > 0 then
+  -- Report failures loudly. An observation with no photos is worse than no
+  -- observation at all: it stays at casual grade and nobody can identify it.
+  --
+  -- Warnings are reported too. They mean the image is safely on iNaturalist
+  -- but something the user typed did not follow it, which nothing else on
+  -- screen would reveal.
+  if #failures > 0 or #warnings > 0 then
+    local parts = {}
+    if #failures > 0 then
+      parts[#parts + 1] = string.format("%d of %d photo(s) published.\n\n%s",
+        #published, nPhotos, table.concat(failures, "\n"))
+    end
+    if #warnings > 0 then
+      parts[#parts + 1] = table.concat(warnings, "\n")
+    end
+
     LrDialogs.message(
-      "iNaturalist Publish Incomplete",
-      string.format("%d of %d photo(s) published.\n\n%s",
-        #published, nPhotos, table.concat(failures, "\n")),
+      #failures > 0 and "iNaturalist Publish Incomplete" or "iNaturalist Publish",
+      table.concat(parts, "\n\n"),
       "warning")
   end
 

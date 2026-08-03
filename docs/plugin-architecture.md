@@ -139,8 +139,10 @@ For each rendition:
         │              │
         │ no           │ yes
         ▼              ▼
-  POST /observations   GET /observations?uuid=…  (reuse, or recreate if gone)
-  store .uuid and .id back onto the photo
+  POST /observations   GET /observations?uuid=…
+  store .uuid and      found: PUT /observations/{id} with the photo's current
+  .id onto the photo   details (ignore_photos, or every photo is detached)
+                       gone:  POST /observations reusing the same uuid
         │
         ▼
   POST /observation_photos           → recordPublishedPhotoId
@@ -154,8 +156,14 @@ For each rendition:
 (optional) POST /project_observations
         │
         ▼
-(optional) sync taxa back for everything just published
+(optional) sync taxa back for the photos just published
 ```
+
+The connection's default taxon is a fallback, not an override: it is sent only
+when the photo has no species guess of its own, and never on an update. By
+republish time the observation may carry other people's identifications, and
+iNaturalist prefers `taxon_id` over `species_guess` — so sending it regardless
+would first discard what the user typed, then argue with the community.
 
 Removing a photo from the published collection detaches its
 `observation_photo`; when the last photo of an observation goes, the
