@@ -14,9 +14,10 @@
   a clickable link -- so a field holding one of our own lightroom:// URLs is
   the closest thing to a panel button available. See PanelActions.lua.
 
-  Whether Lightroom routes a click on a *metadata* URL back into the plugin is
-  the open question this is meant to answer in the host; the stubs cannot. If
-  it does not, nothing here runs and the fields are inert text.
+  Whether Lightroom routes a click on a *metadata* URL back into the plugin
+  was the open question behind this design. It does: confirmed by clicking the
+  row in a running Lightroom Classic. The stubs cannot prove that, so it is
+  recorded here.
 
   The handler also fires for URLs opened any other way (a browser, a shortcut),
   which is a bonus rather than a problem: every action operates on the current
@@ -34,8 +35,8 @@ local logger       = require "Log"
 -- Actions
 --------------------------------------------------------------------------------
 
---- Sync the selected photos. Deliberately not requiring SyncObservation:
--- that is a menu-item script and loading it runs a sync.
+--- Sync the selected photos. This is the panel's Sync row, and since the menu
+-- lost its sync entry it is the only way to start one.
 local function doSync()
   local SyncCore = require "SyncCore"
   LrFunctionContext.postAsyncTaskWithContext("inat_panel_sync", function(context)

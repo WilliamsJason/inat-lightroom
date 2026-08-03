@@ -64,13 +64,11 @@ inat-lightroom/
     ├── README.md
     └── inat.lrplugin/
         ├── Info.lua             # Plugin identity, version, menu, tagsets, URL handler
-        ├── InatMenu.lua         # The single Plug-in Extras entry
-        ├── PluginInit.lua       # Legacy "Set Up Credentials" menu item
+        ├── CredentialsMenu.lua   # The single Plug-in Extras entry
         ├── CredentialsDialog.lua # The credentials dialog itself
         ├── InatAuth.lua         # Token acquisition and credential storage
         ├── InatAPI.lua          # HTTP client for the iNaturalist REST API
         ├── ExportServiceProvider.lua  # Upload service
-        ├── SyncObservation.lua  # Menu script: launches a sync
         ├── SyncCore.lua         # Sync taxon data → Lightroom keywords
         ├── PanelActions.lua     # Clickable actions for the Metadata panel
         ├── URLHandler.lua       # Receives those clicks and dispatches

@@ -23,10 +23,7 @@ local prefix = "com.github.inat-lightroom."
 
 return {
   title = LOC "$$$/iNatLightroom/Tagset/Only=iNaturalist",
-  -- "inatOnly" dates from when there was a second, combined preset. Lightroom
-  -- remembers the selected preset by ID, so renaming it would silently drop
-  -- every existing user back to Default.
-  id    = "inatOnly",
+  id    = "iNaturalist",
 
   items = {
     -- Enough identity to know which photo you are looking at; the panel

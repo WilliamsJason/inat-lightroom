@@ -48,15 +48,15 @@ return {
 
   -- Library menu extras.
   --
-  -- One item on purpose. A menu is a bad home for this and everything it can
-  -- do is reachable from the Metadata panel; what has to stay is a way to arm
-  -- photos that have no iNaturalist data yet, which the panel cannot do for
-  -- itself.
+  -- One item, and only because credentials have to be entered before anything
+  -- else works and a metadata row is a poor place to type a token. Every other
+  -- action lives in the Metadata panel, which is in front of you while you
+  -- work; a menu is not.
   LrLibraryMenuItems = {
     {
-      title = LOC "$$$/iNatLightroom/Menu/Main=iNaturalist…",
-      file  = "InatMenu.lua",
-      id    = "inat_menu",
+      title = LOC "$$$/iNatLightroom/Menu/Credentials=Set Up Credentials…",
+      file  = "CredentialsMenu.lua",
+      id    = "inat_credentials",
     },
   },
 
