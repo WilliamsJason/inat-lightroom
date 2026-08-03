@@ -33,8 +33,10 @@ against the live API — there is no iNaturalist sandbox, so every test writes t
 a real account.
 
 It lives in the **Publish Services** panel, so Lightroom tracks what is new,
-modified and published, and republishing an edited photo replaces the uploaded
-image rather than creating a duplicate observation.
+modified and published. Republishing an edited photo pushes its current details
+to the existing observation and replaces the uploaded image rather than
+creating a duplicate, and removing a photo from the collection detaches it on
+iNaturalist.
 
 Authentication is currently a pasted API token, which expires daily. The
 frictionless path needs an approved iNaturalist application, and since 2022

@@ -4,7 +4,7 @@
 
 The plugin is an **Adobe Lightroom Classic** plugin written in Lua using the [Lightroom SDK](https://www.adobe.io/apis/creativecloud/lightroomsdk.html). It consists of two main capabilities:
 
-1. **Publish / Upload** – export selected photos directly to iNaturalist as observations.
+1. **Publish** – a Publish Service that turns photos into iNaturalist observations and keeps them in step with them.
 2. **Sync** – pull the latest community identification from iNaturalist and write the full taxonomic tree into Lightroom keywords.
 
 ---
@@ -169,50 +169,86 @@ Removing a photo from the published collection detaches its
 `observation_photo`; when the last photo of an observation goes, the
 observation goes with it.
 
-### iNat-specific crop
+### iNat-specific crop — stored, not yet applied
 
-Lightroom does not expose per-export crop to Lua directly. The approach:
+`inat_crop` holds `x,y,w,h` as fractions of the original. Nothing reads it yet;
+applying it at upload is Phase 2.
 
-1. In the export dialog, show a **"Set iNat Crop…"** button.
-2. This opens a floating window (using `LrDialogs`) that lets the user drag a crop rectangle over a preview.
-3. The crop rectangle (as `x, y, w, h` fractions of the original) is stored in `CustomMetadata`.
-4. At export time, `ExportServiceProvider.processRenderedPhotos` reads the stored crop, uses `LrPhoto:requestJpegThumbnail` or a secondary export task to produce a cropped JPEG, and uploads that instead of the main export.
+The obvious design — drag a rectangle over a preview — is **not possible in
+pure Lua**. `LrView` has no canvas, no drawing primitives and no mouse
+coordinates, which was checked against the shipped binaries rather than
+assumed. See [lightroom-sdk-notes.md](lightroom-sdk-notes.md). What is
+available is sliders bound to the four numbers with a preview that redraws as
+they move, in a floating dialog.
 
-> **Alternative (simpler):** Use a Lightroom virtual copy with a different crop and export the virtual copy. The plugin can create the virtual copy automatically.
+At upload time `processRenderedPhotos` would read the stored crop and produce a
+cropped JPEG rather than sending the rendition as-is.
+
+> **Alternative (simpler):** use a Lightroom virtual copy with a different crop
+> and publish that. The plugin could create the virtual copy automatically, and
+> Lightroom does the cropping.
 
 ---
 
 ## Sync workflow
 
+Started from the publish service's settings dialog (the selected photos), from
+a `lightroom://` URL, or automatically after a publish (the photos that were
+just published — not the selection, which by then is usually something else).
+
 ```
-User selects photos with inat_observation_id set
-        │
-        ▼
 SyncCore.lua reads inat_observation_id from each photo
         │
         ▼
-GET /observations/{id}  →  returns observation + community_taxon + ancestors
+GET /observations/{id}  →  observation + community_taxon + ancestors
+        │
+        ├── taxon present ──▶ build keyword hierarchy:
+        │                       Animalia > Arthropoda > … > Quercus robur
+        │                     LrCatalog:withWriteAccessDo → addKeyword
+        │                     write inat_taxon_id / _taxon_name / _common_name
+        │
+        └── no taxon yet ───▶ nothing to file under; no keywords
         │
         ▼
-Build keyword hierarchy:
-  Animalia > Arthropoda > Insecta > Lepidoptera > … > Quercus robur
-        │
-        ▼
-LrCatalog:withWriteAccessDo → LrPhoto:addKeyword for each ancestor
-        │
-        ▼
-Update CustomMetadata fields:
-  inat_taxon_id, inat_taxon_name, inat_common_name,
-  inat_quality_grade, inat_last_synced
+Either way, write:
+  inat_quality_grade, inat_observation_url,
+  inat_observation_uuid, inat_last_synced
 ```
+
+**"No taxon yet" is not an error.** Nobody has identified an observation the
+moment it is created, so with sync-on-publish enabled it is the outcome of
+almost every first publish. It is counted separately (`Not identified yet`) and
+reported as information.
+
+The write happens either way for a reason: the UUID is what stops the next
+publish creating a duplicate observation, and a photo linked by pasting the ID
+of something unidentified is exactly the case that needs it. An early return
+would drop it precisely when it mattered.
 
 ---
 
 ## Authentication
 
-The plugin stores the iNaturalist `access_token` in **Lightroom's encrypted password store** (`LrPasswords`). On first run (or when the token is missing), the plugin opens a dialog asking the user for their OAuth credentials.
+The plugin stores the iNaturalist token in **Lightroom's encrypted password
+store** (`LrPasswords`), which is backed by the OS credential vault. Today that
+token is pasted by hand from
+<https://www.inaturalist.org/users/api_token> and expires after 24 hours.
 
-For the interactive OAuth flow (required for public App Store distribution), Lightroom can open the system browser via `LrHttp.openUrlInBrowser` and listen for the redirect on a local port using `LrSocket`. For personal/development use, the resource-owner password grant is simpler.
+The replacement is OAuth with PKCE, which was checked against iNaturalist's
+live endpoints: they run Doorkeeper 5.6.6 with S256 PKCE enabled, and an
+application registered with **Confidential unchecked** is a public client — so
+there is **no client secret to ship**, which is the thing that usually makes
+OAuth impossible for a distributed plugin.
+
+The redirect comes back through the same `lightroom://` mechanism the plugin
+already uses:
+`lightroom://com.github.inat-lightroom/authorization-redirect?code=…`, handled
+by `URLHandler.lua`. No `LrSocket` listener and no local port.
+
+That needs an approved iNaturalist application, and since 2022 those are
+reviewed by hand: the account must be two months old with ten or more improving
+identifications for other people in the past month. Registration is in
+progress; revisit around October 2026.
 
 ---
 
@@ -249,19 +285,38 @@ Using `LrCatalog:createKeyword(name, synonyms, includeOnExport, parent, skipIfAl
 
 ---
 
-## Export size recommendation
+## Export size
 
-iNaturalist resizes uploaded images to a maximum of **2048 px** on the long edge for display but retains the original. For plugin uploads, exporting at 2048 px is a good default because:
-
-- It matches iNaturalist's display resolution exactly (no server-side downscaling artefacts for the displayed version).
-- It keeps upload times reasonable.
-- Users can override in the export dialog if they prefer the original resolution.
+iNaturalist displays at most **2048 px** on the long edge and rejects uploads
+over roughly 20 MB. The publish service therefore locks JPEG / 2048 px long
+edge / sRGB / quality 90 in `updateExportSettings` rather than offering it as a
+default: a full-resolution raw conversion would fail the upload for an image
+nobody would ever see at that size.
 
 ---
 
-## Future ideas
+## What comes next
 
-- **Batch sync** – sync all photos with an `inat_observation_id` in one click.
-- **Smart collections** – auto-populate smart collections based on taxonomic keyword hierarchy.
-- **Map view integration** – open the observation in the iNaturalist web map.
-- **Identification alerts** – notify the user when a new ID is added to their observation.
+**Phase 2 — a floating dialog.** `LrDialogs.presentFloatingDialog` with a
+`selectionChangeObserver`, so it follows the Library selection: a crop preview,
+sliders bound to `inat_crop`, a Publish button, and **Group into observation**
+for the several-frames-of-one-animal case. Grouping is the one thing that needs
+a client-side UUID generator, since it has to invent an ID before any
+observation exists.
+
+**Phase 3 — OAuth**, once the iNaturalist application is approved.
+
+**Phase 4 — the Comments panel.** A publish service can fill in Lightroom's own
+Comments panel through `getCommentsFromPublishedCollection`,
+`canAddCommentsToService` and `addCommentToPublishedPhoto`. iNaturalist
+identifications and comments map onto it directly, and
+`getRatingsFromPublishedCollection` + `titleForPhotoRating` could carry the
+faves count. This is the panel the whole design started out trying to sit next
+to; a publish service does not get a panel beside it, it fills it in.
+
+Smaller ideas:
+
+- **Capture time in `observed_on_string`** — the plugin has it and sends only
+  the date. Better data for iNaturalist.
+- **Smart collections** driven by the taxonomic keyword hierarchy.
+- **Identification alerts** when somebody adds an ID to an observation.

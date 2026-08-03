@@ -238,10 +238,15 @@ Lua. That would give real mouse events. On Windows it is the legacy
 `LrSocket` (in `net_client.dll`) is real and is the escape hatch for a companion
 process.
 
-## `LrPublishService` gives a plugin more UI than an export target
+## A publish service is an export provider with one extra key
 
-A publish service is an `LrExportServiceProvider` with
-`supportsIncrementalPublish = "only"`. It adds, over a plain export target:
+There is **no `LrPublishService` manifest key.** The string exists inside
+`LibraryToolkit.dll` but it is internal; Adobe's own `Flickr.lrplugin` registers
+under `LrExportServiceProvider` and becomes a publish service by setting
+`supportsIncrementalPublish = "only"` on the provider table. **Confirmed in the
+host**: the plugin ships this way and appears in the Publish Services panel.
+
+Over a plain export target it adds:
 
 - A persistent entry in the Library **left** panel, visible while working
 - A **Publish** button, and per-photo *New / Modified / Published* state that
@@ -249,6 +254,38 @@ A publish service is an `LrExportServiceProvider` with
 - `metadataThatTriggersRepublish` to mark photos dirty when chosen fields change
 - `rendition:recordPublishedPhotoId` / `recordPublishedPhotoUrl`
 - `viewForCollectionSettings` in addition to `sectionsForTopOfDialog`
+- The **Comments panel**, through `getCommentsFromPublishedCollection`,
+  `canAddCommentsToService` and `addCommentToPublishedPhoto` — plus
+  `getRatingsFromPublishedCollection` and `titleForPhotoRating`
+
+That last one is the answer to "can a plugin put something next to Comments in
+the Library panel". It cannot; a publish service **fills Comments in**.
+
+The full ordered key list, recovered from Flickr's compiled provider table:
+
+```
+small_icon, publish_fallbackNameBinding, titleForPublishedCollection,
+titleForPublishedCollection_standalone, titleForPublishedSmartCollection,
+titleForPublishedSmartCollection_standalone, getCollectionBehaviorInfo,
+titleForGoToPublishedCollection, titleForGoToPublishedPhoto,
+deletePhotosFromPublishedCollection, deleteFirstOnPublish,
+metadataThatTriggersRepublish, shouldReverseSequenceForPublishedCollection,
+supportsCustomSortOrder, imposeSortOrderOnPublishedCollection,
+renamePublishedCollection, deletePublishedCollection,
+getCommentsFromPublishedCollection, titleForPhotoRating,
+getRatingsFromPublishedCollection, canAddCommentsToService,
+addCommentToPublishedPhoto
+```
+
+Two traps worth knowing before writing one:
+
+- **`metadataThatTriggersRepublish` must set `default = false`.** Without it
+  every catalog field triggers a republish and the whole collection sits
+  permanently in Modified.
+- **Use `withPrivateWriteAccessDo`, not `withWriteAccessDo`,** for catalog
+  writes inside `processRenderedPhotos`. The ordinary write can block waiting
+  on a transaction the export itself is holding. It takes just a function, no
+  title.
 
 The panel entry's layout is fixed — arbitrary widgets go in the settings dialog,
 not the panel row. `rcloran/lr-inaturalist-publish` is the reference
@@ -272,18 +309,28 @@ return { URLHandler = function(url) ... end }
 
 A bare function, or a differently named key, is never called.
 
-This matters because the Metadata panel renders a custom field of
-`dataType = "url"` as a clickable row, and a row is the nearest thing to a
-button that panel offers. A field holding
-`lightroom://com.github.inat-lightroom/sync` is therefore a panel button.
+**Confirmed in the host.** The plugin registers `URLHandler.lua` and Lightroom
+calls it.
 
-**Confirmed in the host.** Clicking such a row in the Metadata panel does reach
-the plugin's `URLHandler`, in a running Lightroom Classic with the plugin
-installed. This is the mechanism the plugin's panel actions rely on.
+This was originally the plugin's route to a *button* in the Metadata panel: a
+custom field of `dataType = "url"` renders as a clickable row, and a field
+holding `lightroom://com.github.inat-lightroom/sync` therefore behaves like
+one. Clicking such a row does reach the handler — that part works.
 
-A custom metadata field has no default value, so a field nothing has written to
-renders nothing at all. Action links have to be written onto each photo before
-they appear.
+**It was still the wrong idea, and the plugin no longer does it.** A url row is
+not a button:
+
+- Lightroom fixes the label from the field declaration and hardcodes
+  `"Go to URL"` for `dataType = "url"` (see `makeFormatterFromFieldDeclaration`
+  above). A plugin cannot rename the arrow or supply an action.
+- The arrow **fires on empty values** — on Windows that opens Explorer.
+- A custom metadata field has no default, so the row only exists on photos
+  something has already written to. The photo that most needed *Link to
+  Observation…* was the one photo that could not offer it.
+
+What the mechanism is genuinely for here is the OAuth callback:
+`lightroom://com.github.inat-lightroom/authorization-redirect?code=…`, which
+needs no `LrSocket` listener and no local port.
 
 ## Valid tagset field IDs come from Lightroom's own tagsets
 
