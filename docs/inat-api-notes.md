@@ -59,19 +59,47 @@ only way to exercise write endpoints, and it must be repeated every 24 hours.
 
 | Flow | Verdict for this project |
 |---|---|
-| Resource Owner Password | Fine for local scripts. **Unshippable** in a plugin: the client secret would have to be embedded in readable Lua. |
+| Resource Owner Password | Fine for local scripts. **Unshippable** in a plugin: the client secret would have to be embedded in readable Lua. Still enabled on iNaturalist as of Aug 2026 (`grant_flows` includes `password`), with no deprecation announced — but the wider OAuth ecosystem has moved against it and it cannot solve the secret problem anyway. |
 | Authorization Code + PKCE | **The target for the distributed plugin.** No client secret needed, so the public `client_id` can ship in the plugin. |
 | Client Credentials | Read-only public data only. |
 
 Only the *developer* registers an application. Every user of the plugin
 authenticates against that single `client_id` and receives their own token, so
-end users never touch the registration process.
+end users never touch the registration process. With `confidential = false`
+there is no secret to protect and the `client_id` is safe in readable Lua.
 
-Because the Lightroom SDK provides no HTTP server, the loopback redirect
-(`http://127.0.0.1:port`) is not usable from a plugin. Use the out-of-band
-redirect `urn:ietf:wg:oauth:2.0:oob` and have the user copy the authorization
-code from the browser into a plugin dialog — the same pattern Adobe's bundled
-Flickr plugin uses.
+**[verified]** iNaturalist runs Doorkeeper 5.6.6, and PKCE is live: the
+authorization view passes `code_challenge` and `code_challenge_method` through
+(`app/views/doorkeeper/authorizations/new.html.haml`), and Doorkeeper only wires
+those up when the migration adding the column has run. `S256` is accepted. The
+app registration form has a **Confidential** checkbox — leave it *unchecked* for
+this flow, or the token exchange will demand a secret.
+
+### The redirect: use `lightroom://`, not out-of-band
+
+The Lightroom SDK gives a plugin no HTTP server, which appears to rule out the
+loopback redirect and push you towards the out-of-band redirect
+(`urn:ietf:wg:oauth:2.0:oob`) with the user copy-pasting a code. **There is a
+better option.** Register a redirect URI on the plugin's own URL scheme:
+
+```
+lightroom://com.github.inat-lightroom/authorization-redirect
+```
+
+The browser redirects there, the OS hands it to Lightroom, and Lightroom hands
+it to `URLHandler.lua` with the `?code=` attached. No copy-paste, no listener.
+This is the same mechanism the Metadata panel action rows use, and that it
+reaches the plugin is **confirmed in the host** — see
+[lightroom-sdk-notes.md](lightroom-sdk-notes.md).
+
+**[verified]** This is not speculative: `rcloran/lr-inaturalist-publish`, a
+publicly distributed Lightroom Classic plugin, does exactly this today —
+PKCE/S256, `redirect_uri = lightroom://net.rcloran.lr-inaturalist-publish/…`,
+a hardcoded plaintext `client_id`, and **no `client_secret` anywhere in the
+source**. Worth reading before implementing.
+
+**[verified]** `force_ssl_in_redirect_uri false` in iNaturalist's Doorkeeper
+initializer, so non-HTTPS redirect URIs are accepted at all.
 
 The resulting OAuth token never expires, so the user authorizes **once** and
 the plugin silently refreshes the 24-hour JWT from it thereafter.
