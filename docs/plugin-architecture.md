@@ -14,8 +14,11 @@ The plugin is an **Adobe Lightroom Classic** plugin written in Lua using the [Li
 ```
 inat.lrplugin/
 ├── Info.lua                   # Plugin identity, SDK version, menu, tagsets, URL handler
+├── ObservationPanelMenu.lua   # Menu script: opens the floating panel
+├── ObservationPanel.lua       # The floating panel itself
 ├── CredentialsMenu.lua        # Menu script: opens the credentials dialog
 ├── CredentialsDialog.lua      # The credentials dialog itself
+├── LinkObservation.lua        # Adopting an observation that already exists
 ├── SyncCore.lua               # Sync logic, callable from any entry point
 ├── ExportServiceProvider.lua  # Publish service (upload to iNaturalist)
 ├── PluginUrls.lua             # Builds and parses lightroom:// plugin URLs
@@ -25,29 +28,39 @@ inat.lrplugin/
 └── CustomMetadata.lua         # Custom metadata schema definition
 ```
 
-There is one menu script and it is deliberately thin. Lightroom executes a
-menu-item file top to bottom when the item is clicked, so a file registered as a
-menu item cannot be required from anywhere else without performing its action as
-a side effect. `CredentialsMenu.lua` only opens `CredentialsDialog.lua`.
+Menu scripts are deliberately thin. Lightroom executes a menu-item file top to
+bottom when the item is clicked, so a file registered as a menu item cannot be
+required from anywhere else without performing its action as a side effect. Each
+one is a single line that calls into a real module.
 
-`Library > Plug-in Extras` holds a single item, **Set Up Credentials…**.
-Everything else lives in the publish service. Credentials stayed in the menu
-because you need them before a publish service is any use, and because they are
-the one thing you want to reach without first creating a connection.
+`Library > Plug-in Extras` holds two items, and both of them only *open*
+something: **iNaturalist Panel** and **Set Up Credentials…**. That is the test
+for whether something belongs in the menu — features live where the user is
+already looking, and a menu is somewhere you have to go.
 
 ---
 
 ## Where the plugin lives in the UI
 
-Lightroom Classic has **no SDK hook for adding a panel to the Library right
-panel stack**. This was checked against the shipped binaries, not assumed — see
-[lightroom-sdk-notes.md](lightroom-sdk-notes.md). Third-party products that
-appear to have one are companion applications drawing their own window over the
-panel column.
+Lightroom Classic gives a plugin **no docked surface that can hold a control**.
+This was checked against the shipped binaries rather than assumed — the full
+survey is in [lightroom-sdk-notes.md](lightroom-sdk-notes.md), and the short
+version is:
 
-So the plugin occupies two native surfaces instead.
+| Surface | Docked? | Can hold buttons? |
+| --- | --- | --- |
+| Metadata panel fields | yes | no — `string`/`enum`/`url` text only |
+| Publish service entry | yes | no — fixed row |
+| Comments panel | yes | no — fixed |
+| Floating window | **no** | **yes** |
+| Modal / export dialogs | no | yes |
 
-### The Publish Services panel — where the actions are
+Nothing is both. Third-party products that appear to have a real panel are
+companion applications drawing their own window over the panel column.
+
+So the plugin spreads across three surfaces, each doing the part it can.
+
+### The Publish Services panel — publishing
 
 `ExportServiceProvider.lua` sets `supportsIncrementalPublish = "only"`, which
 turns the export target into a publish service. There is no `LrPublishService`
@@ -74,19 +87,56 @@ shipped a second `iNaturalist + Default` preset to avoid that. It was dropped:
 Default is one dropdown away, and a copy of Default is a second thing to keep
 in step with Lightroom for no real gain.
 
-The panel holds **no actions**. It briefly did: a field of `dataType = "url"`
-renders as a clickable row, and two such fields held
-`lightroom://com.github.inat-lightroom/...` links that reached `URLHandler.lua`.
-That worked, but the row is not really a button. Lightroom derives its label
-from the field declaration and hardcodes "Go to URL"; the plugin cannot rename
-it, cannot supply an action, and the arrow fires even when the field is empty
-(on Windows that opens Explorer). Custom fields also have no default, so the
-rows only existed on photos the plugin had already touched — the one photo that
-most needed *Link to Observation…* was the one photo that could not offer it.
+The panel holds **no actions**, and cannot: `LibraryToolkit.dll` validates a
+custom field's `dataType` down to `string`, `enum` or `url` and rejects anything
+else. It briefly held fake ones — a `url` field renders as a clickable row, and
+two such fields held `lightroom://com.github.inat-lightroom/...` links that
+reached `URLHandler.lua`. That worked, but the row is not really a button.
+Lightroom derives its label from the field declaration and hardcodes "Go to
+URL"; the plugin cannot rename it, cannot supply an action, and the arrow fires
+even when the field is empty (on Windows that opens Explorer). Custom fields
+also have no default, so the rows only existed on photos the plugin had already
+touched — the one photo that most needed *Link to Observation…* was the one
+photo that could not offer it.
 
 `PluginUrls.lua` and `URLHandler.lua` stay, because OAuth needs the same
 mechanism to receive its `lightroom://com.github.inat-lightroom/authorization-redirect`
 callback.
+
+### The floating panel — data and actions together
+
+`ObservationPanel.lua` is the answer to wanting one place that has the photo's
+iNaturalist state *and* the buttons that act on it. It is the only surface that
+can hold both, at the cost of floating rather than docking.
+
+`LrDialogs.presentFloatingDialog(_PLUGIN, {...})` opens a non-modal window that
+stays up while the user works. Two arguments make it behave like a panel instead
+of a dialog:
+
+- `selectionChangeObserver` fires when the filmstrip selection changes, and
+  `sourceChangeObserver` when the folder or collection does. The panel refreshes
+  its bound property table in place, so it always describes what is selected.
+  Rebuilding the window instead would also work, but reopening a floating window
+  steals focus on Windows, and doing that on every arrow-key press would make
+  the plugin unusable.
+- `save_frame` (with `id`) persists position and size across sessions.
+
+`blockTask = true` is load-bearing rather than cosmetic: the window's bindings
+belong to a property table owned by the calling task's function context, and
+without it that task ends immediately, the context dies, and every binding is
+pointing at a dead object.
+
+The panel shows the selection, what the observation currently is, its quality
+grade and last sync, an editable **Species guess**, and buttons for **Sync**,
+**Link to Observation…** and **View on iNaturalist**. Everything below the
+heading describes the *first* selected photo and the heading says so — but
+saving a species guess deliberately applies to the whole selection, because one
+name across the six frames of the same animal is the common case.
+
+`LinkObservation.lua` exists because two entry points need it — the panel's
+button and the `lightroom://` URL. It used to be a local function inside
+`URLHandler.lua`, which meant the panel could only reach it by pretending to be
+a URL.
 
 ---
 
@@ -297,12 +347,19 @@ nobody would ever see at that size.
 
 ## What comes next
 
-**Phase 2 — a floating dialog.** `LrDialogs.presentFloatingDialog` with a
-`selectionChangeObserver`, so it follows the Library selection: a crop preview,
-sliders bound to `inat_crop`, a Publish button, and **Group into observation**
-for the several-frames-of-one-animal case. Grouping is the one thing that needs
-a client-side UUID generator, since it has to invent an ID before any
-observation exists.
+**Phase 2 — the floating panel.** Started: `ObservationPanel.lua` follows the
+selection and carries the actions. Still to come, in it:
+
+- A **crop preview** and sliders bound to `inat_crop`. `f:catalog_photo` shows a
+  live catalog photo but applies Lightroom's own crop and cannot show a custom
+  region; overlays go on with `f:view { place = "overlapping" }` and `f:picture`.
+  Draggable handles are impossible — `LrView` has no canvas and no mouse
+  coordinates. It is not yet known whether `catalog_photo`'s `photo` property can
+  be re-bound to follow the selection, or whether the window has to be rebuilt.
+- A **Publish** button.
+- **Group into observation**, for the several-frames-of-one-animal case. This is
+  the one thing that needs a client-side UUID generator, since it has to invent
+  an ID before any observation exists.
 
 **Phase 3 — OAuth**, once the iNaturalist application is approved.
 
@@ -320,3 +377,8 @@ Smaller ideas:
   the date. Better data for iNaturalist.
 - **Smart collections** driven by the taxonomic keyword hierarchy.
 - **Identification alerts** when somebody adds an ID to an observation.
+- **`presentWebViewDialog`** is the only unexplored surface left, and the only
+  one that could give real mouse events — and therefore a draggable crop
+  rectangle. Its `AgWebView` has `runScript` and strings implying JavaScript can
+  call back into Lua. On Windows it is the legacy MSHTML control and no known
+  plugin uses it, so this is a research spike, not a plan.

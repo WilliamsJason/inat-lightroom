@@ -32,12 +32,15 @@ return {
   -- Metadata panel preset.
   --
   -- Lightroom has no SDK hook for adding a panel to the Library right panel
-  -- stack -- the plugin loader (substrate.dll) and Library.lrmodule between
-  -- them recognise only the keys used in this file, and none of them are panel
-  -- sections. The Metadata panel's preset dropdown is as close as a plugin
-  -- gets to owning a section of that column, so that is where this plugin's
-  -- data lives. Only its data: the panel renders text fields and nothing a
-  -- plugin can turn into a control, so actions belong to the publish service.
+  -- stack. Confirmed by dumping the loader binaries: substrate.dll and the
+  -- .lrmodule files between them recognise only the keys used in this file,
+  -- and the docking machinery in ui.dll (AgViewWinPanelHost::DockOrUndockPanel)
+  -- has no plugin-facing key at all. The Metadata panel's preset dropdown is as
+  -- close as a plugin gets to owning a section of that column, so that is where
+  -- this plugin's data lives. Only its data: LibraryToolkit.dll validates
+  -- custom fields down to 'string', 'enum' or 'url', so nothing there can
+  -- become a control. Actions live on the publish service and in the floating
+  -- panel below.
   --
   -- One preset, not two. A preset replaces the panel contents rather than
   -- adding to them, and the answer to wanting the ordinary fields back is to
@@ -53,11 +56,17 @@ return {
 
   -- Library menu extras.
   --
-  -- One item, and only because credentials have to be entered before anything
-  -- else works and there is nowhere better to start from. Everything else is
-  -- on the publish service, which is in the Library's left panel while you
-  -- work; a menu is not.
+  -- Two items, both of which open something. Credentials because nothing works
+  -- until they are entered, and the panel because a floating window needs a way
+  -- to be summoned back after it is closed. Everything else belongs on the
+  -- publish service or in the panel itself, which are in front of the user
+  -- while they work; a menu is not.
   LrLibraryMenuItems = {
+    {
+      title = LOC "$$$/iNatLightroom/Menu/Panel=iNaturalist Panel",
+      file  = "ObservationPanelMenu.lua",
+      id    = "inat_panel",
+    },
     {
       title = LOC "$$$/iNatLightroom/Menu/Credentials=Set Up Credentials…",
       file  = "CredentialsMenu.lua",

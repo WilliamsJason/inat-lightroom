@@ -83,6 +83,7 @@ stubs.LrStringUtils = {
 -- Network calls are not exercised; failing loudly beats returning plausible
 -- nonsense that makes a test pass for the wrong reason.
 local httpCalls = {}
+local openedUrls = {}
 stubs.LrHttp = {
   get = function(url, headers)
     httpCalls[#httpCalls + 1] = { method = "GET", url = url, headers = headers }
@@ -105,7 +106,9 @@ stubs.LrHttp = {
     end
     error("unexpected HTTP POST in test: " .. tostring(url))
   end,
-  openUrlInBrowser = function() end,
+  openUrlInBrowser = function(url)
+    openedUrls[#openedUrls + 1] = url
+  end,
 }
 
 -- Async tasks do not run inline in Lightroom: they are queued and run once the
@@ -137,12 +140,29 @@ stubs.LrDate = {
 -- UI modules. Enough shape to let the export provider load and to record what
 -- would have been shown to the user.
 local dialogMessages = {}
+local floatingDialogs = {}
 stubs.LrDialogs = {
   message = function(title, message, style)
     dialogMessages[#dialogMessages + 1] =
       { title = title, message = message, style = style }
   end,
   presentModalDialog = function() return "cancel" end,
+
+  -- Records the args rather than showing anything, so a test can find the
+  -- observers and call them the way Lightroom would. The real one blocks the
+  -- calling task until the window closes when blockTask is set; blocking here
+  -- would deadlock the test, so it returns instead.
+  presentFloatingDialog = function(plugin, args)
+    if not plugin then
+      error("presentFloatingDialog called with invalid plugin parameter", 0)
+    end
+    if not args or not args.contents then
+      error("presentFloatingDialog called with no contents parameter", 0)
+    end
+    floatingDialogs[#floatingDialogs + 1] = args
+    return args
+  end,
+  closeFloatingDialogsForPlugin = function() end,
 }
 
 stubs.LrErrors = {
@@ -337,7 +357,9 @@ return {
   prefs = prefs,
   logLines = logLines,
   httpCalls = httpCalls,
+  openedUrls = openedUrls,
   dialogMessages = dialogMessages,
+  floatingDialogs = floatingDialogs,
   catalogWrites = catalogWrites,
   createdKeywords = createdKeywords,
   newPhoto = newPhoto,
@@ -463,6 +485,18 @@ class LuaPlugin:
             }
             for i in range(1, len(shown) + 1)
         ]
+
+    @property
+    def floating_dialogs(self) -> list:
+        """Args of each presentFloatingDialog call, in order."""
+        shown = self.env["floatingDialogs"]
+        return [shown[i] for i in range(1, len(shown) + 1)]
+
+    @property
+    def opened_urls(self) -> list[str]:
+        """URLs handed to LrHttp.openUrlInBrowser, in order."""
+        urls = self.env["openedUrls"]
+        return [urls[i] for i in range(1, len(urls) + 1)]
 
     @property
     def catalog_writes(self) -> list[str]:

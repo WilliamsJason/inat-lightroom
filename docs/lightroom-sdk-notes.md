@@ -127,6 +127,12 @@ Develop. They are not using the SDK. Dumping the shipped binaries settles it:
 | `substrate.dll` (plugin loader) | `LrSdkVersion`, `LrSdkMinimumVersion`, `LrToolkitIdentifier`, `LrPluginName`, `LrInitPlugin`, `LrShutdownPlugin`, `LrEnablePlugin`, `LrDisablePlugin`, `LrExportServiceProvider`, `LrMetadataProvider`, `URLHandler` |
 | `Library.lrmodule` | `LrLibraryMenuItems`, `LrExportMenuItems`, `LrHelpMenuItems`, `LrFilterPresetFactory`, `LrForceInitPlugin` |
 | `LibraryToolkit.dll` | `LrMetadataTagsetFactory`, `LrPublishService` |
+| `Export.lrmodule` | `LrExportServiceProvider`, `LrExportFilterProvider`, `URLHandler` |
+| `LightroomSDK.dll` | `LrPluginInfoProvider`, `LrPluginInfoUrl` |
+
+That is the whole list. Searched for and **not found in any binary**: `LrPanel`,
+`LrLibraryPanel`, `LrDevelopPanel`, `LrViewProvider`, `LrInspector`,
+`LrModulePanel`, `LrCustomPanel`, `LrSidePanel`.
 
 ```powershell
 $txt = [System.Text.Encoding]::ASCII.GetString(
@@ -134,7 +140,9 @@ $txt = [System.Text.Encoding]::ASCII.GetString(
 [regex]::Matches($txt, 'Lr[A-Za-z]{3,45}') | ForEach-Object { $_.Value } | Sort-Object -Unique
 ```
 
-Nothing resembling `LrLibraryPanelSections` exists anywhere in the product. A
+Nothing resembling `LrLibraryPanelSections` exists anywhere in the product. The
+docking machinery itself is there — `AgViewWinPanelHost::DockOrUndockPanel` and
+friends in `ui.dll` — but it is internal C++ that no manifest key reaches. A
 third-party panel is a companion application's own window, positioned over the
 panel column — not available to a pure Lua plugin.
 
@@ -188,7 +196,45 @@ $i = $txt.IndexOf("makeFormatterFromFieldDeclaration")   # and "CustomMetadataFo
 
 Treat the Metadata panel as **read/write text fields and nothing more**.
 
-## Where the real UI surfaces are
+## Every UI surface a plugin can have
+
+This is the complete list, from dumping the loader binaries. It is short, and
+the shape of it is the single most important constraint on the plugin's design.
+
+| Surface | Docked? | Widgets | How |
+| --- | --- | --- | --- |
+| Metadata panel fields | **yes** | text only | `LrMetadataProvider` |
+| Publish service entry | **yes** | fixed row | `supportsIncrementalPublish` |
+| Comments panel | **yes** | fixed | publish-service comment hooks |
+| Floating window | no | anything | `LrDialogs.presentFloatingDialog` |
+| Export / publish dialog | modal | anything | `sectionsForTopOfDialog` |
+| Plug-in Manager section | modal | anything | `LrPluginInfoProvider` |
+| Modal dialog | modal | anything | `LrDialogs.presentModalDialog` |
+| Web view dialog | modal | HTML | `LrDialogs.presentWebViewDialog` |
+| Bezel | transient | text/image | `LrDialogs.showBezel` |
+| Menu items | — | none | `Lr*MenuItems` |
+
+**Nothing is both docked and arbitrary.** The three docked surfaces are all
+fixed-shape things Lightroom draws for you and lets a plugin fill with data;
+everything that accepts a `push_button` is a window that floats or blocks.
+
+The docking machinery does exist in `ui.dll` — `AgViewWinPanelHost::DockOrUndockPanel`,
+`AgViewWinPanel::SetFloating`, `IsUndocked` — but it is internal C++ with no
+plugin-facing manifest key. Searching every `.lrmodule` and `.dll` for `LrPanel`,
+`LrLibraryPanel`, `LrDevelopPanel`, `LrViewProvider`, `LrInspector`,
+`LrModulePanel`, `LrCustomPanel` and `LrSidePanel` turns up nothing. This is
+absence-of-exposure rather than a prohibition, but it is consistent across every
+binary that could plausibly host one.
+
+The one near-miss is the **Web module**, whose right-hand panels really are
+plugin-populated with arbitrary `LrView` content —
+`Resources\webengines\default_html.lrwebengine\galleryInfo.lrweb` builds them
+with `views = f:panel_content{...}`. But that is a **different plugin type**
+(`.lrwebengine`, keyed by `galleryType`, loaded by `Web.lrmodule`), it only
+exists inside the Web module, and it is gallery-export configuration rather than
+a general-purpose panel. Not a route to a Library-module panel.
+
+### Controls
 
 Complete `LrView.osFactory()` control list, from `ui.dll`:
 
@@ -214,12 +260,56 @@ attachErrorDialogToFunctionContext showStringsDialog
 handles and hit-testing are impossible in pure Lua. Nobody in the ecosystem has
 done it.
 
-`LrDialogs.presentFloatingDialog(_PLUGIN, { ... })` is the closest thing to a
-panel: a non-blocking OS window that stays open while the user works, with
-`save_frame` for position persistence and — the useful part — a
-`selectionChangeObserver` callback that fires when the filmstrip selection
-changes. Focus Points v4 ships this. Windows caveats: always-on-top, and it
-steals focus every time it is opened.
+### The floating window, in detail
+
+`LrDialogs.presentFloatingDialog(_PLUGIN, { ... })` is the only non-modal,
+persistent window a plugin can create, and the only surface that can hold both
+this plugin's data and its buttons. **This plugin uses it** — see
+`ObservationPanel.lua`.
+
+The argument names are not guesswork. The `LrDialogs` wrapper's own constant
+table lists `contents`, `onShow`, `id`, `save_frame`, `blockTask`, and it
+validates two things by name:
+
+```
+$$$/LrDialogs/Error/NoPlugin=presentFloatingDialog called with invalid plugin parameter
+$$$/LrDialogs/Error/NoFloatingContents=presentFloatingDialog called with no contents parameter
+```
+
+The window it builds is a separate chunk, identifiable by
+`is_non_modal_sdk_window`. That chunk's constants give the rest of the accepted
+keys — `title`, `save_frame`, `position`, `margin`, `closable`, `maximizable`,
+`minimizable`, `borderless`, `background_color`, `canBecomeKeyWindow`,
+`windowWillClose` — and, the useful part, it reads two observer keys straight
+out of the argument table and hands them to the catalog:
+
+```
+selectionChangeObserver  ->  addSelectionContentObserver
+sourceChangeObserver     ->  addSourcesChangedObserver
+```
+
+So a floating window can follow the filmstrip selection and the chosen
+folder/collection. That is what makes it behave like a panel rather than a
+dialog. Focus Points v4 ships the same mechanism.
+
+Two things matter for it to be usable:
+
+- **`blockTask = true`.** The window is bound to a property table owned by the
+  calling task's function context. Without `blockTask` that task ends as soon
+  as the window is shown, the context dies, and every binding points at a dead
+  object.
+- **`save_frame` plus `id`.** Position and size persist across sessions. A
+  floating window that reopens centred every time is one people close once.
+
+Windows caveats: it is always-on-top, and it takes focus every time it is
+opened — which is why the panel updates its bindings in place on selection
+change rather than rebuilding the window.
+
+Note `windowWillClose` here, **not** `window_closing`. The assert
+"windowWillClose is overriden, use window_closing instead" is in the popup /
+overlay widget code (`auto_close`, `fade_out`), not the SDK window builder.
+
+### Other odds and ends
 
 `f:catalog_photo { photo, width, height }` renders a live catalog photo with
 develop settings and Lightroom's own crop applied; it cannot show a custom crop
@@ -227,13 +317,16 @@ region and is not interactive. Overlays are done with
 `f:view { place = "overlapping" }` plus `f:picture` positioned by `margin_left`
 / `margin_top`. On Windows transparent PNGs over `catalog_photo` have alpha
 bugs, which is why Focus Points falls back to exporting a temp JPEG and drawing
-overlays into it with a bundled ImageMagick.
+overlays into it with a bundled ImageMagick. **Unverified:** whether its `photo`
+property can be re-bound to follow a selection, or whether the window has to be
+rebuilt to change the picture.
 
 `presentWebViewDialog` is unexplored and possibly significant: the backing
 `AgWebView` has `runScript`, an HTML `source`, and strings for a `lua URL`
 callback and `pushNextLuaChunk()`, which imply JavaScript can call back into
-Lua. That would give real mouse events. On Windows it is the legacy
-`Internet Explorer_Server` (MSHTML) control, and no known plugin uses it.
+Lua. That would give real mouse events — the one route to a draggable crop
+rectangle. On Windows it is the legacy `Internet Explorer_Server` (MSHTML)
+control, and no known plugin uses it.
 
 `LrSocket` (in `net_client.dll`) is real and is the escape hatch for a companion
 process.

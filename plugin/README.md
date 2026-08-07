@@ -101,12 +101,38 @@ silently empty observation.
 Ticking **Sync taxa back from iNaturalist after publishing** does this
 automatically at the end of every publish.
 
+A freshly created observation has no community taxon until somebody identifies
+it, so **Not identified yet** is the normal result for anything just published.
+It is reported separately from errors, and the sync still records the
+observation's UUID, URL and quality grade.
+
+---
+
+## The iNaturalist panel
+
+**Library → Plug-in Extras → iNaturalist Panel** opens a floating window that
+follows whatever is selected in the filmstrip. It is the only place that has
+both the photo's iNaturalist state and the buttons that act on it — the Metadata
+panel is docked but cannot hold a control, and the publish service has controls
+but no per-photo detail.
+
+It shows what the selected photo currently is on iNaturalist, its quality grade
+and last sync, an editable **Species guess**, and buttons for **Sync**, **Link
+to Observation…** and **View on iNaturalist**.
+
+The window remembers where you put it, so drag it somewhere out of the way once
+and it will reopen there. Close it and the menu item brings it back.
+
+With several photos selected, everything shown describes the *first* one and the
+heading says so. Saving a species guess is the exception: it deliberately
+applies to the whole selection, since one name across several frames of the same
+animal is the usual reason to select several.
+
 ---
 
 ## The iNaturalist metadata preset
 
-Lightroom does not let a plugin add its own panel to the Library right side, so
-the plugin's fields live in the **Metadata** panel. Open the drop-down at the
+The plugin's fields live in the **Metadata** panel. Open the drop-down at the
 top left of that panel and choose **iNaturalist**. The panel then shows the file
 name and every iNaturalist field.
 
@@ -144,21 +170,6 @@ would overwrite an edit.
 
 ---
 
-## Custom metadata fields
-
-| Field | Description |
-|---|---|
-| **Observation ID** | iNaturalist observation ID (editable) |
-| **Observation URL** | Direct link to the observation |
-| **Taxon ID** | ID of the community-determined taxon |
-| **Taxon Name** | Scientific name |
-| **Common Name** | Vernacular/common name |
-| **Quality Grade** | `casual`, `needs_id`, or `research` |
-| **Last Synced** | Timestamp of the last sync |
-| **iNat Crop** | Crop used only for the uploaded image |
-
----
-
 ## Development
 
 The plugin is written in **Lua** using the [Lightroom Classic SDK](https://www.adobe.io/apis/creativecloud/lightroomsdk.html).
@@ -168,8 +179,11 @@ The plugin is written in **Lua** using the [Lightroom Classic SDK](https://www.a
 ```
 inat.lrplugin/
 ├── Info.lua                   # Plugin identity, version, menu, tagsets, URL handler
-├── CredentialsMenu.lua        # The single Plug-in Extras entry
+├── ObservationPanelMenu.lua   # Plug-in Extras entry: opens the panel
+├── ObservationPanel.lua       # The floating panel itself
+├── CredentialsMenu.lua        # Plug-in Extras entry: opens the credentials dialog
 ├── CredentialsDialog.lua      # The credentials dialog itself
+├── LinkObservation.lua        # Adopting an existing observation
 ├── SyncCore.lua               # Sync logic, callable from any entry point
 ├── InatAuth.lua               # Token acquisition and credential storage
 ├── InatAPI.lua                # HTTP client for the iNaturalist REST API
@@ -184,8 +198,8 @@ inat.lrplugin/
 
 Lightroom runs a menu-item script top to bottom when the item is clicked, which
 means such a file cannot be required from anywhere else without performing its
-action as a side effect. `CredentialsMenu.lua` is therefore a thin launcher; the
-dialog it opens lives in `CredentialsDialog.lua`.
+action as a side effect. `CredentialsMenu.lua` and `ObservationPanelMenu.lua`
+are therefore one-line launchers; the real work lives in the modules they call.
 
 `InatAPI.lua` is a deliberate mirror of `explore/inat_api.py`, which was used to
 verify every one of these calls against the live API. If you change behaviour in

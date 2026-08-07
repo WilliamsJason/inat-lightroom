@@ -38,6 +38,12 @@ to the existing observation and replaces the uploaded image rather than
 creating a duplicate, and removing a photo from the collection detaches it on
 iNaturalist.
 
+There is also a floating **iNaturalist panel** (Library → Plug-in Extras) that
+follows the filmstrip selection and carries the per-photo actions. Lightroom
+gives a plugin no docked surface that can hold a button — that was checked
+against the shipped binaries, not assumed — so a floating window is as close to
+a panel as a plugin gets.
+
 Authentication is currently a pasted API token, which expires daily. The
 frictionless path needs an approved iNaturalist application, and since 2022
 those are reviewed manually. See [`plugin/README.md`](plugin/README.md).
@@ -71,8 +77,11 @@ inat-lightroom/
     ├── README.md
     └── inat.lrplugin/
         ├── Info.lua             # Plugin identity, version, menu, tagsets, URL handler
-        ├── CredentialsMenu.lua   # The single Plug-in Extras entry
+        ├── ObservationPanelMenu.lua  # Plug-in Extras entry: opens the panel
+        ├── ObservationPanel.lua # Floating panel that follows the selection
+        ├── CredentialsMenu.lua   # Plug-in Extras entry: credentials
         ├── CredentialsDialog.lua # The credentials dialog itself
+        ├── LinkObservation.lua  # Adopting an existing observation
         ├── InatAuth.lua         # Token acquisition and credential storage
         ├── InatAPI.lua          # HTTP client for the iNaturalist REST API
         ├── ExportServiceProvider.lua  # Publish service (upload to iNaturalist)
