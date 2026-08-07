@@ -22,7 +22,6 @@
   public client work without shipping a secret.
 --]]
 
-local LrApplication     = import "LrApplication"
 local LrDialogs         = import "LrDialogs"
 local LrFunctionContext = import "LrFunctionContext"
 
@@ -42,75 +41,19 @@ local function doSync()
 end
 
 --- Ask for an observation ID and attach it to the selection, then sync.
--- Adopting an observation that already exists on iNaturalist: publishing can
--- only ever create new ones, so without this there is no way to connect a
--- Lightroom photo to an observation made in the field on a phone.
 local function doLink()
-  LrFunctionContext.postAsyncTaskWithContext("inat_url_link", function(context)
-    local LrBinding = import "LrBinding"
-    local LrView    = import "LrView"
+  require("LinkObservation").start()
+end
 
-    local catalog = LrApplication.activeCatalog()
-    local photos  = catalog:getTargetPhotos()
-
-    if not photos or #photos == 0 then
-      LrDialogs.message("iNaturalist", "No photos selected.", "warning")
-      return
-    end
-
-    local f     = LrView.osFactory()
-    local props = LrBinding.makePropertyTable(context)
-    props.obs_id = ""
-
-    local contents = f:column {
-      bind_to_object = props,
-      spacing = f:label_spacing(),
-      f:static_text {
-        title = "Paste the observation ID or URL from iNaturalist.\n"
-          .. "It will be applied to all " .. #photos .. " selected photo(s).",
-        width = 400,
-        height_in_lines = 2,
-      },
-      f:row {
-        f:static_text { title = "Observation:", width = 90, alignment = "right" },
-        f:edit_field { value = LrView.bind("obs_id"), width = 300, immediate = true },
-      },
-    }
-
-    local result = LrDialogs.presentModalDialog {
-      title      = "iNaturalist - Link to Observation",
-      contents   = contents,
-      actionVerb = "Link and Sync",
-    }
-
-    if result ~= "ok" then
-      return
-    end
-
-    local obsId = PluginUrls.parseObservationId(props.obs_id)
-
-    if not obsId then
-      LrDialogs.message("iNaturalist",
-        "That does not look like an observation ID or URL.", "warning")
-      return
-    end
-
-    catalog:withWriteAccessDo("iNat link", function()
-      for _, photo in ipairs(photos) do
-        photo:setPropertyForPlugin(_PLUGIN, "inat_observation_id", obsId)
-      end
-    end)
-
-    logger:info("Linked " .. #photos .. " photo(s) to observation " .. obsId)
-
-    local SyncCore = require "SyncCore"
-    SyncCore.syncTargetPhotos(context)
-  end)
+--- Open the floating panel.
+local function doPanel()
+  require("ObservationPanel").show()
 end
 
 local handlers = {
-  sync = doSync,
-  link = doLink,
+  sync  = doSync,
+  link  = doLink,
+  panel = doPanel,
 }
 
 --------------------------------------------------------------------------------

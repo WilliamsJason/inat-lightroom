@@ -360,17 +360,26 @@ def test_info_registers_the_tagset_and_url_handler(plugin):
     assert info["URLHandler"] == "URLHandler.lua"
 
 
-def test_the_menu_is_a_single_credentials_entry(plugin):
-    """Everything else moved to the Publish Service, whose settings dialog can
-    run code. Credentials stay in the menu because you need them before a
-    publish service is any use, and because they are the one thing you want to
-    reach without first creating a connection."""
+def test_the_menu_only_opens_things(plugin):
+    """The menu is not where features live -- the publish service and the
+    floating panel are, because both are in front of the user while they work.
+    A menu item earns its place only by being the way to reach something that
+    is not currently on screen: credentials, which you need before anything
+    works, and the panel, which can be closed."""
     info = plugin.require("Info")
     items = lua_list(info["LrLibraryMenuItems"])
 
-    assert len(items) == 1
-    assert items[0]["file"] == "CredentialsMenu.lua"
-    assert "Credentials" in items[0]["title"]
+    assert len(items) == 2
+    files = {item["file"] for item in items}
+    assert files == {"ObservationPanelMenu.lua", "CredentialsMenu.lua"}
+
+
+def test_the_panel_menu_item_comes_first(plugin):
+    """It is the one people will reach for repeatedly; credentials are a
+    once-per-install errand."""
+    info = plugin.require("Info")
+    items = lua_list(info["LrLibraryMenuItems"])
+    assert items[0]["file"] == "ObservationPanelMenu.lua"
 
 
 def test_the_publish_service_is_registered_as_an_export_service(plugin):
