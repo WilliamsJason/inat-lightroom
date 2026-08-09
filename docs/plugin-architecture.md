@@ -16,6 +16,8 @@ inat.lrplugin/
 ├── Info.lua                   # Plugin identity, SDK version, menu, tagsets, URL handler
 ├── ObservationPanelMenu.lua   # Menu script: opens the floating panel
 ├── ObservationPanel.lua       # The floating panel itself
+├── WindowFix.lua              # Fixes the panel's z-order (Windows only)
+├── fix_window_z_order.ps1     # The Win32 helper WindowFix shells out to
 ├── CredentialsMenu.lua        # Menu script: opens the credentials dialog
 ├── CredentialsDialog.lua      # The credentials dialog itself
 ├── LinkObservation.lua        # Adopting an observation that already exists
@@ -133,12 +135,16 @@ heading describes the *first* selected photo and the heading says so — but
 saving a species guess deliberately applies to the whole selection, because one
 name across the six frames of the same animal is the common case.
 
-One rough edge we cannot file down: the window is created `WS_EX_TOPMOST` with
-no owner window, so it floats above every application rather than just above
-Lightroom, and it does not minimise with Lightroom. That is imposed by the
-native window code — the SDK builder exposes no key for it, and passing
-`_topmost = false` was tested in the host and ignored. See
-`docs/lightroom-sdk-notes.md` for the measurements.
+One rough edge Lightroom leaves us: the window is created `WS_EX_TOPMOST` with
+no owner, so out of the box it floats above every application and does not
+minimise with Lightroom. Nothing in the SDK controls that — passing
+`_topmost = false` was tested in the host and ignored — so `WindowFix.lua`
+shells out to `fix_window_z_order.ps1`, which gives the window Lightroom's main
+window as its owner and clears topmost. The result is an ordinary owned window:
+above Lightroom, above nothing else, minimising with it. That shell-out is the
+only place the plugin leaves Lua, it is Windows-only, and on macOS it is a
+no-op because the behaviour there has never been measured. See
+`docs/lightroom-sdk-notes.md` for the before-and-after window flags.
 
 `LinkObservation.lua` exists because two entry points need it — the panel's
 button and the `lightroom://` URL. It used to be a local function inside

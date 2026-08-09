@@ -49,6 +49,10 @@ local WINDOW_ID = "com.github.inat-lightroom.observationPanel"
 
 local OBSERVATION_URL = "https://www.inaturalist.org/observations/"
 
+-- Both the window's caption and the handle the z-order fix-up finds it by, so
+-- they cannot drift apart.
+local WINDOW_TITLE = "iNaturalist"
+
 --------------------------------------------------------------------------------
 -- Reading the selection
 --------------------------------------------------------------------------------
@@ -300,8 +304,18 @@ function ObservationPanel.show()
         end,
       }
 
+      -- Lightroom makes this window WS_EX_TOPMOST and ownerless, so it would
+      -- float over every application and not minimise with Lightroom. Nothing
+      -- in the SDK controls that, so a helper fixes the window up from
+      -- outside. Started before the window exists on purpose: the call below
+      -- blocks this task until the window closes, and the helper polls for the
+      -- window rather than expecting to find it immediately.
+      LrTasks.startAsyncTask(function()
+        require("WindowFix").apply(WINDOW_TITLE)
+      end)
+
       LrDialogs.presentFloatingDialog(_PLUGIN, {
-        title    = "iNaturalist",
+        title    = WINDOW_TITLE,
         contents = ObservationPanel.contents(f, props, actions),
 
         -- Keyed so save_frame has something to store a position against, and

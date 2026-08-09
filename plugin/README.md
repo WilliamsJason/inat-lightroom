@@ -123,6 +123,15 @@ to Observation…** and **View on iNaturalist**.
 The window remembers where you put it, so drag it somewhere out of the way once
 and it will reopen there. Close it and the menu item brings it back.
 
+It stays above Lightroom and minimises with it, but it does not sit on top of
+your browser or anything else. That takes a little work: Lightroom creates
+plugin floating windows as system-wide always-on-top windows with no owner, and
+gives plugins no way to change it, so on Windows the plugin runs a small
+PowerShell helper (`fix_window_z_order.ps1`) that hands the window to Lightroom
+and clears the always-on-top flag. It touches nothing but that one window, and
+if it fails the panel simply stays always-on-top. On macOS it does not run at
+all.
+
 With several photos selected, everything shown describes the *first* one and the
 heading says so. Saving a species guess is the exception: it deliberately
 applies to the whole selection, since one name across several frames of the same
@@ -181,6 +190,8 @@ inat.lrplugin/
 ├── Info.lua                   # Plugin identity, version, menu, tagsets, URL handler
 ├── ObservationPanelMenu.lua   # Plug-in Extras entry: opens the panel
 ├── ObservationPanel.lua       # The floating panel itself
+├── WindowFix.lua              # Fixes the panel's z-order (Windows only)
+├── fix_window_z_order.ps1     # The Win32 helper WindowFix shells out to
 ├── CredentialsMenu.lua        # Plug-in Extras entry: opens the credentials dialog
 ├── CredentialsDialog.lua      # The credentials dialog itself
 ├── LinkObservation.lua        # Adopting an existing observation
@@ -238,5 +249,8 @@ before adding SDK calls.
 ### Logging
 
 The plugin logs to `LrLogger("iNatLightroom")`. Logs land in Lightroom's log
-directory (`~/Documents/LrClassicLogs` on Windows,
-`~/Library/Logs/Adobe/Lightroom/LrClassicLogs/` on macOS).
+directory. On Windows that is
+`%LOCALAPPDATA%\Adobe\Lightroom\Logs\LrClassicLogs\iNatLightroom.log` —
+observed on Lightroom Classic 15, *not* `~/Documents/LrClassicLogs` as older
+notes have it. macOS is
+`~/Library/Logs/Adobe/Lightroom/LrClassicLogs/` (unverified).

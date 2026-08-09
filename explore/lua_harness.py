@@ -116,6 +116,17 @@ stubs.LrHttp = {
 -- its function context visible here instead of only in the host.
 local pendingTasks = {}
 
+-- Shell-outs. LrTasks.execute is how the plugin reaches Win32 to fix the
+-- floating panel's z-order, so tests need to see the command and to be able to
+-- make it fail.
+local executedCommands = {}
+local executeExitCode  = 0
+
+-- Order matters in places where a recording alone cannot show it -- whether the
+-- z-order fix-up was started alongside the window or ran before it, for
+-- instance -- so the stubs that block in Lightroom also append here.
+local timeline = {}
+
 local function runPendingTasks()
   while #pendingTasks > 0 do
     local fn = table.remove(pendingTasks, 1)
@@ -129,6 +140,20 @@ stubs.LrTasks = {
   -- Lightroom's own pcall, which unlike Lua's can be used around code that
   -- yields. Same contract, so the plain one is a faithful stand-in.
   pcall = function(fn, ...) return pcall(fn, ...) end,
+
+  -- Records the command instead of running a shell, and hands back whatever
+  -- exit code the test asked for. Real one blocks until the child exits.
+  execute = function(command)
+    executedCommands[#executedCommands + 1] = command
+    timeline[#timeline + 1] = "execute"
+    return executeExitCode
+  end,
+}
+
+stubs.LrPathUtils = {
+  child = function(directory, name)
+    return tostring(directory) .. "/" .. tostring(name)
+  end,
 }
 
 stubs.LrDate = {
@@ -160,6 +185,7 @@ stubs.LrDialogs = {
       error("presentFloatingDialog called with no contents parameter", 0)
     end
     floatingDialogs[#floatingDialogs + 1] = args
+    timeline[#timeline + 1] = "floatingDialog"
     return args
   end,
   closeFloatingDialogsForPlugin = function() end,
@@ -326,8 +352,16 @@ stubs.LrApplication = {
   activeCatalog = function() return catalog end,
 }
 
--- Lightroom exposes the plugin object as a global.
-_PLUGIN = { id = "com.github.inat-lightroom" }
+-- Lightroom exposes the plugin object as a global. `path` is the plugin
+-- directory; it is in AgLrPlugin's property list in substrate.dll alongside
+-- id, enabled and type.
+_PLUGIN = { id = "com.github.inat-lightroom", path = "/plugins/inat.lrplugin" }
+
+-- Lightroom sets exactly one of these in every plugin's sandbox; they are in
+-- the globals list in substrate.dll next to _PLUGIN and LOC. Tests that care
+-- about the other platform flip them.
+WIN_ENV = true
+MAC_ENV = false
 
 -- LOC is a global in Lightroom, not a module, and every Info.lua / tagset /
 -- metadata definition calls it at load time. Without it those files cannot be
@@ -358,6 +392,9 @@ return {
   logLines = logLines,
   httpCalls = httpCalls,
   openedUrls = openedUrls,
+  executedCommands = executedCommands,
+  timeline = timeline,
+  setExecuteExitCode = function(code) executeExitCode = code end,
   dialogMessages = dialogMessages,
   floatingDialogs = floatingDialogs,
   catalogWrites = catalogWrites,
@@ -497,6 +534,33 @@ class LuaPlugin:
         """URLs handed to LrHttp.openUrlInBrowser, in order."""
         urls = self.env["openedUrls"]
         return [urls[i] for i in range(1, len(urls) + 1)]
+
+    @property
+    def executed_commands(self) -> list[str]:
+        """Command lines handed to LrTasks.execute, in order."""
+        commands = self.env["executedCommands"]
+        return [commands[i] for i in range(1, len(commands) + 1)]
+
+    @property
+    def timeline(self) -> list[str]:
+        """Blocking calls in the order they happened.
+
+        Entries are "floatingDialog" and "execute". Both block the calling task
+        in Lightroom, so their relative order says whether work was handed to a
+        separate task or run inline -- which a recording on its own cannot show.
+        """
+        events = self.env["timeline"]
+        return [events[i] for i in range(1, len(events) + 1)]
+
+    def set_execute_exit_code(self, code: int) -> None:
+        """Make the next LrTasks.execute calls report this exit code."""
+        self.env["setExecuteExitCode"](code)
+
+    def set_platform(self, windows: bool) -> None:
+        """Flip the WIN_ENV / MAC_ENV pair Lightroom sets in the sandbox."""
+        globals_ = self.runtime.globals()
+        globals_["WIN_ENV"] = windows
+        globals_["MAC_ENV"] = not windows
 
     @property
     def catalog_writes(self) -> list[str]:
