@@ -301,9 +301,49 @@ Two things matter for it to be usable:
 - **`save_frame` plus `id`.** Position and size persist across sessions. A
   floating window that reopens centred every time is one people close once.
 
-Windows caveats: it is always-on-top, and it takes focus every time it is
-opened — which is why the panel updates its bindings in place on selection
-change rather than rebuilding the window.
+It takes focus every time it is opened — which is why the panel updates its
+bindings in place on selection change rather than rebuilding the window.
+
+#### It is system-wide always-on-top, and that is not configurable
+
+Measured on Windows with `GetWindowLongPtrW` / `GetWindow` against a live
+Lightroom process, rather than assumed:
+
+| Window | Class | Ex-style | Owner |
+|---|---|---|---|
+| Our floating panel | `AgWinFrame` | `0x108` — `WS_EX_TOPMOST` set | `0` (none) |
+| Lightroom main window | `AgWinMainFrame` | `0x100` | `0` |
+
+Two consequences, both unwanted: `WS_EX_TOPMOST` puts the panel above *every*
+application, not just Lightroom; and having no owner window means it does not
+minimise, restore or z-order with Lightroom.
+
+There is no Lua control over either. `_topmost` *is* a real property of the
+underlying window object — in `ui.dll` it sits in the same property list as
+`borderless`, `closable`, `minimizable` and `canBecomeKeyWindow`, all of which
+the SDK builder does pass — but the builder's own constant table contains no
+`_topmost` and no `level`, so it never reads the key. Passing
+`_topmost = false` through `presentFloatingDialog` was tried in the host and
+changed nothing: the window still came up `0x108`.
+
+The behaviour you would want (above Lightroom, not above everything) is an
+owned, non-topmost window. That is reachable only from outside Lua:
+
+```
+SetWindowLongPtrW(panel, GWLP_HWNDPARENT /* -8 */, mainHwnd)
+SetWindowPos(panel, HWND_NOTOPMOST /* -2 */, 0,0,0,0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE)
+```
+
+Both calls were confirmed to succeed against the live panel, leaving it
+`exstyle=0x100`, owner = the `AgWinMainFrame`. Delivering that from the plugin
+would mean shelling out per open, so it is recorded as possible and **not
+adopted**.
+
+To re-measure: `EnumWindows` filtered by Lightroom's PID, then
+`GetWindowLongPtrW(h, -20)` for the ex-style and `GetWindow(h, GW_OWNER /* 4 */)`
+for the owner. Add `CharSet = CharSet.Unicode` to the `GetClassNameW` /
+`GetWindowTextW` P/Invokes — `StringBuilder` marshals as ANSI by default and you
+get one character back per string.
 
 Note `windowWillClose` here, **not** `window_closing`. The assert
 "windowWillClose is overriden, use window_closing instead" is in the popup /

@@ -133,6 +133,13 @@ heading describes the *first* selected photo and the heading says so — but
 saving a species guess deliberately applies to the whole selection, because one
 name across the six frames of the same animal is the common case.
 
+One rough edge we cannot file down: the window is created `WS_EX_TOPMOST` with
+no owner window, so it floats above every application rather than just above
+Lightroom, and it does not minimise with Lightroom. That is imposed by the
+native window code — the SDK builder exposes no key for it, and passing
+`_topmost = false` was tested in the host and ignored. See
+`docs/lightroom-sdk-notes.md` for the measurements.
+
 `LinkObservation.lua` exists because two entry points need it — the panel's
 button and the `lightroom://` URL. It used to be a local function inside
 `URLHandler.lua`, which meant the panel could only reach it by pretending to be
