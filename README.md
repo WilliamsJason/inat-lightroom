@@ -42,7 +42,9 @@ There is also a floating **iNaturalist panel** (Library → Plug-in Extras) that
 follows the filmstrip selection and carries the per-photo actions. Lightroom
 gives a plugin no docked surface that can hold a button — that was checked
 against the shipped binaries, not assumed — so a floating window is as close to
-a panel as a plugin gets.
+a panel as a plugin gets. On Windows it is nudged into behaving like one: a
+small helper hands the window to Lightroom so it stays above Lightroom, and
+only Lightroom, instead of the whole desktop.
 
 Authentication is currently a pasted API token, which expires daily. The
 frictionless path needs an approved iNaturalist application, and since 2022
@@ -79,6 +81,8 @@ inat-lightroom/
         ├── Info.lua             # Plugin identity, version, menu, tagsets, URL handler
         ├── ObservationPanelMenu.lua  # Plug-in Extras entry: opens the panel
         ├── ObservationPanel.lua # Floating panel that follows the selection
+        ├── WindowFix.lua        # Keeps the panel above Lightroom, not the desktop
+        ├── fix_window_z_order.ps1 # The Win32 helper it shells out to
         ├── CredentialsMenu.lua   # Plug-in Extras entry: credentials
         ├── CredentialsDialog.lua # The credentials dialog itself
         ├── LinkObservation.lua  # Adopting an existing observation

@@ -334,10 +334,25 @@ SetWindowLongPtrW(panel, GWLP_HWNDPARENT /* -8 */, mainHwnd)
 SetWindowPos(panel, HWND_NOTOPMOST /* -2 */, 0,0,0,0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE)
 ```
 
-Both calls were confirmed to succeed against the live panel, leaving it
-`exstyle=0x100`, owner = the `AgWinMainFrame`. Delivering that from the plugin
-would mean shelling out per open, so it is recorded as possible and **not
-adopted**.
+Both calls were confirmed against the live panel. Order matters: giving the
+window an owner first puts it in the owner's z-order band, and clearing topmost
+afterwards is what stops it floating over other applications.
+
+That is what the plugin now does. `WindowFix.lua` shells out through
+`LrTasks.execute` to `fix_window_z_order.ps1`, which polls for a window matching
+Lightroom's PID + class `AgWinFrame` + the exact caption, then applies both
+calls. It is started on its own task just before `presentFloatingDialog`, which
+blocks; the helper polls rather than expecting the window to exist yet.
+
+Measured after the plugin's own fix-up, opening the panel from the menu:
+
+```
+title='iNaturalist'             class='AgWinFrame'      owner=0x3064A exstyle=0x100 TOPMOST=False
+title='Lightroom Catalog - ...' class='AgWinMainFrame'  owner=0x0     exstyle=0x100 TOPMOST=False
+```
+
+Owner is Lightroom's main frame, topmost is gone. No console window flashes,
+because the helper is launched `-WindowStyle Hidden`.
 
 To re-measure: `EnumWindows` filtered by Lightroom's PID, then
 `GetWindowLongPtrW(h, -20)` for the ex-style and `GetWindow(h, GW_OWNER /* 4 */)`
@@ -502,8 +517,12 @@ across modules does not share its enablement, so a module that creates its own
 logger logs nothing.
 
 This plugin has one `Log.lua` that enables a single logger; every module
-requires it. Output lands in `~/Documents/LrClassicLogs` (Windows) or
-`~/Library/Logs/Adobe/Lightroom/LrClassicLogs/` (macOS).
+requires it. On Windows the output lands in
+`%LOCALAPPDATA%\Adobe\Lightroom\Logs\LrClassicLogs\`, observed on Lightroom
+Classic 15 — the widely repeated `~/Documents/LrClassicLogs` was wrong here, and
+`~/Documents` is redirected to OneDrive on this machine, so if you go looking be
+sure which one you are looking at. macOS is
+`~/Library/Logs/Adobe/Lightroom/LrClassicLogs/` (unverified).
 
 Note that a menu-item script only loads when the menu item is *clicked*, so
 putting logger setup there means nothing logs during an export.
