@@ -405,6 +405,21 @@ end
 --------------------------------------------------------------------------------
 
 --- Open the settings dialog. Modal, so it blocks until dismissed.
+--- Build the tab views.
+--
+-- Exposed so their identifiers can be checked without opening a modal dialog.
+-- ui.dll raises "Multiple tab_view_item views with the same identifier" and
+-- "tab_view_item needs to have a string or number identifier" -- both are
+-- runtime errors that surface only when the dialog is opened, at which point
+-- the settings window simply does not appear.
+function SettingsDialog.tabs(f, props, actions)
+  return {
+    accountTab(f, props),
+    observationsTab(f, props, actions),
+    imageTab(f, props),
+  }
+end
+
 function SettingsDialog.show()
   LrFunctionContext.callWithContext("inat_settings", function(context)
     local f     = LrView.osFactory()
@@ -438,9 +453,7 @@ function SettingsDialog.show()
       width = 540,
 
       f:tab_view {
-        accountTab(f, props),
-        observationsTab(f, props, actions),
-        imageTab(f, props),
+        unpack(SettingsDialog.tabs(f, props, actions)),
       },
     }
 

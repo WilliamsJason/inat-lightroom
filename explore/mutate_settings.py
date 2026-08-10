@@ -73,6 +73,30 @@ MUTATIONS = [
         "  if #photos == 0 then\n    LrDialogs.message(\"iNaturalist Sync\",\n      \"No photos in this catalog are linked to an observation yet.\", \"info\")\n    return 0\n  end",
         "  if #photos == 0 then\n    return 0\n  end",
     ),
+    (
+        "SettingsDialog",
+        "two tabs share an identifier, which ui.dll refuses to build",
+        '    identifier = "observations",',
+        '    identifier = "account",',
+    ),
+    (
+        "SettingsDialog",
+        "a tab carries no identifier at all",
+        '    identifier = "image",',
+        "    identifier = nil,",
+    ),
+    (
+        "SettingsDialog",
+        "a tab has no title, so there is nothing to click",
+        '    title      = "Image",',
+        '    title      = nil,',
+    ),
+    (
+        "SettingsDialog",
+        "the account tab is buried behind the others",
+        "    accountTab(f, props),\n    observationsTab(f, props, actions),",
+        "    observationsTab(f, props, actions),\n    accountTab(f, props),",
+    ),
 ]
 
 

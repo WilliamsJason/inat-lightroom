@@ -202,3 +202,48 @@ def _jwt() -> str:
     from lua_harness import make_jwt
 
     return make_jwt(4_102_444_800)
+
+
+# ---------------------------------------------------------------------------
+# The tab views
+#
+# ui.dll validates tab_view_item at build time and raises. Both messages are in
+# the binary verbatim: "Multiple tab_view_item views with the same identifier"
+# and "tab_view_item needs to have a string or number identifier". Either one
+# means the settings window does not open at all, and nothing else in the
+# plugin reports it.
+# ---------------------------------------------------------------------------
+
+
+def tabs(plugin, dialog):
+    factory = plugin.view_factory()
+    return list(
+        dialog["tabs"](factory, props(plugin), plugin.eval("{}")).values()
+    )
+
+
+def test_there_is_a_tab_for_each_thing_a_person_comes_here_to_do(plugin, dialog):
+    assert len(tabs(plugin, dialog)) == 3
+
+
+def test_every_tab_has_a_string_identifier(plugin, dialog):
+    for tab in tabs(plugin, dialog):
+        assert isinstance(tab["identifier"], str), tab["title"]
+        assert tab["identifier"]
+
+
+def test_no_two_tabs_share_an_identifier(plugin, dialog):
+    identifiers = [tab["identifier"] for tab in tabs(plugin, dialog)]
+
+    assert len(set(identifiers)) == len(identifiers), identifiers
+
+
+def test_every_tab_is_labelled(plugin, dialog):
+    """An unlabelled tab is unreachable -- there is nothing to click."""
+    for tab in tabs(plugin, dialog):
+        assert tab["title"]
+
+
+def test_the_account_tab_comes_first(plugin, dialog):
+    """Nothing else in the dialog does anything until credentials exist."""
+    assert tabs(plugin, dialog)[0]["identifier"] == "account"
