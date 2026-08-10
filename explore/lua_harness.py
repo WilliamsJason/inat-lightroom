@@ -127,9 +127,13 @@ local executeExitCode  = 0
 -- instance -- so the stubs that block in Lightroom also append here.
 local timeline = {}
 
-local function runPendingTasks()
+local function runPendingTasks(reverse)
   while #pendingTasks > 0 do
-    local fn = table.remove(pendingTasks, 1)
+    -- Lightroom makes no promise about the order tasks finish in, and a
+    -- refresh that started earlier can finish later. Draining back to front
+    -- models that without needing real concurrency.
+    local index = reverse and #pendingTasks or 1
+    local fn = table.remove(pendingTasks, index)
     fn()
   end
 end
@@ -611,9 +615,18 @@ class LuaPlugin:
         """Set what catalog:getTargetPhotos() returns."""
         self.env["setTargetPhotos"](self.runtime.table_from(list(photos)))
 
-    def run_pending_tasks(self) -> None:
-        """Run queued async tasks, as Lightroom would once the caller returns."""
-        self.env["runPendingTasks"]()
+    def run_pending_tasks(self, reverse: bool = False) -> None:
+        """Run queued async tasks, as Lightroom would once the caller returns.
+
+        With ``reverse``, drains them back to front. Lightroom makes no promise
+        about the order tasks finish in, so this is how a test shows that a
+        refresh which started earlier but finished later cannot win.
+        """
+        self.env["runPendingTasks"](reverse)
+
+    def pending_task_count(self) -> int:
+        """How many async tasks are queued but not yet run."""
+        return int(self.env["pendingTaskCount"]())
 
     @property
     def pending_tasks(self) -> int:

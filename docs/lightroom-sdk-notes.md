@@ -292,7 +292,34 @@ So a floating window can follow the filmstrip selection and the chosen
 folder/collection. That is what makes it behave like a panel rather than a
 dialog. Focus Points v4 ships the same mechanism.
 
-Two things matter for it to be usable:
+The observers are registered on the Library module's filmstrip, not on the
+catalog: in `Library.lrmodule` `addSelectionContentObserver` sits in the same
+class as `setSelectedImageIds`, `getSelectedImageIds`, `getSelectedImageCount`
+and `addSelectionWillChangeObserver`. They fire promptly and reliably — verified
+by logging inside them in the host.
+
+**They are not called from within a task, and that matters more than it
+sounds.** Almost anything worth doing in one of these observers — reading plugin
+metadata, formatted metadata, most catalog access — yields, and yielding outside
+a task raises. Two different messages depending on how the observer was reached:
+
+```
+We can only wait from within a task
+Yielding is not allowed within a C or metamethod call
+```
+
+**Lightroom swallows both.** No dialog, no console output, nothing in the plugin
+log unless you catch it yourself. The visible symptom is simply a window that
+does not react, which sends you looking at the observer wiring — the one part
+that is working. Wrap the observer body in `LrTasks.startAsyncTask`.
+
+Expect several firings per user action, with transient states in between. The
+host log for a single folder change showed the selection observer fire three
+times, reporting 1, then 104, then 104, then 1 target photos. Anything doing
+async work per firing needs to decide which result is still wanted rather than
+assuming the last one to finish is the newest.
+
+Three things matter for it to be usable:
 
 - **`blockTask = true`.** The window is bound to a property table owned by the
   calling task's function context. Without `blockTask` that task ends as soon
@@ -300,6 +327,7 @@ Two things matter for it to be usable:
   object.
 - **`save_frame` plus `id`.** Position and size persist across sessions. A
   floating window that reopens centred every time is one people close once.
+- **Observers on a task**, as above.
 
 It takes focus every time it is opened — which is why the panel updates its
 bindings in place on selection change rather than rebuilding the window.

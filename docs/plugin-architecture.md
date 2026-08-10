@@ -128,6 +128,23 @@ belong to a property table owned by the calling task's function context, and
 without it that task ends immediately, the context dies, and every binding is
 pointing at a dead object.
 
+**The observers do not run in a task, and the refresh has to.** Reading plugin
+metadata yields, so doing it straight from the observer raises *"We can only
+wait from within a task"* — or, when the observer is reached through a
+metamethod, *"Yielding is not allowed within a C or metamethod call"*. Lightroom
+swallows both. The symptom is not an error but a panel that quietly ignores the
+filmstrip while the observers fire perfectly, which is exactly how this
+presented. `refresh` therefore hands its catalog reads to
+`LrTasks.startAsyncTask`.
+
+That makes refreshes concurrent, so each one carries a generation number and
+only the newest may write. Two things need it: arrow-keying down the filmstrip
+fires the observer faster than the reads finish, and a folder change reports the
+whole folder selected before settling on one photo — the host log showed
+`1 → 104 → 104 → 1` target photos for a single click. Without the guard a
+refresh that started earlier and finished later can leave the panel on the wrong
+photo, and there is nothing to correct it until the next click.
+
 The panel shows the selection, what the observation currently is, its quality
 grade and last sync, an editable **Species guess**, and buttons for **Sync**,
 **Link to Observation…** and **View on iNaturalist**. Everything below the
