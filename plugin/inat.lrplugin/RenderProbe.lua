@@ -58,7 +58,12 @@ local function probe(report)
   local LrExportSession = import "LrExportSession"
   report[#report + 1] = "LrExportSession import: " .. type(LrExportSession)
 
-  local settings = RenderPhoto.settingsFor({ maxPixels = 1024 })
+  local folder = RenderPhoto.makeTempFolder()
+  report[#report + 1] = "temp folder: " .. tostring(folder)
+  report[#report + 1] = "  created: " ..
+    tostring(LrFileUtils.exists(folder))
+
+  local settings = RenderPhoto.settingsFor({ maxPixels = 1024, folder = folder })
   local session = LrExportSession {
     photosToExport = { photo },
     exportSettings = settings,
@@ -97,6 +102,10 @@ local function probe(report)
   if seen == 0 then
     report[#report + 1] = "FAIL  renditions() yielded nothing"
   end
+
+  RenderPhoto.cleanUp(folder)
+  report[#report + 1] = "cleaned up: " ..
+    tostring(not LrFileUtils.exists(folder))
 end
 
 LrTasks.startAsyncTask(function()
