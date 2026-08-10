@@ -13,6 +13,7 @@ whole point of it and is guarded here.
 import pytest
 
 from lua_harness import LuaPlugin
+from test_panel_core_lua import deep
 
 
 @pytest.fixture
@@ -642,3 +643,159 @@ def test_updating_pushes_a_changed_accuracy_to_inaturalist(plugin, panel):
     plugin.run_pending_tasks()
 
     assert reached["accuracy"] == 100
+
+
+# ---------------------------------------------------------------------------
+# Filing a name, and looking one up
+# ---------------------------------------------------------------------------
+
+
+def button_titles(args):
+    return [b["title"] for b in of_type(args["contents"], "push_button")
+            if isinstance(b["title"], str)]
+
+
+def test_the_panel_offers_both_new_buttons(plugin, panel):
+    plugin.set_target_photos([plugin.new_photo()])
+
+    titles = button_titles(show(plugin, panel))
+
+    assert "Sync guess to Metadata tags" in titles
+    assert "View guess on iNaturalist" in titles
+
+
+def test_both_new_buttons_wait_for_a_chosen_suggestion(plugin, panel):
+    """Neither means anything without a taxon: one would have nothing to apply
+    and the other nowhere to go. Enabled buttons that do nothing are how users
+    learn to distrust a panel."""
+    plugin.set_target_photos([plugin.new_photo()])
+    args = show(plugin, panel)
+
+    for title in ("Sync guess to Metadata tags", "View guess on iNaturalist"):
+        button = [b for b in of_type(args["contents"], "push_button")
+                  if b["title"] == title][0]
+        assert button["enabled"]["__bind"] == "hasSuggestion", title
+
+
+def test_choosing_a_suggestion_enables_them(plugin, panel):
+    props = plugin.runtime.table_from({})
+    props["suggestions"] = deep(plugin, [
+        {"taxon_id": 103486, "name": "Ischnura erratica", "rank": "species",
+         "combined_score": 91},
+    ])
+
+    plugin.call(panel.chooseSuggestion, props, 1)
+
+    assert props["hasSuggestion"] is True
+    assert props["suggestionTaxonId"] == 103486
+
+
+def test_choosing_nothing_disables_them_again(plugin, panel):
+    """A stale enabled button would apply the taxon the user just deselected."""
+    props = plugin.runtime.table_from({})
+    props["suggestions"] = deep(plugin, [])
+    props["hasSuggestion"] = True
+
+    plugin.call(panel.chooseSuggestion, props, 99)
+
+    assert props["hasSuggestion"] is False
+
+
+def test_the_chosen_rank_and_score_are_remembered(plugin, panel):
+    """Read at the moment of choosing, because Get Suggestions replaces the
+    list wholesale and the index would then point at a different taxon."""
+    props = plugin.runtime.table_from({})
+    props["suggestions"] = deep(plugin, [
+        {"taxon_id": 1, "name": "X", "rank": "species", "combined_score": 40},
+    ])
+
+    plugin.call(panel.chooseSuggestion, props, 1)
+
+    assert props["suggestionRank"] == "species"
+    assert props["suggestionScore"] == 40
+
+
+# ---------------------------------------------------------------------------
+# Arguing before a weak species claim
+# ---------------------------------------------------------------------------
+
+
+def choose_weak_species(plugin):
+    props = plugin.runtime.table_from({})
+    props["speciesGuess"] = "Ischnura erratica"
+    props["suggestionTaxonId"] = 103486
+    props["suggestionRank"] = "species"
+    props["suggestionScore"] = 40
+    return props
+
+
+def test_a_weak_species_upload_asks_first(plugin, panel):
+    reached = stub_upload_path(plugin)
+    plugin.set_target_photos([
+        plugin.new_photo(raw={"gps": {"latitude": 51.5, "longitude": -0.1}})])
+    plugin.set_confirm_answer("cancel")
+
+    plugin.call(panel.uploadOrUpdate, choose_weak_species(plugin))
+    plugin.run_pending_tasks()
+
+    assert reached["count"] == 0, "cancelling must not upload"
+
+
+def test_a_weak_species_update_asks_too(plugin, panel):
+    """An existing observation is not a safer place to put a wrong species --
+    it is a published one. The location warning is upload-only for a real
+    reason; this one is not."""
+    reached = stub_upload_path(plugin)
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="4242")])
+    plugin.set_confirm_answer("cancel")
+
+    plugin.call(panel.uploadOrUpdate, choose_weak_species(plugin))
+    plugin.run_pending_tasks()
+
+    assert reached["updates"] == 0
+
+
+def test_confirming_a_weak_species_goes_ahead(plugin, panel):
+    """It is a warning, not a veto. Plenty of weak identifications are worth
+    making and the community will correct them."""
+    reached = stub_upload_path(plugin)
+    plugin.set_target_photos([
+        plugin.new_photo(raw={"gps": {"latitude": 51.5, "longitude": -0.1}})])
+    plugin.set_confirm_answer("ok")
+
+    plugin.call(panel.uploadOrUpdate, choose_weak_species(plugin))
+    plugin.run_pending_tasks()
+
+    assert reached["count"] == 1
+
+
+def test_a_confident_species_upload_asks_nothing(plugin, panel):
+    reached = stub_upload_path(plugin)
+    plugin.set_target_photos([
+        plugin.new_photo(raw={"gps": {"latitude": 51.5, "longitude": -0.1}})])
+    plugin.set_confirm_answer("cancel")
+
+    props = choose_weak_species(plugin)
+    props["suggestionScore"] = 98
+
+    plugin.call(panel.uploadOrUpdate, props)
+    plugin.run_pending_tasks()
+
+    assert reached["count"] == 1, "a confident guess must not be interrogated"
+
+
+def test_a_coarser_rank_upload_asks_nothing(plugin, panel):
+    """Choosing the genus is the careful answer. Warning about it would punish
+    the behaviour the fallback list exists to encourage."""
+    reached = stub_upload_path(plugin)
+    plugin.set_target_photos([
+        plugin.new_photo(raw={"gps": {"latitude": 51.5, "longitude": -0.1}})])
+    plugin.set_confirm_answer("cancel")
+
+    props = choose_weak_species(plugin)
+    props["suggestionRank"] = "genus"
+
+    plugin.call(panel.uploadOrUpdate, props)
+    plugin.run_pending_tasks()
+
+    assert reached["count"] == 1

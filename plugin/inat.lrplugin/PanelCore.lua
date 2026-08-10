@@ -33,6 +33,29 @@ local PanelCore = {}
 -- than a complete one.
 PanelCore.SUGGESTION_LIMIT = 8
 
+--- The score at or above which a species-level answer stands on its own.
+--
+-- Below it the picker offers coarser ranks and the upload asks for confirmation.
+-- iNaturalist's own site makes the same move -- it stops naming a species and
+-- says "we're pretty sure this is in the genus ..." -- and the number is a
+-- judgement call rather than anything the API publishes.
+--
+-- The asymmetry that sets it: a genus-level record that is right is useful
+-- forever, and a species-level record that is wrong is worse than useless,
+-- because somebody downstream trusts it. So the threshold sits high enough to
+-- catch a confident-looking guess.
+PanelCore.CONFIDENT_SCORE = 75
+
+--- Ranks worth offering as a fallback, coarsest first.
+--
+-- Deliberately not every rank iNaturalist has. Suborder, superfamily and tribe
+-- are real, and a list containing all of them is a taxonomy lesson rather than
+-- a choice -- these three are the ones a person actually files things under.
+PanelCore.FALLBACK_RANKS = { "order", "family", "genus" }
+
+--- Ranks that name a single species, and so carry the risk worth warning about.
+PanelCore.SPECIES_RANKS = { species = true, subspecies = true, variety = true }
+
 --- Shown in place of coordinates. Exposed so the panel and its tests agree on
 -- the wording without either one hardcoding it.
 local NO_LOCATION = "None - iNaturalist will mark this casual"
@@ -61,9 +84,91 @@ function PanelCore.describeSuggestion(row)
   local score = tonumber(row.combined_score)
   if score then
     name = name .. " - " .. string.format("%.0f%%", score)
+  elseif row.note and row.note ~= "" then
+    name = name .. " - " .. row.note
   end
 
   return name
+end
+
+--- The coarser taxa worth offering when no species-level answer is convincing.
+--
+-- @param commonAncestor  The vision response's common ancestor, fetched with
+--                        its `ancestors` so there is a ladder to walk.
+-- @param topScore        The best combined_score in the list.
+-- @return A list of rows in the same shape as a suggestion, finest first.
+--
+-- Built from the common ancestor's own lineage and nothing else, which is what
+-- keeps it honest: the common ancestor is the most specific taxon the model is
+-- confident about across every candidate, so it and everything above it are
+-- agreed on by the whole list. Walking *down* from it -- say, offering the top
+-- result's genus -- would assume the top result's lineage is the right one,
+-- which at 40% is precisely what is in doubt.
+--
+-- Empty when something already scores well: a confident answer needs no
+-- fallback, and offering one anyway would make every identification look
+-- uncertain.
+function PanelCore.fallbackRows(commonAncestor, topScore)
+  if not commonAncestor then return {} end
+  if tonumber(topScore) and tonumber(topScore) >= PanelCore.CONFIDENT_SCORE then
+    return {}
+  end
+
+  local wanted = {}
+  for _, rank in ipairs(PanelCore.FALLBACK_RANKS) do wanted[rank] = true end
+
+  local chain = {}
+  for _, taxon in ipairs(commonAncestor.ancestors or {}) do
+    chain[#chain + 1] = taxon
+  end
+  chain[#chain + 1] = commonAncestor
+
+  local rows = {}
+  for i = #chain, 1, -1 do
+    local taxon = chain[i]
+    if taxon and taxon.id and wanted[taxon.rank] then
+      rows[#rows + 1] = {
+        taxon_id    = taxon.id,
+        name        = taxon.name,
+        rank        = taxon.rank,
+        common_name = taxon.preferred_common_name,
+        -- No score. These are not candidates the model ranked, and a percentage
+        -- next to one would be a number nobody computed.
+        note        = taxon.rank .. ", agreed by every suggestion",
+      }
+    end
+  end
+
+  return rows
+end
+
+--- The case against claiming this taxon, if there is one.
+--
+-- @return A message to show, or nil when there is nothing worth saying.
+--
+-- Only for a rank that names one species. Committing a genus you are 40% sure
+-- of is a normal, useful record -- it is what an expert does when the photo will
+-- not support more -- but committing a *species* you are 40% sure of quietly
+-- puts a wrong name into a public dataset that other people build on.
+--
+-- Silent when there is no score at all. That means a fallback rank or a
+-- hand-typed name, and there is no evidence to call weak.
+function PanelCore.confidenceWarning(row)
+  if not row then return nil end
+  if not PanelCore.SPECIES_RANKS[row.rank] then return nil end
+
+  local score = tonumber(row.combined_score)
+  if not score or score >= PanelCore.CONFIDENT_SCORE then return nil end
+
+  local name = row.name or row.common_name or "that species"
+
+  return string.format(
+    "iNaturalist's model is only %.0f%% confident that this is %s.\n\n" ..
+    "A wrong species-level identification is harder to undo than a vague one, " ..
+    "because other people build on it. If you are not sure, Get Suggestions " ..
+    "again and pick the genus or family instead -- a coarser record that is " ..
+    "right is worth more than a precise one that is wrong.",
+    score, name)
 end
 
 --- Turn suggestion rows into items for a list control.
@@ -242,31 +347,59 @@ function PanelCore.getSuggestions(api, photo)
     return nil, "Select a photo first."
   end
 
+  local payload, err
+
   local obsId = UploadCore.pluginField(photo, "inat_observation_id")
   if obsId then
-    local payload, err = api:scoreObservation(tonumber(obsId))
-    if not payload then return nil, err end
-    return InatAPI.summariseSuggestions(payload), nil
+    payload, err = api:scoreObservation(tonumber(obsId))
+  else
+    local path, renderErr, folder = RenderPhoto.renderForSuggestions(photo)
+    if not path then
+      return nil, renderErr
+    end
+
+    -- Location and date are not decoration here. Sent as multipart fields they
+    -- collapse the candidate list dramatically, because a species from the wrong
+    -- hemisphere stops being plausible. Sent as query parameters iNaturalist
+    -- returns 200 and ignores them -- see InatAPI:scoreImage.
+    local latitude, longitude = UploadCore.locationOf(photo)
+
+    payload, err = api:scoreImage(path, latitude, longitude,
+      UploadCore.observedOnFor(photo))
+
+    RenderPhoto.cleanUp(folder)
   end
-
-  local path, renderErr, folder = RenderPhoto.renderForSuggestions(photo)
-  if not path then
-    return nil, renderErr
-  end
-
-  -- Location and date are not decoration here. Sent as multipart fields they
-  -- collapse the candidate list dramatically, because a species from the wrong
-  -- hemisphere stops being plausible. Sent as query parameters iNaturalist
-  -- returns 200 and ignores them -- see InatAPI:scoreImage.
-  local latitude, longitude = UploadCore.locationOf(photo)
-
-  local payload, err = api:scoreImage(path, latitude, longitude,
-    UploadCore.observedOnFor(photo))
-
-  RenderPhoto.cleanUp(folder)
 
   if not payload then return nil, err end
-  return InatAPI.summariseSuggestions(payload), nil
+
+  local rows, commonAncestor = InatAPI.summariseSuggestions(payload)
+  return PanelCore.withFallbacks(api, rows, commonAncestor), nil
+end
+
+--- Put the coarser options at the top of the list, when there should be any.
+--
+-- MUST be called from inside a task: it may fetch the ancestor's lineage.
+--
+-- At the top rather than the bottom because that is where the answer the user
+-- should probably pick belongs. A safer choice below eight species is one
+-- nobody scrolls to.
+function PanelCore.withFallbacks(api, rows, commonAncestor)
+  rows = rows or {}
+
+  local topScore = rows[1] and tonumber(rows[1].combined_score)
+  if not commonAncestor then return rows end
+  if topScore and topScore >= PanelCore.CONFIDENT_SCORE then return rows end
+
+  -- Only now is the extra request worth making. A confident list never pays for
+  -- a lineage it will not show.
+  local fallbacks = PanelCore.fallbackRows(
+    SyncCore.withAncestors(api, commonAncestor), topScore)
+
+  local combined = {}
+  for _, row in ipairs(fallbacks) do combined[#combined + 1] = row end
+  for _, row in ipairs(rows) do combined[#combined + 1] = row end
+
+  return combined
 end
 
 --------------------------------------------------------------------------------
@@ -497,8 +630,64 @@ function PanelCore.updateAccuracy(catalog, api, photos, accuracy)
 end
 
 --------------------------------------------------------------------------------
--- Keeping the catalog in step
+-- Applying a taxon without telling iNaturalist
 --------------------------------------------------------------------------------
+
+--- The public page for a taxon.
+--
+-- Deciding between two similar-looking suggestions usually means going and
+-- looking at both, and the plugin cannot show a photo grid in a floating window.
+function PanelCore.taxonUrl(taxonId)
+  if not taxonId or taxonId == "" then return nil end
+  local id = tonumber(taxonId)
+  if not id then return nil end
+
+  return "https://www.inaturalist.org/taxa/" .. string.format("%d", id)
+end
+
+--- Write a chosen suggestion's taxonomy into the catalog and stop there.
+--
+-- MUST be called from inside a task: it fetches the taxon's ancestors.
+--
+-- The point of this is the photo you are not going to upload. Plenty of frames
+-- are worth filing under the right name and not worth publishing -- a duplicate,
+-- a bad exposure of something already recorded, somebody's cat -- and before
+-- this the only way to get iNaturalist's keyword hierarchy onto one was to
+-- create an observation and then think better of it.
+--
+-- Nothing here touches iNaturalist, so no observation link is made or implied.
+--
+-- @return true, or false plus a message
+function PanelCore.applyGuessLocally(catalog, api, photos, taxonId)
+  if not photos or #photos == 0 then
+    return false, "Select a photo first."
+  end
+  if not taxonId then
+    return false, "Pick a suggestion first, then apply it."
+  end
+
+  local taxon, err = api:getTaxon(tonumber(taxonId))
+  if not taxon then
+    return false, err or "Could not fetch that taxon."
+  end
+
+  catalog:withWriteAccessDo("iNat apply taxon", function()
+    for _, photo in ipairs(photos) do
+      SyncCore.applyTaxon(catalog, photo, taxon)
+
+      -- The guess is what this actually is: a name the user chose, not one
+      -- anybody confirmed. Recording it keeps the panel honest about where the
+      -- keywords came from, and gives a later upload the right species_guess.
+      photo:setPropertyForPlugin(_PLUGIN, "inat_species_guess", taxon.name or "")
+    end
+  end)
+
+  logger:info("Applied taxon " .. tostring(taxon.name) .. " to " ..
+              tostring(#photos) .. " photo(s) locally")
+  return true, nil
+end
+
+
 
 --- Re-read the observation and write its taxonomy back onto the photos.
 --

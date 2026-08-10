@@ -634,6 +634,18 @@ function InatAPI:scoreObservation(observationId)
 end
 
 --- Flatten a vision response into rows suitable for a picker UI.
+--- Reduce a vision payload to the rows the picker shows, plus the fallback.
+--
+-- @return rows, commonAncestor
+--
+-- `common_ancestor` is the most specific taxon the model is confident about
+-- *across all candidates*, which is a different and better-founded claim than
+-- the lineage of the top result: when the candidates disagree at species level
+-- but agree at genus, this is that genus. It is what lets the picker offer a
+-- coarser rank honestly, so it is returned rather than dropped.
+--
+-- Absent from a response whose candidates share nothing, and possibly from
+-- score_observation, so every caller must cope with nil.
 function InatAPI.summariseSuggestions(payload)
   local rows = {}
   for _, result in ipairs((payload and payload.results) or {}) do
@@ -648,7 +660,9 @@ function InatAPI.summariseSuggestions(payload)
       frequency_score = result.frequency_score,
     }
   end
-  return rows
+
+  local ancestor = payload and payload.common_ancestor
+  return rows, ancestor and ancestor.taxon or nil
 end
 
 --------------------------------------------------------------------------------

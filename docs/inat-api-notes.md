@@ -552,3 +552,36 @@ values are rejected. `public_positional_accuracy` is computed by the site: equal
 to the former when nothing is obscured, and inflated to cover the obscuring
 rectangle when something is. It is read-only, and it belongs to a position this
 plugin never stores, so it is never read.
+
+## `common_ancestor` is the honest way to offer a coarser rank
+
+Already recorded in the response shape above, and worth calling out separately
+because the plugin now depends on it: `common_ancestor` is the most specific
+taxon the vision model is confident about **across every candidate**. When the
+top five results disagree about the species but all sit in one genus, that genus
+is what comes back.
+
+This is a different and much better-founded claim than the top result's own
+lineage. Walking up from result #1 assumes result #1 is in the right family —
+which, at a 40% score, is exactly what is in doubt. Walking up from
+`common_ancestor` assumes only what every candidate already agrees on.
+
+So the rank ladder the plugin offers is built from `common_ancestor` and its
+`ancestors`, never from a single result, and it never descends below it.
+
+`/v1/taxa/{id}` supplies the ladder: the response carries an `ancestors` array
+from `kingdom` downwards, including intermediate ranks (`subphylum`, `suborder`,
+`superfamily`) that are real but useless as choices — the plugin keeps only
+`order`, `family` and `genus`.
+
+Two things this does **not** establish:
+
+- Whether `score_observation` includes `common_ancestor` at all. Only
+  `score_image` has been seen to. Every caller must handle its absence.
+- What score, if any, iNaturalist attaches to it. None is returned, which is why
+  the plugin shows no percentage against a fallback row rather than inventing
+  one.
+
+Both vision endpoints require authentication — an unauthenticated call returns
+`{"error":"Unauthorized","status":401}` — so neither can be probed without a
+token, and neither appears in `/v1/swagger.json`.

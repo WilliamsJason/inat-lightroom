@@ -877,3 +877,288 @@ def test_an_unlinked_photo_needs_no_accuracy_update(plugin, core):
 
     assert ok
     assert methods(calls) == []
+
+
+# ---------------------------------------------------------------------------
+# Coming in at a rank you can defend
+# ---------------------------------------------------------------------------
+
+
+def ancestor(plugin, rank="genus", name="Ischnura", ancestors=None):
+    """A common ancestor with its lineage, as /taxa/{id} returns it."""
+    return deep(plugin, {
+        "id": 52054,
+        "name": name,
+        "rank": rank,
+        "preferred_common_name": "Forktails",
+        "ancestors": ancestors if ancestors is not None else [
+            {"id": 1, "name": "Animalia", "rank": "kingdom"},
+            {"id": 47158, "name": "Insecta", "rank": "class"},
+            {"id": 47792, "name": "Odonata", "rank": "order"},
+            {"id": 47208, "name": "Zygoptera", "rank": "suborder"},
+            {"id": 47209, "name": "Coenagrionidae", "rank": "family"},
+        ],
+    })
+
+
+def ranks_of(rows):
+    return [rows[i]["rank"] for i in range(1, len(rows) + 1)]
+
+
+def test_a_confident_list_is_offered_no_fallback(plugin, core):
+    """Offering an escape hatch beside a 98% answer would make every
+    identification look like a guess."""
+    assert len(core["fallbackRows"](ancestor(plugin), 98)) == 0
+
+
+def test_an_unconfident_list_gets_coarser_options(plugin, core):
+    assert ranks_of(core["fallbackRows"](ancestor(plugin), 40)) == [
+        "genus", "family", "order"]
+
+
+def test_the_most_specific_safe_option_comes_first(plugin, core):
+    """It is the one most people want: the finest rank still defensible. Put
+    the order first and the useful answer is the one nobody reads."""
+    assert ranks_of(core["fallbackRows"](ancestor(plugin), 40))[0] == "genus"
+
+
+def test_the_ladder_never_goes_below_the_common_ancestor(plugin, core):
+    """The whole justification for these rows is that every candidate agrees at
+    or above the common ancestor. A genus taken from the top result's lineage
+    would assume that result is right -- exactly what a 40% score doubts."""
+    family = ancestor(plugin, rank="family", name="Coenagrionidae", ancestors=[
+        {"id": 1, "name": "Animalia", "rank": "kingdom"},
+        {"id": 47158, "name": "Insecta", "rank": "class"},
+        {"id": 47792, "name": "Odonata", "rank": "order"},
+    ])
+
+    rows = core["fallbackRows"](family, 40)
+
+    assert "genus" not in ranks_of(rows)
+    assert ranks_of(rows) == ["family", "order"]
+
+
+def test_intermediate_ranks_are_left_out(plugin, core):
+    """Suborder and superfamily are real ranks and useless as choices. A list
+    with all of them is a taxonomy lesson, not a decision."""
+    assert "suborder" not in ranks_of(core["fallbackRows"](ancestor(plugin), 40))
+
+
+def test_a_fallback_row_says_why_it_is_there(plugin, core):
+    rows = core["fallbackRows"](ancestor(plugin), 40)
+
+    assert rows[1]["note"] and "agreed" in rows[1]["note"]
+
+
+def test_a_fallback_row_carries_no_invented_score(plugin, core):
+    """These are not candidates the model ranked. A percentage beside one would
+    be a number nobody computed."""
+    rows = core["fallbackRows"](ancestor(plugin), 40)
+
+    assert rows[1]["combined_score"] is None
+    assert "%" not in core["describeSuggestion"](rows[1])
+
+
+def test_no_common_ancestor_means_no_fallback(plugin, core):
+    """The model had no confident shared ancestor, so there is nothing honest
+    to offer."""
+    assert len(core["fallbackRows"](None, 40)) == 0
+
+
+def test_an_empty_list_still_gets_the_fallback(plugin, core):
+    """No score at all is the least confident case there is, not the most."""
+    assert len(core["fallbackRows"](ancestor(plugin), None)) == 3
+
+
+def test_the_fallbacks_go_above_the_species(plugin, core):
+    api, _ = fake_api(plugin, taxon=ancestor(plugin))
+    rows = deep(plugin, [{"taxon_id": 1, "name": "Ischnura erratica",
+                          "rank": "species", "combined_score": 40}])
+
+    combined = core["withFallbacks"](api, rows, ancestor(plugin))
+
+    assert ranks_of(combined) == ["genus", "family", "order", "species"]
+
+
+def test_a_confident_list_is_passed_straight_through(plugin, core):
+    api, calls = fake_api(plugin, taxon=ancestor(plugin))
+    rows = deep(plugin, [{"taxon_id": 1, "name": "Ischnura erratica",
+                          "rank": "species", "combined_score": 98}])
+
+    combined = core["withFallbacks"](api, rows, ancestor(plugin))
+
+    assert ranks_of(combined) == ["species"]
+    assert "getTaxon" not in methods(calls), "no lineage is worth fetching here"
+
+
+# ---------------------------------------------------------------------------
+# Arguing before a weak species claim
+# ---------------------------------------------------------------------------
+
+
+def test_a_weak_species_claim_is_argued_with(core):
+    warning = core["confidenceWarning"](
+        {"rank": "species", "combined_score": 40, "name": "Ischnura erratica"})
+
+    assert warning and "40%" in warning
+    assert "Ischnura erratica" in warning
+
+
+def test_a_confident_species_claim_is_not(core):
+    assert core["confidenceWarning"](
+        {"rank": "species", "combined_score": 98, "name": "X"}) is None
+
+
+def test_a_weak_genus_claim_is_not_argued_with(core):
+    """Coming in at genus when the photo will not support more is what an
+    expert does. Warning about it would punish the careful answer."""
+    assert core["confidenceWarning"](
+        {"rank": "genus", "combined_score": 40, "name": "Ischnura"}) is None
+
+
+def test_a_subspecies_counts_as_a_species_claim(core):
+    assert core["confidenceWarning"](
+        {"rank": "subspecies", "combined_score": 40, "name": "X"}) is not None
+
+
+def test_a_row_with_no_score_is_not_argued_with(plugin, core):
+    """A fallback rank or a hand-typed name. There is no evidence to call weak,
+    and a warning here would fire on every manual identification."""
+    row = deep(plugin, {"rank": "species", "name": "X"})
+
+    assert core["confidenceWarning"](row) is None
+
+
+def test_the_warning_says_what_to_do_instead(core):
+    """A warning that only says "are you sure?" gets clicked through. This one
+    has to name the alternative, because the alternative is the whole point."""
+    warning = core["confidenceWarning"](
+        {"rank": "species", "combined_score": 40, "name": "X"})
+
+    assert "genus" in warning
+
+
+# ---------------------------------------------------------------------------
+# Filing a name without publishing it
+# ---------------------------------------------------------------------------
+
+
+def species_taxon(plugin):
+    return deep(plugin, {
+        "id": 103486,
+        "name": "Ischnura erratica",
+        "rank": "species",
+        "preferred_common_name": "Swift Forktail",
+        "ancestors": [
+            {"id": 1, "name": "Animalia", "rank": "kingdom"},
+            {"id": 47158, "name": "Insecta", "rank": "class"},
+            {"id": 52054, "name": "Ischnura", "rank": "genus"},
+        ],
+    })
+
+
+def test_a_taxon_url_is_built_from_the_id(core):
+    assert core["taxonUrl"](103486) == "https://www.inaturalist.org/taxa/103486"
+    assert core["taxonUrl"]("103486") == "https://www.inaturalist.org/taxa/103486"
+
+
+def test_a_taxon_url_is_not_invented_without_an_id(core):
+    """A URL built from nil opens the taxa index, which looks like the button
+    worked and answers a question nobody asked."""
+    assert core["taxonUrl"](None) is None
+    assert core["taxonUrl"]("") is None
+    assert core["taxonUrl"]("not-a-number") is None
+
+
+def test_a_taxon_id_is_not_written_in_scientific_notation(core):
+    """tostring on a Lua number gives 1.03486e+08 past a certain size, which is
+    a URL that 404s."""
+    assert "e+" not in core["taxonUrl"](103486)
+
+
+def test_applying_locally_writes_the_keyword_hierarchy(plugin, core):
+    photo = plugin.new_photo()
+    api, _ = fake_api(plugin, taxon=species_taxon(plugin))
+
+    ok, err = core["applyGuessLocally"](plugin.catalog, api,
+                                        plugin.runtime.table_from({1: photo}),
+                                        103486)
+
+    assert ok and err is None
+    names = [k["name"] for k in plugin.keywords]
+    assert names == ["iNaturalist", "Animalia", "Insecta", "Ischnura",
+                     "Ischnura erratica"]
+
+
+def test_applying_locally_fills_in_the_taxon_fields(plugin, core):
+    photo = plugin.new_photo()
+    api, _ = fake_api(plugin, taxon=species_taxon(plugin))
+
+    core["applyGuessLocally"](plugin.catalog, api,
+                              plugin.runtime.table_from({1: photo}), 103486)
+
+    assert photo["_props"]["inat_taxon_name"] == "Ischnura erratica"
+    assert photo["_props"]["inat_common_name"] == "Swift Forktail"
+    assert photo["_props"]["inat_species_guess"] == "Ischnura erratica"
+
+
+def test_applying_locally_creates_no_observation_link(plugin, core):
+    """The photo is not on iNaturalist. An observation id here would make the
+    panel offer Sync and View for something that does not exist."""
+    photo = plugin.new_photo()
+    api, calls = fake_api(plugin, taxon=species_taxon(plugin))
+
+    core["applyGuessLocally"](plugin.catalog, api,
+                              plugin.runtime.table_from({1: photo}), 103486)
+
+    assert photo["_props"]["inat_observation_id"] is None
+    assert methods(calls) == ["getTaxon"], "nothing else may be called"
+
+
+def test_applying_locally_covers_the_whole_selection(plugin, core):
+    photos = [plugin.new_photo(), plugin.new_photo()]
+    api, _ = fake_api(plugin, taxon=species_taxon(plugin))
+
+    core["applyGuessLocally"](plugin.catalog, api,
+                              plugin.runtime.table_from({1: photos[0], 2: photos[1]}),
+                              103486)
+
+    assert all(p["_props"]["inat_taxon_name"] == "Ischnura erratica"
+               for p in photos)
+
+
+def test_applying_locally_needs_a_chosen_suggestion(plugin, core):
+    """Without one there is no taxon to apply, and the alternative is writing
+    the free-text guess as though it were a taxon."""
+    api, calls = fake_api(plugin, taxon=species_taxon(plugin))
+
+    ok, err = core["applyGuessLocally"](plugin.catalog, api,
+                                        plugin.runtime.table_from({1: plugin.new_photo()}),
+                                        None)
+
+    assert not ok and "suggestion" in err
+    assert methods(calls) == []
+
+
+def test_applying_locally_needs_a_photo(plugin, core):
+    api, _ = fake_api(plugin, taxon=species_taxon(plugin))
+
+    ok, err = core["applyGuessLocally"](plugin.catalog, api,
+                                        plugin.runtime.table_from({}), 103486)
+
+    assert not ok and err
+
+
+def test_a_failed_taxon_fetch_writes_nothing(plugin, core):
+    """Half-applying a taxonomy is worse than not applying it: the keywords
+    would disagree with the fields."""
+    photo = plugin.new_photo()
+    api, _ = fake_api(plugin, taxon=None)
+
+    ok, err = core["applyGuessLocally"](plugin.catalog, api,
+                                        plugin.runtime.table_from({1: photo}),
+                                        103486)
+
+    assert not ok and err
+    assert photo["_props"]["inat_taxon_name"] is None
+    assert list(plugin.keywords) == []

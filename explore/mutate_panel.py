@@ -19,11 +19,12 @@ TARGETS = {
     "TagsetInat": PLUGIN / "TagsetInat.lua",
     "UploadCore": PLUGIN / "UploadCore.lua",
     "SyncCore": PLUGIN / "SyncCore.lua",
+    "InatAPI": PLUGIN / "InatAPI.lua",
 }
 
 TESTS = ["test_panel_core_lua.py", "test_observation_panel_lua.py",
          "test_plugin_surface_lua.py", "test_upload_core_lua.py",
-         "test_sync_observation_lua.py"]
+         "test_sync_observation_lua.py", "test_inat_api_lua.py"]
 
 MUTATIONS = [
     # --- the identification trap, the whole reason for this rewrite ----------
@@ -74,19 +75,19 @@ MUTATIONS = [
     (
         "PanelCore",
         "location and date are left off the vision request",
-        "  local payload, err = api:scoreImage(path, latitude, longitude,\n    UploadCore.observedOnFor(photo))",
-        "  local payload, err = api:scoreImage(path)",
+        "    payload, err = api:scoreImage(path, latitude, longitude,\n      UploadCore.observedOnFor(photo))",
+        "    payload, err = api:scoreImage(path)",
     ),
     (
         "PanelCore",
         "the temporary render is never deleted",
-        "  RenderPhoto.cleanUp(folder)\n\n  if not payload then return nil, err end",
-        "  if not payload then return nil, err end",
+        "    RenderPhoto.cleanUp(folder)\n  end",
+        "  end",
     ),
     (
         "PanelCore",
         "a failed render is scored anyway",
-        "  if not path then\n    return nil, renderErr\n  end",
+        "    if not path then\n      return nil, renderErr\n    end",
         "",
     ),
     (
@@ -206,8 +207,8 @@ MUTATIONS = [
     (
         "ObservationPanel",
         "a suggestion that is not there leaves the previous taxon armed",
-        "  if not row then\n    props.suggestionTaxonId = nil\n    return nil\n  end",
-        "  if not row then\n    return nil\n  end",
+        "  if not row then\n    props.suggestionTaxonId = nil",
+        "  if not row then\n    props.suggestionTaxonId = row",
     ),
     (
         "ObservationPanel",
@@ -456,6 +457,173 @@ MUTATIONS = [
         "the derived obscured accuracy is stored as the real one",
         "local accuracy = tonumber(obs.positional_accuracy)",
         "local accuracy = tonumber(obs.public_positional_accuracy or obs.positional_accuracy)",
+    ),
+    # --- coming in at a rank you can defend -----------------------------------
+    (
+        "InatAPI",
+        "the common ancestor is dropped, leaving nothing to fall back to",
+        "  local ancestor = payload and payload.common_ancestor\n  return rows, ancestor and ancestor.taxon or nil",
+        "  return rows, nil",
+    ),
+    (
+        "InatAPI",
+        "the common ancestor envelope is returned instead of the taxon inside it",
+        "return rows, ancestor and ancestor.taxon or nil",
+        "return rows, ancestor",
+    ),
+    (
+        "PanelCore",
+        "a fallback is offered even when the top answer is confident",
+        "  if tonumber(topScore) and tonumber(topScore) >= PanelCore.CONFIDENT_SCORE then\n    return {}\n  end",
+        "",
+    ),
+    (
+        "PanelCore",
+        "the ladder is built coarsest-first, burying the useful option",
+        "  for i = #chain, 1, -1 do\n    local taxon = chain[i]",
+        "  for i = 1, #chain do\n    local taxon = chain[i]",
+    ),
+    (
+        "PanelCore",
+        "every intermediate rank is offered, turning a choice into a lecture",
+        'PanelCore.FALLBACK_RANKS = { "order", "family", "genus" }',
+        'PanelCore.FALLBACK_RANKS = { "order", "family", "genus", "suborder", "superfamily", "tribe" }',
+    ),
+    (
+        "PanelCore",
+        "a fallback row is given an invented confidence score",
+        "        note        = taxon.rank",
+        "        combined_score = 100, note = taxon.rank",
+    ),
+    (
+        "PanelCore",
+        "the fallbacks are appended below the species instead of above",
+        "  local combined = {}\n  for _, row in ipairs(fallbacks) do combined[#combined + 1] = row end\n  for _, row in ipairs(rows) do combined[#combined + 1] = row end",
+        "  local combined = {}\n  for _, row in ipairs(rows) do combined[#combined + 1] = row end\n  for _, row in ipairs(fallbacks) do combined[#combined + 1] = row end",
+    ),
+    (
+        "PanelCore",
+        "the lineage is fetched even for a confident list",
+        "  if topScore and topScore >= PanelCore.CONFIDENT_SCORE then return rows end",
+        "",
+    ),
+    (
+        "PanelCore",
+        "the fallback rows never reach the list",
+        "    SyncCore.withAncestors(api, commonAncestor), topScore)",
+        "    nil, topScore)",
+    ),
+
+    # --- arguing before a weak species claim ----------------------------------
+    (
+        "PanelCore",
+        "a weak species claim is waved through",
+        "  if not score or score >= PanelCore.CONFIDENT_SCORE then return nil end",
+        "  if true then return nil end",
+    ),
+    (
+        "PanelCore",
+        "a careful genus choice is interrogated like a species claim",
+        "  if not PanelCore.SPECIES_RANKS[row.rank] then return nil end",
+        "",
+    ),
+    (
+        "PanelCore",
+        "a subspecies escapes the warning a species gets",
+        "PanelCore.SPECIES_RANKS = { species = true, subspecies = true, variety = true }",
+        "PanelCore.SPECIES_RANKS = { species = true }",
+    ),
+    (
+        "PanelCore",
+        "the warning never names the alternative, so it is just a nag",
+        '"again and pick the genus or family instead -- a coarser record that is " ..',
+        '"again. " ..',
+    ),
+    (
+        "ObservationPanel",
+        "the confirmation is asked and then ignored",
+        '    local answer = LrDialogs.confirm("Identify as a species?", doubt,\n      "Identify Anyway", "Cancel")\n    if answer ~= "ok" then',
+        '    local answer = LrDialogs.confirm("Identify as a species?", doubt,\n      "Identify Anyway", "Cancel")\n    if false then',
+    ),
+    (
+        "ObservationPanel",
+        "the weak-species question is asked only on the upload path",
+        "  local doubt = PanelCore.confidenceWarning({",
+        "  local doubt = UploadCore.pluginField(photos[1], \"inat_observation_id\") and nil or PanelCore.confidenceWarning({",
+    ),
+
+    # --- filing a name without publishing it ----------------------------------
+    (
+        "PanelCore",
+        "a local apply proceeds without a chosen suggestion",
+        '  if not taxonId then\n    return false, "Pick a suggestion first, then apply it."\n  end',
+        "",
+    ),
+    (
+        "PanelCore",
+        "a failed taxon fetch still writes half a taxonomy",
+        '  if not taxon then\n    return false, err or "Could not fetch that taxon."\n  end',
+        "",
+    ),
+    (
+        "PanelCore",
+        "the local apply lands only on the first photo of the selection",
+        "    for _, photo in ipairs(photos) do\n      SyncCore.applyTaxon(catalog, photo, taxon)",
+        "    for _, photo in ipairs({ photos[1] }) do\n      SyncCore.applyTaxon(catalog, photo, taxon)",
+    ),
+    (
+        "PanelCore",
+        "the local apply writes no species guess, so an upload later sends none",
+        '      photo:setPropertyForPlugin(_PLUGIN, "inat_species_guess", taxon.name or "")',
+        "",
+    ),
+    (
+        "PanelCore",
+        "a taxon URL is built from an id that is not a number",
+        "  local id = tonumber(taxonId)\n  if not id then return nil end",
+        "  local id = taxonId",
+    ),
+    (
+        "PanelCore",
+        "a large taxon id is formatted into scientific notation",
+        'return "https://www.inaturalist.org/taxa/" .. string.format("%d", id)',
+        'return "https://www.inaturalist.org/taxa/" .. tostring(id)',
+    ),
+    (
+        "SyncCore",
+        "applyTaxon writes the fields but never the keyword",
+        "  local leafKw = ensureKeywordPath(catalog, buildKeywordPath(taxon))\n  if leafKw then\n    photo:addKeyword(leafKw)\n  end",
+        "",
+    ),
+    (
+        "SyncCore",
+        "a taxon that arrived without ancestors is used as-is",
+        "  local full, err = api:getTaxon(taxon.id)\n  if full then return full end",
+        "",
+    ),
+    (
+        "ObservationPanel",
+        "the local-apply button is dropped from the window",
+        '        title   = "Sync guess to Metadata tags",',
+        '        title   = "",',
+    ),
+    (
+        "ObservationPanel",
+        "the two new buttons are enabled without a chosen suggestion",
+        '        enabled = LrView.bind("hasSuggestion"),\n        action  = actions.applyLocally,',
+        '        enabled = LrView.bind("hasPhoto"),\n        action  = actions.applyLocally,',
+    ),
+    (
+        "ObservationPanel",
+        "a deselected suggestion leaves the buttons live against a stale taxon",
+        "    props.hasSuggestion     = false\n    return nil",
+        "    return nil",
+    ),
+    (
+        "ObservationPanel",
+        "the chosen rank and score are never recorded, so nothing can be warned about",
+        "  props.suggestionRank    = row.rank\n  props.suggestionScore   = row.combined_score",
+        "",
     ),
 ]
 
