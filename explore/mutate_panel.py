@@ -243,6 +243,25 @@ MUTATIONS = [
         "      props.suggestions       = props.suggestions or {}\n      props.suggestionItems   = props.suggestionItems or {}",
     ),
 
+    (
+        "ObservationPanel",
+        "a list selection is used as a row number, so clicking a suggestion does nothing",
+        "  local index = PanelCore.selectedIndex(selection)",
+        "  local index = selection",
+    ),
+    (
+        "PanelCore",
+        "deselecting everything falls back to the first row",
+        "  return tonumber(value.value)",
+        "  return tonumber(value.value) or 1",
+    ),
+    (
+        "PanelCore",
+        "only the bare-number selection shape is handled",
+        '  if type(value) ~= "table" then return nil end',
+        '  if type(value) ~= "table" then return nil end\n  do return nil end',
+    ),
+
     # --- the metadata panel, which is now display only -----------------------
     (
         "CustomMetadata",

@@ -344,6 +344,57 @@ def test_choosing_a_suggestion_that_is_not_there_clears_the_taxon(plugin, panel)
     assert props["suggestionTaxonId"] is None
 
 
+def test_a_selection_reported_as_a_list_still_fills_the_species_guess(plugin, panel):
+    """What f:simple_list actually hands back. Its `value` is bound to the
+    table_view's `selected_indexes` through a transform, so a single click
+    arrives as a one-entry list, not a number. Taking that literally as an index
+    found no row and the click silently did nothing -- which is how this
+    presented in the host: a list that highlighted rows and changed nothing."""
+    props = plugin.runtime.table_from({})
+    props["suggestions"] = plugin.runtime.table_from({
+        1: plugin.runtime.table_from({"taxon_id": 1, "name": "Bombus"}),
+        2: plugin.runtime.table_from({"taxon_id": 47219, "name": "Apis mellifera"}),
+    })
+
+    plugin.call(panel.chooseSuggestion, props,
+                plugin.runtime.table_from({1: 2}))
+
+    assert props["speciesGuess"] == "Apis mellifera"
+    assert props["suggestionTaxonId"] == 47219
+
+
+def test_a_selection_reported_as_a_list_of_items_still_works(plugin, panel):
+    """The other shape the transform could plausibly produce: the item tables
+    themselves rather than their values. Accepted because the difference is
+    invisible until a user clicks a row and nothing happens."""
+    props = plugin.runtime.table_from({})
+    props["suggestions"] = plugin.runtime.table_from({
+        1: plugin.runtime.table_from({"taxon_id": 1, "name": "Bombus"}),
+        2: plugin.runtime.table_from({"taxon_id": 47219, "name": "Apis mellifera"}),
+    })
+
+    plugin.call(panel.chooseSuggestion, props,
+                plugin.runtime.table_from(
+                    {1: plugin.runtime.table_from({"title": "Apis mellifera",
+                                                   "value": 2})}))
+
+    assert props["suggestionTaxonId"] == 47219
+
+
+def test_an_empty_selection_list_clears_the_taxon(plugin, panel):
+    """Deselecting reports an empty list rather than nil, and an empty list must
+    not leave the previous taxon armed."""
+    props = plugin.runtime.table_from({})
+    props["suggestionTaxonId"] = 47219
+    props["suggestions"] = plugin.runtime.table_from({
+        1: plugin.runtime.table_from({"taxon_id": 47219, "name": "Apis mellifera"}),
+    })
+
+    plugin.call(panel.chooseSuggestion, props, plugin.runtime.table_from({}))
+
+    assert props["suggestionTaxonId"] is None
+
+
 def test_unlinking_asks_first(plugin, panel):
     """Relinking means finding the observation ID by hand, so it is not a thing
     to do on a stray click next to three harmless buttons."""

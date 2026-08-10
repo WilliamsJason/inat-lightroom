@@ -342,12 +342,28 @@ usual `{ title = ..., value = ... }` item shape is the one to try.
 
 **"The binary accepts these keys" is not "this displays."** This plugin uses it
 for the panel's suggestions list, isolated in `ObservationPanel.suggestionsView`
-so that falling back to `f:popup_menu` is a one-line change. Until it has been
-seen on screen, treat this entry as inference.
+so that falling back to `f:popup_menu` is a one-line change. **Confirmed in the
+host:** it renders, and rows highlight on click.
+
+##### Its `value` is a list, even for a single selection
+
+`value` is not the selected item. `simple_list` binds it to the inner
+`table_view`'s `selected_indexes` through a `transform`, and the reverse path
+(`propagationFromDocumentView`) runs `ipairs` over that — so what reaches the
+property is a **table**, with one entry for a single click and zero entries when
+nothing is selected.
+
+Taking it for a row number is silent: `rows[{...}]` is `nil`, so the list
+highlights the row and nothing else happens. There is no error and nothing in
+the log. This cost a host round trip to notice, because a list that visibly
+responds to clicks looks like a list that is wired up.
+
+`PanelCore.selectedIndex` normalises it and accepts every plausible shape rather
+than only the observed one, on the grounds that the failure mode is invisible.
 
 Same caution for a bound `title` on `f:push_button`: the panel's Upload/Update
 button relies on it, and the failure mode would be a blank button rather than an
-error.
+error. **Confirmed in the host:** it works.
 
 ### The floating window, in detail
 

@@ -79,6 +79,39 @@ function PanelCore.suggestionItems(rows)
   return items
 end
 
+--- Work out which suggestion row a list control is reporting as selected.
+--
+-- f:simple_list does not hand back the row number. Its `value` is bound to the
+-- underlying table_view's `selected_indexes` through a transform, and the
+-- reverse path runs ipairs over that -- so what arrives is a *list* of selected
+-- values, even when only one row can be picked. Observed in the host: choosing
+-- a row set the property to a table, chooseSuggestion was handed that table as
+-- an index, rows[{...}] was nil, and the click did nothing at all.
+--
+-- Every plausible shape is accepted rather than the one that turned out to be
+-- real, because the failure is silent -- a control that quietly does nothing
+-- looks like a control nobody wired up. The shapes: a bare row number, a list
+-- of them, or a list of the item tables themselves.
+function PanelCore.selectedIndex(value)
+  if type(value) == "number" then return value end
+  if type(value) == "string" then return tonumber(value) end
+
+  if type(value) ~= "table" then return nil end
+
+  -- Recorded so the real shape stops being an inference. Remove once the log
+  -- has said the same thing a few times.
+  logger:tracef("suggestion selection arrived as a table: [1] is %s",
+                type(value[1]))
+
+  local first = value[1]
+  if type(first) == "number" then return first end
+  if type(first) == "string" then return tonumber(first) end
+  if type(first) == "table"  then return tonumber(first.value) end
+
+  -- A single item table rather than a list of them.
+  return tonumber(value.value)
+end
+
 --------------------------------------------------------------------------------
 -- Asking for suggestions
 --------------------------------------------------------------------------------

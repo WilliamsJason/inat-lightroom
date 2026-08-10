@@ -194,13 +194,15 @@ end
 
 --- The control that shows the suggestions.
 --
--- Isolated because f:simple_list is the one view in this window that has not
--- been rendered in the host. It is real -- ui.dll's view-constructor list has
--- it beside popup_menu, and its implementation there wraps a table_view in a
--- scroll_view, reading items / value / height / enabled -- but "the binary
--- accepts these keys" is not the same as "this displays". If it turns out not
--- to, swapping the constructor here for f:popup_menu is the whole fix: the
--- items are the SDK's usual { title = ..., value = ... } shape either way.
+-- Isolated because f:simple_list is undocumented. It is real -- ui.dll's
+-- view-constructor list has it beside popup_menu, and its implementation there
+-- wraps a table_view in a scroll_view -- and it renders correctly in the host,
+-- but if it ever turns out not to, swapping the constructor here for
+-- f:popup_menu is the whole fix: the items are the SDK's usual
+-- { title = ..., value = ... } shape either way.
+--
+-- Its `value` is bound to the table_view's selected_indexes, so what comes back
+-- is a list rather than a row number. PanelCore.selectedIndex deals with that.
 function ObservationPanel.suggestionsView(f)
   return f:simple_list {
     items           = LrView.bind("suggestionItems"),
@@ -379,9 +381,10 @@ end
 -- The taxon id is remembered separately, and it is the more important half --
 -- it is what turns the next button press into a real identification rather than
 -- free text iNaturalist will ignore.
-function ObservationPanel.chooseSuggestion(props, index)
-  local rows = props.suggestions or {}
-  local row  = index and rows[index]
+function ObservationPanel.chooseSuggestion(props, selection)
+  local rows  = props.suggestions or {}
+  local index = PanelCore.selectedIndex(selection)
+  local row   = index and rows[index]
 
   if not row then
     props.suggestionTaxonId = nil

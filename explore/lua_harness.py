@@ -44,12 +44,27 @@ stubs.LrLogger = function(_name)
       logLines[#logLines + 1] = level .. ": " .. tostring(message)
     end
   end
+  -- The real LrLogger has a printf-style variant of every level. Leaving them
+  -- out did not make tests fail loudly -- it made any line that used one raise
+  -- "attempt to call method 'tracef' (a nil value)", so those paths were simply
+  -- never reached.
+  local function recordf(level)
+    return function(_self, format, ...)
+      local ok, message = pcall(string.format, tostring(format), ...)
+      logLines[#logLines + 1] = level .. ": " .. (ok and message or tostring(format))
+    end
+  end
   logger.enable = function() end
-  logger.trace = record("trace")
-  logger.debug = record("debug")
-  logger.info  = record("info")
-  logger.warn  = record("warn")
-  logger.error = record("error")
+  logger.trace  = record("trace")
+  logger.debug  = record("debug")
+  logger.info   = record("info")
+  logger.warn   = record("warn")
+  logger.error  = record("error")
+  logger.tracef = recordf("trace")
+  logger.debugf = recordf("debug")
+  logger.infof  = recordf("info")
+  logger.warnf  = recordf("warn")
+  logger.errorf = recordf("error")
   return logger
 end
 
