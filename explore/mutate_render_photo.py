@@ -20,8 +20,83 @@ MUTATIONS = [
     ),
     (
         "writes the render into the user's own folders",
-        'LR_export_destinationType  = "tempFolder"',
-        'LR_export_destinationType  = "specificFolder"',
+        'LR_export_destinationPathPrefix = options.folder,',
+        'LR_export_destinationPathPrefix = "/home/tester/Pictures",',
+    ),
+    (
+        "goes back to the tempFolder type the host rejected",
+        'LR_export_destinationType       = "specificFolder",',
+        'LR_export_destinationType       = "tempFolder",',
+    ),
+    (
+        "renders into a subfolder the caller does not know about",
+        "LR_export_useSubfolder          = false",
+        "LR_export_useSubfolder          = true",
+    ),
+    (
+        "re-imports every uploaded photo back into the catalog",
+        "LR_reimportExportedPhoto        = false",
+        "LR_reimportExportedPhoto        = true",
+    ),
+    (
+        "opens a file browser on the temp folder mid-upload",
+        'LR_export_postProcessing        = "doNothing"',
+        'LR_export_postProcessing        = "revealInFinder"',
+    ),
+    (
+        "stops the render with a dialog when two photos share a name",
+        'LR_collisionHandling       = "rename"',
+        'LR_collisionHandling       = "ask"',
+    ),
+    (
+        "silently drops a photo when two share a name",
+        'LR_collisionHandling       = "rename"',
+        'LR_collisionHandling       = "overwrite"',
+    ),
+    (
+        "tries to render videos it cannot render",
+        "LR_includeVideoFiles       = false",
+        "LR_includeVideoFiles       = true",
+    ),
+    (
+        "never creates the folder it is about to render into",
+        "  LrFileUtils.createAllDirectories(path)\n  return path",
+        "  return path",
+    ),
+    (
+        "shares one temp folder between concurrent renders",
+        '  local name = "inat-lightroom-" .. tostring(os.time()) ..\n               "-" .. tostring(math.random(100000, 999999))',
+        '  local name = "inat-lightroom"',
+    ),
+    (
+        "leaves temp files somewhere the OS will never clean up",
+        'local root = LrPathUtils.getStandardFilePath("temp")',
+        'local root = LrPathUtils.getStandardFilePath("home")',
+    ),
+    (
+        "does not tell the caller which folder to clean up",
+        "  return rendered, failures, folder\nend",
+        "  return rendered, failures\nend",
+    ),
+    (
+        "ignores the folder the caller supplied",
+        "  local folder = options.folder or RenderPhoto.makeTempFolder()",
+        "  local folder = RenderPhoto.makeTempFolder()",
+    ),
+    (
+        "lets a locked file turn a finished upload into an error",
+        "  local ok, err = pcall(function()\n    LrFileUtils.delete(folder)\n  end)",
+        "  local ok, err = true, nil\n  LrFileUtils.delete(folder)",
+    ),
+    (
+        "tries to delete nothing when there was nothing to render",
+        "  if not folder then return false end",
+        "",
+    ),
+    (
+        "leaks the temp folder when a suggestion render fails",
+        "    RenderPhoto.cleanUp(folder)\n    -- failures can be empty",
+        "    -- failures can be empty",
     ),
     (
         "uploads the original format rather than JPEG",
@@ -50,7 +125,7 @@ MUTATIONS = [
     ),
     (
         "ignores the requested render size",
-        "LR_size_maxHeight          = options.maxPixels or RenderPhoto.MAX_PX,\n    LR_size_maxWidth           = options.maxPixels or RenderPhoto.MAX_PX,",
+        "LR_size_maxHeight          = maxPixels,\n    LR_size_maxWidth           = maxPixels,",
         "LR_size_maxHeight          = RenderPhoto.MAX_PX,\n    LR_size_maxWidth           = RenderPhoto.MAX_PX,",
     ),
     (
@@ -80,7 +155,7 @@ MUTATIONS = [
     ),
     (
         "builds an export session even when there is nothing to render",
-        "  if not photos or #photos == 0 then\n    return {}, {}\n  end",
+        "  if not photos or #photos == 0 then\n    return {}, {}, nil\n  end",
         "  photos = photos or {}",
     ),
     (
@@ -105,8 +180,8 @@ MUTATIONS = [
     ),
     (
         "renders a full-size image just to ask the computer vision a question",
-        "  local rendered, failures = RenderPhoto.render({ photo }, {\n    maxPixels = RenderPhoto.SUGGEST_MAX_PX,\n  })",
-        "  local rendered, failures = RenderPhoto.render({ photo }, {})",
+        "  local rendered, failures, folder = RenderPhoto.render({ photo }, {\n    maxPixels = RenderPhoto.SUGGEST_MAX_PX,\n  })",
+        "  local rendered, failures, folder = RenderPhoto.render({ photo }, {})",
     ),
     (
         "shows the user the literal text nil when Lightroom gives no reason",

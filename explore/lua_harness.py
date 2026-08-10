@@ -154,9 +154,53 @@ stubs.LrTasks = {
   end,
 }
 
+local createdDirectories = {}
+local deletedPaths = {}
+local deleteFails = false
+
 stubs.LrPathUtils = {
   child = function(directory, name)
     return tostring(directory) .. "/" .. tostring(name)
+  end,
+
+  -- The real one returns nil for a name it does not know, which is exactly how
+  -- the tempFolder destination type failed: getStandardFilePath("tempFolder")
+  -- is nil, and the assert that follows blames a missing path prefix.
+  getStandardFilePath = function(name)
+    if name == "temp" then return "/tmp" end
+    if name == "home" then return "/home/tester" end
+    return nil
+  end,
+}
+
+-- The filesystem, only as far as the plugin touches it. Nothing is written:
+-- what matters to a test is which directories were asked for and which paths
+-- were deleted, so those are recorded instead.
+stubs.LrFileUtils = {
+  createAllDirectories = function(path)
+    createdDirectories[#createdDirectories + 1] = path
+    return true
+  end,
+
+  delete = function(path)
+    -- The real one has a path to work with or it does not. Recording nil would
+    -- be a silent no-op here (Lua tables do not store nil), which would let a
+    -- missing guard in the caller pass unnoticed.
+    if path == nil then
+      error("LrFileUtils.delete: path must not be nil", 0)
+    end
+    if deleteFails then
+      error("could not delete " .. tostring(path), 0)
+    end
+    deletedPaths[#deletedPaths + 1] = path
+    return true
+  end,
+
+  exists = function(path)
+    for _, made in ipairs(createdDirectories) do
+      if made == path then return "directory" end
+    end
+    return false
   end,
 }
 
@@ -476,6 +520,9 @@ return {
   createdKeywords = createdKeywords,
   newPhoto = newPhoto,
   exportSessions = exportSessions,
+  createdDirectories = createdDirectories,
+  deletedPaths = deletedPaths,
+  setDeleteFails = function(fails) deleteFails = fails end,
   setRenderFailure = function(message)
     -- Lightroom does not promise waitForRender supplies a message, so failing
     -- and having something to say about it are separate.
@@ -706,6 +753,20 @@ class LuaPlugin:
     def export_sessions(self):
         """Every LrExportSession built, in order."""
         return list(self.env["exportSessions"].values())
+
+    @property
+    def created_directories(self):
+        """Every path passed to LrFileUtils.createAllDirectories."""
+        return list(self.env["createdDirectories"].values())
+
+    @property
+    def deleted_paths(self):
+        """Every path passed to LrFileUtils.delete."""
+        return list(self.env["deletedPaths"].values())
+
+    def set_delete_fails(self, fails: bool = True) -> None:
+        """Make LrFileUtils.delete raise, as a locked file would."""
+        self.env["setDeleteFails"](fails)
 
     def view_factory(self):
         """A view factory that records arguments instead of rendering.
