@@ -74,12 +74,13 @@ DAMSELFLY = taxon(
 
 
 def observation(obs_id=999, community=None, taxon_=None, grade="research",
-                uuid="0e1d2c3b-4a59-6879-8a9b-0c1d2e3f4a5b"):
+                uuid="0e1d2c3b-4a59-6879-8a9b-0c1d2e3f4a5b", **extra):
     obs = {"id": obs_id, "quality_grade": grade, "uuid": uuid}
     if community:
         obs["community_taxon"] = community
     if taxon_:
         obs["taxon"] = taxon_
+    obs.update(extra)
     return {"results": [obs]}
 
 
@@ -322,3 +323,124 @@ def test_sync_reads_but_never_writes_to_inaturalist():
     run_sync(plugin)
 
     assert {call["method"] for call in plugin.http_calls} == {"GET"}
+
+
+# ---------------------------------------------------------------------------
+# Bringing the location home
+# ---------------------------------------------------------------------------
+
+
+def coords(plugin, **fields):
+    """Run SyncCore.coordinatesFrom over an observation-shaped table."""
+    sync = plugin.require("SyncCore")
+    return sync["coordinatesFrom"](plugin.runtime.table_from(fields))
+
+
+def test_a_plain_observation_gives_up_its_coordinates():
+    plugin = LuaPlugin()
+    lat, lng, acc = coords(plugin, location="48.5817,-123.3715",
+                           positional_accuracy=36)
+
+    assert (round(lat, 4), round(lng, 4)) == (48.5817, -123.3715)
+    assert acc == 36
+
+
+def test_an_obscured_observation_is_refused():
+    """The single most dangerous response this plugin can receive. iNaturalist
+    randomises the public position of anything obscured -- a live example was
+    ~30 km out -- and still returns a location string that looks exactly like a
+    real one. Only the `obscured` flag says otherwise, so believing the
+    coordinates would write a plausible, wrong location into someone's catalog
+    without a word."""
+    plugin = LuaPlugin()
+    lat, lng, acc = coords(plugin, location="22.5854,114.0637", obscured=True,
+                           positional_accuracy=61,
+                           public_positional_accuracy=30278)
+
+    assert lat is None and lng is None and acc is None
+
+
+def test_the_owners_private_location_is_used_even_when_obscured():
+    """Authenticated as the observation's owner, iNaturalist tells the truth in
+    private_location. That is the one case where an obscured observation still
+    has a usable position."""
+    plugin = LuaPlugin()
+    lat, lng, _ = coords(plugin, location="22.5000,114.0000",
+                         private_location="22.5854,114.0637", obscured=True)
+
+    assert (round(lat, 4), round(lng, 4)) == (22.5854, 114.0637)
+
+
+def test_an_observation_with_no_location_gives_nothing():
+    plugin = LuaPlugin()
+    assert coords(plugin, positional_accuracy=10)[0] is None
+
+
+def test_a_malformed_location_is_not_half_believed():
+    """A partial parse would put the photo on the equator."""
+    plugin = LuaPlugin()
+    assert coords(plugin, location="48.5817")[0] is None
+
+
+def test_syncing_gives_an_unlocated_photo_its_location():
+    """The case this exists for: uploaded from a camera with no GPS, placed on
+    the map afterwards on the website. Without this the catalog never finds
+    out."""
+    plugin = make_plugin({
+        "/observations/999": observation(community=DAMSELFLY,
+                                         location="48.5817,-123.3715",
+                                         positional_accuracy=36),
+    })
+    photo = plugin.new_photo(inat_observation_id="999")
+    plugin.set_target_photos([photo])
+
+    run_sync(plugin)
+
+    gps = photo["_raw"]["gps"]
+    assert round(gps["latitude"], 4) == 48.5817
+    assert round(gps["longitude"], 4) == -123.3715
+    assert photo["_props"]["inat_positional_accuracy"] == "36"
+
+
+def test_syncing_never_overwrites_a_location_the_photo_already_has():
+    """iNaturalist's copy came from the photo in the first place. Where they
+    have genuinely diverged, silently moving a photo the user has already
+    placed is a correction nobody asked for and cannot see happen."""
+    plugin = make_plugin({
+        "/observations/999": observation(community=DAMSELFLY,
+                                         location="0.0,0.0"),
+    })
+    photo = plugin.new_photo(inat_observation_id="999",
+                             raw={"gps": {"latitude": 51.5, "longitude": -0.1}})
+    plugin.set_target_photos([photo])
+
+    run_sync(plugin)
+
+    assert photo["_raw"]["gps"]["latitude"] == 51.5
+    assert photo["_raw"]["gps"]["longitude"] == -0.1
+
+
+def test_syncing_an_obscured_observation_leaves_the_photo_unlocated():
+    plugin = make_plugin({
+        "/observations/999": observation(community=DAMSELFLY,
+                                         location="22.5854,114.0637",
+                                         obscured=True,
+                                         positional_accuracy=61),
+    })
+    photo = plugin.new_photo(inat_observation_id="999")
+    plugin.set_target_photos([photo])
+
+    run_sync(plugin)
+
+    assert photo["_raw"]["gps"] is None
+    assert not photo["_props"]["inat_positional_accuracy"]
+
+
+def test_an_observation_with_no_coordinates_writes_no_gps():
+    plugin = make_plugin({"/observations/999": observation(community=DAMSELFLY)})
+    photo = plugin.new_photo(inat_observation_id="999")
+    plugin.set_target_photos([photo])
+
+    run_sync(plugin)
+
+    assert photo["_raw"]["gps"] is None

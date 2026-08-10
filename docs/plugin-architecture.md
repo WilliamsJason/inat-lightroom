@@ -273,6 +273,54 @@ callers wanted it — the observation body, the vision request, and now the
 warning — and the panel disagreeing with the uploader about whether a photo has
 a location is precisely the bug that would teach users to ignore the warning.
 
+### Positional accuracy: a field Lightroom does not have
+
+iNaturalist takes a `positional_accuracy` in metres — the radius the subject was
+somewhere inside. Lightroom stores no such thing, so it lives in plugin metadata
+(`inat_positional_accuracy`, schema v5) and is edited through a `popup_menu` on
+the panel.
+
+**Stored in metres, not as a preset name.** Metres are what the API takes, and a
+sync writes back whatever number the site holds — which is almost never one of
+the four presets. A preset name would leave nowhere to put a synced value.
+
+**No "exact" preset.** A coordinate is never exact; a choice claiming zero
+uncertainty would be a lie the plugin invited.
+
+`PanelCore.accuracyItems` adds a synthetic item for a stored value that matches
+no preset. This is not cosmetic: a `popup_menu` whose `value` matches no item
+renders **blank**, which reads as "not specified" for an observation that has an
+accuracy — and touching the control would then overwrite it.
+
+The upload path and the update path need separate handling. `UploadCore`
+composes a new observation from what the *photo* says, so `recordAccuracy` runs
+first and the value rides along; it is withheld unless coordinates are also
+being sent, since an accuracy without a position describes nothing. The update
+path posts an *identification*, which says nothing about location, so
+`PanelCore.updateAccuracy` PUTs it separately — with `ignore_photos`, like every
+other update here.
+
+### Bringing coordinates back down
+
+`SyncCore.coordinatesFrom` is the guard, and its ordering is the whole point:
+
+1. `private_location` if present — the owner's true position.
+2. otherwise the public `location`, **but only if `obscured` is false**.
+3. otherwise nothing.
+
+iNaturalist randomises the public position of an obscured observation and still
+returns an ordinary-looking `location` string. A live example carried a real
+`positional_accuracy` of 61 m against a `public_positional_accuracy` of 30278 m.
+Writing that into a catalog would be worse than writing nothing, because after
+the fact it is indistinguishable from a real fix. `positional_accuracy` is read
+rather than `public_positional_accuracy` for the same reason: only the former
+describes a position we would actually store.
+
+The write itself is conditional on `UploadCore.locationOf(photo)` being nil —
+fill an empty space, never overwrite. `setRawMetadata("gps", {latitude=,
+longitude=})` is verified against its own dispatch code in `Library.lrmodule`,
+not inferred; see `docs/lightroom-sdk-notes.md`.
+
 ### A species guess is not an identification
 
 `species_guess` is free text iNaturalist shows **only while an observation has
@@ -330,7 +378,7 @@ a URL.
 
 ## Custom metadata schema (`CustomMetadata.lua`)
 
-`schemaVersion = 4`. Every field is **read-only**; the panel writes them, the
+`schemaVersion = 5`. Every field is **read-only**; the panel writes them, the
 user does not.
 
 | Field ID | Type | Description |
@@ -344,6 +392,7 @@ user does not.
 | `inat_quality_grade` | `string` | `casual`, `needs_id`, or `research` |
 | `inat_last_synced` | `string` | ISO 8601 timestamp of last sync |
 | `inat_species_guess` | `string` | What the photo was last uploaded or identified as |
+| `inat_positional_accuracy` | `string` | Location accuracy in metres |
 
 Everything mirroring iNaturalist state would be silently overwritten by the next
 sync, which is worse than not being editable. The two that were once editable

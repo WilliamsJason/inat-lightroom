@@ -517,3 +517,38 @@ pyinaturalist abstracts away would have to be rediscovered in Lua later.
 Keeping the Python prototype at the same level of abstraction as the eventual
 plugin means the request and response shapes we prove out transfer directly —
 and it is how the multipart and index-lag gotchas above were found.
+
+## Obscured coordinates look exactly like real ones
+
+The most dangerous response this plugin can receive. iNaturalist randomises the
+public position of an observation that is obscured — either because the observer
+set `geoprivacy = obscured`, or because the *taxon* is threatened and the site
+obscures it automatically — and **still returns a normal-looking `location`
+string and a normal-looking `geojson` point**. Nothing about the shape of the
+response says the numbers are fiction. Only the `obscured` flag does.
+
+A live example: `positional_accuracy` 61, `public_positional_accuracy` 30278.
+Roughly 30 km of deliberate error, presented in the same field as a GPS fix.
+
+The owner is told the truth through `private_location`, which is **absent
+entirely from unauthenticated responses** — confirmed by dumping the full field
+list of an unauthenticated fetch, not by its being empty. So:
+
+```lua
+-- SyncCore.coordinatesFrom
+private_location, if present        -- the owner's own true position
+else the public location, but only if not obscured
+else nothing at all
+```
+
+Declining is the right third branch. Writing a randomised position into a user's
+catalog would be worse than writing nothing, because it is indistinguishable
+from a real one after the fact.
+
+### `positional_accuracy` writes; `public_positional_accuracy` is derived
+
+`positional_accuracy` is the field a client sets, in **metres**. Fractional
+values are rejected. `public_positional_accuracy` is computed by the site: equal
+to the former when nothing is obscured, and inflated to cover the obscuring
+rectangle when something is. It is read-only, and it belongs to a position this
+plugin never stores, so it is never read.

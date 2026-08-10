@@ -161,6 +161,69 @@ function PanelCore.locationWarning(settings, photos)
 end
 
 --------------------------------------------------------------------------------
+-- How precise the location claims to be
+--------------------------------------------------------------------------------
+
+--- The presets offered in the panel, coarsest concept first.
+--
+-- Metres, because that is what iNaturalist stores. The numbers are deliberately
+-- round: this is a claim about how well the photographer knows where they were,
+-- not a measurement, and offering "37 m" would invite a precision nobody has.
+--
+-- There is no preset for "exact". A coordinate is never exact -- consumer GPS
+-- lands within a handful of metres on a good day -- and a plugin that offers to
+-- claim zero uncertainty would be offering to lie on the user's behalf. 10 m is
+-- what a camera or phone fix is actually worth.
+PanelCore.ACCURACY_PRESETS = {
+  { value = "",     label = "Not specified" },
+  { value = "10",   label = "Precise - GPS fix (~10 m)" },
+  { value = "100",  label = "Approximate - within ~100 m" },
+  { value = "3000", label = "Rough - within a few km" },
+}
+
+--- Normalise a stored accuracy to a plain string of metres, or "" for unset.
+--
+-- Stored as a string because that is what a plugin metadata field holds, but a
+-- sync writes whatever number iNaturalist has, so it arrives as anything.
+function PanelCore.accuracyValue(raw)
+  if raw == nil or raw == "" then return "" end
+
+  local metres = tonumber(raw)
+  if not metres or metres <= 0 then return "" end
+
+  -- Whole metres. iNaturalist rejects a fractional positional_accuracy, and
+  -- floats reaching a popup_menu would never match a preset's string anyway.
+  return string.format("%d", math.floor(metres + 0.5))
+end
+
+--- The items for the accuracy popup, including the stored value if it is not a
+--- preset.
+--
+-- A popup_menu whose value matches no item renders blank, which would read as
+-- "not specified" for an observation that has an accuracy -- and picking any
+-- preset would then silently overwrite it. Since a sync brings back the real
+-- number and it is almost never one of our four, the odd value gets an item of
+-- its own rather than being rounded to the nearest preset.
+function PanelCore.accuracyItems(stored)
+  local value = PanelCore.accuracyValue(stored)
+  local items = {}
+
+  for _, preset in ipairs(PanelCore.ACCURACY_PRESETS) do
+    items[#items + 1] = { value = preset.value, title = preset.label }
+    if preset.value == value then value = nil end
+  end
+
+  if value then
+    items[#items + 1] = {
+      value = value,
+      title = "From iNaturalist (" .. value .. " m)",
+    }
+  end
+
+  return items
+end
+
+--------------------------------------------------------------------------------
 -- Asking for suggestions
 --------------------------------------------------------------------------------
 
@@ -386,6 +449,51 @@ function PanelCore.recordGuess(catalog, photos, guess)
       photo:setPropertyForPlugin(_PLUGIN, "inat_species_guess", guess or "")
     end
   end)
+end
+
+--- Write the location accuracy onto every photo.
+--
+-- Same reasoning as recordGuess: the panel shows the first photo but the
+-- buttons act on the selection, and the frames of one animal share a location.
+function PanelCore.recordAccuracy(catalog, photos, accuracy)
+  local value = PanelCore.accuracyValue(accuracy)
+
+  catalog:withWriteAccessDo("iNat location accuracy", function()
+    for _, photo in ipairs(photos) do
+      photo:setPropertyForPlugin(_PLUGIN, "inat_positional_accuracy", value)
+    end
+  end)
+end
+
+--- Push a changed accuracy to an observation that already exists.
+--
+-- MUST be called from inside a task.
+--
+-- Upload reads the accuracy off the photo, so a new observation carries it
+-- without any help. An existing one does not: the update path posts an
+-- identification, which says nothing about location, so without this a user
+-- could change the accuracy on an uploaded photo and watch the panel accept it
+-- while iNaturalist kept the old value forever.
+--
+-- @return true, or false plus an error message
+function PanelCore.updateAccuracy(catalog, api, photos, accuracy)
+  if not photos or #photos == 0 then return true, nil end
+
+  local observationId = UploadCore.pluginField(photos[1], "inat_observation_id")
+  if not observationId then return true, nil end
+
+  local value = PanelCore.accuracyValue(accuracy)
+  if value == "" then return true, nil end
+
+  -- ignore_photos, as everywhere else. A PUT without it detaches every photo on
+  -- the observation and still returns 200.
+  local _, err = api:updateObservation(tonumber(observationId), {
+    positional_accuracy = tonumber(value),
+  }, true)
+  if err then return false, err end
+
+  PanelCore.recordAccuracy(catalog, photos, value)
+  return true, nil
 end
 
 --------------------------------------------------------------------------------

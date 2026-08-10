@@ -137,6 +137,23 @@ return {
       browsable   = false,
       readOnly    = true,
     },
+
+    -- -----------------------------------------------------------------------
+    -- How precise the coordinates are
+    --
+    -- Held in metres as a string, because metres are what iNaturalist takes.
+    -- Storing a preset name instead would mean converting in both directions
+    -- and, worse, having nowhere to put the number a sync brings back: the
+    -- accuracy iNaturalist holds is rarely one of the panel's four presets.
+    -- -----------------------------------------------------------------------
+    {
+      id          = "inat_positional_accuracy",
+      title       = LOC "$$$/iNatLightroom/Meta/PositionalAccuracy=Location Accuracy (m)",
+      dataType    = "string",
+      searchable  = false,
+      browsable   = false,
+      readOnly    = true,
+    },
   },
 
   -- Schema version; increment when adding/removing fields to allow migration.
@@ -153,7 +170,10 @@ return {
   -- an editable box inviting input that went nowhere. Read-only is the point of
   -- this version: the floating panel is the only way to change anything, so a
   -- field you can type into here is a promise the plugin cannot keep.
-  schemaVersion = 4,
+  -- v5 adds inat_positional_accuracy, so that a location can say how much it
+  -- claims to know. iNaturalist stores accuracy per observation; Lightroom has
+  -- nowhere to put it, so the plugin has to.
+  schemaVersion = 5,
 
   updateFromEarlierSchemaVersion = function(_catalog, _previousSchemaVersion, _progressScope)
     -- Nothing to rewrite. Lightroom drops removed fields itself, and making a

@@ -749,3 +749,131 @@ def test_the_warning_judges_the_photo_the_observation_comes_from(plugin, core):
 
     assert first_located is None
     assert first_bare is not None
+
+
+# ---------------------------------------------------------------------------
+# How precise the location claims to be
+# ---------------------------------------------------------------------------
+
+
+def items(core, stored=None):
+    got = core["accuracyItems"](stored)
+    return [(got[i]["value"], got[i]["title"]) for i in range(1, len(got) + 1)]
+
+
+def test_an_unset_accuracy_is_the_empty_string(core):
+    assert core["accuracyValue"](None) == ""
+    assert core["accuracyValue"]("") == ""
+
+
+def test_a_number_becomes_whole_metres(core):
+    """iNaturalist rejects a fractional positional_accuracy, and a float would
+    never match a preset's string in the popup either."""
+    assert core["accuracyValue"](36) == "36"
+    assert core["accuracyValue"]("36.4") == "36"
+    assert core["accuracyValue"](36.6) == "37"
+
+
+def test_nonsense_accuracy_is_treated_as_unset(core):
+    """Better an unstated accuracy than a claimed one that means nothing."""
+    assert core["accuracyValue"]("about a mile") == ""
+    assert core["accuracyValue"](0) == ""
+    assert core["accuracyValue"](-5) == ""
+
+
+def test_the_presets_offer_a_way_to_say_nothing(core):
+    """Leaving it unsaid is a real answer. Without a listed choice for it the
+    popup would open on a value the user never picked."""
+    assert items(core)[0][0] == ""
+
+
+def test_no_preset_claims_a_perfect_coordinate(core):
+    """A coordinate is never exact. Offering to claim zero uncertainty would be
+    offering to lie on the user's behalf."""
+    values = [v for v, _ in items(core) if v != ""]
+    assert values and all(int(v) > 0 for v in values)
+
+
+def test_a_stored_preset_is_not_duplicated(core):
+    values = [v for v, _ in items(core, "100")]
+    assert values.count("100") == 1
+
+
+def test_a_synced_accuracy_gets_an_item_of_its_own(core):
+    """A popup whose value matches no item renders blank, which would read as
+    "not specified" for an observation that has an accuracy -- and touching the
+    popup would then overwrite it. iNaturalist's real numbers are almost never
+    one of our four."""
+    entries = items(core, "36")
+    assert "36" in [v for v, _ in entries]
+    assert any("36" in title for v, title in entries if v == "36")
+
+
+def test_the_odd_item_is_last_so_the_presets_keep_their_order(core):
+    assert items(core, "36")[-1][0] == "36"
+
+
+def test_recording_an_accuracy_writes_it_to_every_photo(plugin, core):
+    photos = [plugin.new_photo(), plugin.new_photo()]
+    core["recordAccuracy"](plugin.catalog,
+                           plugin.runtime.table_from({1: photos[0], 2: photos[1]}),
+                           "100")
+
+    assert [p["_props"]["inat_positional_accuracy"] for p in photos] == ["100", "100"]
+
+
+def test_recording_happens_inside_a_write_transaction(plugin, core):
+    photo = plugin.new_photo()
+    core["recordAccuracy"](plugin.catalog,
+                           plugin.runtime.table_from({1: photo}), "10")
+
+    assert plugin.catalog_writes
+
+
+def test_updating_accuracy_pushes_it_to_an_existing_observation(plugin, core):
+    photo = plugin.new_photo(inat_observation_id="4242")
+    api, calls = fake_api(plugin)
+
+    ok, err = core["updateAccuracy"](plugin.catalog, api,
+                                     plugin.runtime.table_from({1: photo}), "100")
+
+    assert ok and err is None
+    sent = call_named(calls, "update")[0]
+    assert sent["params"]["positional_accuracy"] == 100
+
+
+def test_updating_accuracy_keeps_the_photos_attached(plugin, core):
+    """A PUT without ignore_photos detaches every photo on the observation and
+    still returns 200."""
+    photo = plugin.new_photo(inat_observation_id="4242")
+    api, calls = fake_api(plugin)
+
+    core["updateAccuracy"](plugin.catalog, api,
+                           plugin.runtime.table_from({1: photo}), "100")
+
+    assert call_named(calls, "update")[0]["ignorePhotos"] is True
+
+
+def test_an_unset_accuracy_sends_no_update(plugin, core):
+    """Sending nothing is not the same as sending "no accuracy". Turning an
+    unanswered question into a PUT would overwrite whatever iNaturalist knows."""
+    photo = plugin.new_photo(inat_observation_id="4242")
+    api, calls = fake_api(plugin)
+
+    ok, _ = core["updateAccuracy"](plugin.catalog, api,
+                                   plugin.runtime.table_from({1: photo}), "")
+
+    assert ok
+    assert methods(calls) == []
+
+
+def test_an_unlinked_photo_needs_no_accuracy_update(plugin, core):
+    """It has no observation yet; the upload will carry the accuracy itself."""
+    api, calls = fake_api(plugin)
+
+    ok, _ = core["updateAccuracy"](plugin.catalog, api,
+                                   plugin.runtime.table_from({1: plugin.new_photo()}),
+                                   "100")
+
+    assert ok
+    assert methods(calls) == []

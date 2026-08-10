@@ -788,3 +788,42 @@ new still needs one pass through Lightroom.
 When fixing a bug, check the new test actually fails against the old code —
 ideally with the same message the user saw. Two tests in this repo were caught
 being worthless that way.
+
+## `setRawMetadata` can write GPS — from its own dispatch code
+
+Not adjacency, not a guess: `Library.lrmodule` contains the constant run for
+`LrPhoto:setRawMetadata`, and immediately around the
+
+```
+LrPhoto:setRawMetadata: unknown metadata key %q
+```
+
+error message sits the handler table itself:
+
+```
+'extendedMetadata' 'GPSLatitude' 'GPSLongitude'
+'latitude' 'longitude' 'xmpLatLonCoordFromFloat' 'lat' 'lon' 'touch'
+```
+
+Reading it: the `"gps"` key takes a **table**, off which it reads `latitude` and
+`longitude` — the same shape `getRawMetadata("gps")` hands back — converts them
+with `xmpLatLonCoordFromFloat`, and writes `GPSLatitude` / `GPSLongitude` into
+the photo's extended metadata. `gpsAltitude` (→ `GPSAltitude`, via
+`numberToFraction`) and `gpsImgDirection` have handlers of their own, so they
+are separate keys rather than fields of the same table.
+
+```lua
+catalog:withWriteAccessDo("...", function()
+  photo:setRawMetadata("gps", { latitude = 51.5, longitude = -0.12 })
+end)
+```
+
+**The key list is a whitelist, and an unknown key raises.** That error message
+is not decoration — it is the else branch. So a typo in a metadata key is a
+runtime error rather than a silent no-op, which is the good outcome, but only if
+the call is reached during testing. `explore/lua_harness.py`'s stub enforces the
+same whitelist with the same message for exactly that reason.
+
+Not established by this: whether a write is rejected for a photo whose file is
+offline, and whether it round-trips to the file immediately or waits for a
+metadata save.

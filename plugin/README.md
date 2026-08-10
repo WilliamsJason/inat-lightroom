@@ -132,6 +132,51 @@ locations, and it writes the GPS to the file; two number boxes in a floating
 window would be a worse version of something Lightroom ships. Set the location
 there, come back, and upload.
 
+### How precise the location is
+
+iNaturalist carries an accuracy alongside every position — a radius, in metres,
+inside which the subject really was. Lightroom has no equivalent field, so the
+panel adds one: an **Accuracy** menu under the location.
+
+| Choice | Sent | When it fits |
+|---|---|---|
+| Not specified | nothing | You would rather say nothing than guess |
+| Precise — GPS fix | 10 m | Camera or phone GPS, or a pin dropped on the exact spot |
+| Approximate | 100 m | You remember the area, not the metre |
+| Rough | 3000 m | "Somewhere along that trail" |
+
+There is deliberately **no "exact"**. No coordinate is exact, and offering a
+choice that claims zero uncertainty would be offering to lie on your behalf.
+
+It is only ever sent with coordinates. An accuracy on its own describes the
+precision of a position nobody received, which a reader could only misread.
+
+A sync brings the accuracy back down from iNaturalist, and the real number is
+rarely one of the four above — so when it is not, the menu grows a fifth entry
+showing it (`From iNaturalist (36 m)`) rather than rounding it to the nearest
+preset. Picking a preset then replaces it, which is a change you asked for; a
+menu that silently showed the nearest match would make one you did not.
+
+### Coordinates come back down, too
+
+A common shape of this workflow: upload from a camera with no GPS, then place
+the observation on the map on the iNaturalist website, where it is easy. **Sync**
+and **Link to Observation** notice that, and write the coordinates into
+Lightroom.
+
+**Only into an empty space.** If the photo already has coordinates then
+iNaturalist's copy came from them in the first place and there is nothing to
+gain; and in the rarer case where the two have genuinely diverged, quietly
+moving a photo you placed yourself is not a sync, it is a correction nobody
+asked for and nobody can see happen.
+
+Obscured observations are the exception. If the observation's location is
+obscured — because you set it that way, or because the taxon is threatened and
+iNaturalist obscures it for you — the site returns a *randomised* position that
+looks entirely ordinary, up to tens of kilometres out. The plugin refuses those
+rather than writing fiction into your catalog. Your own true position does come
+back if the API returns it to you as the owner.
+
 ### A species guess is not an identification
 
 This is the one piece of iNaturalist behaviour worth understanding, because it

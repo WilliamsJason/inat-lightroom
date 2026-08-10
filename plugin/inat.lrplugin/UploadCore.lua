@@ -117,6 +117,15 @@ function UploadCore.observationParamsFor(settings, photo, options)
     if latitude then
       params.latitude  = latitude
       params.longitude = longitude
+
+      -- Only ever alongside coordinates. positional_accuracy on its own
+      -- describes the precision of a location that was not sent, which
+      -- iNaturalist has no use for and a reader of the observation would have
+      -- to guess at.
+      local accuracy = pluginField(photo, "inat_positional_accuracy")
+      if accuracy and tonumber(accuracy) then
+        params.positional_accuracy = tonumber(accuracy)
+      end
     end
   end
 
