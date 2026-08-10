@@ -138,13 +138,24 @@ def declared_field_ids(plugin) -> set[str]:
     return set(metadata_fields(plugin))
 
 
+def field_items(plugin, module) -> list[str]:
+    """The tagset's field references, without its heading rows.
+
+    An item is either a field ID string or a table -- com.adobe.separator and
+    com.adobe.label rows are structure, not data, and the checks below are all
+    about whether a named field is real.
+    """
+    return [item for item in lua_list(plugin.require(module)["items"])
+            if isinstance(item, str)]
+
+
 @pytest.mark.parametrize("module", TAGSETS)
 def test_every_plugin_field_in_a_tagset_actually_exists(plugin, module):
     """A tagset naming a missing field breaks the panel without an error."""
     declared = declared_field_ids(plugin)
     prefix = TOOLKIT_ID + "."
 
-    for item in lua_list(plugin.require(module)["items"]):
+    for item in field_items(plugin, module):
         if item.startswith(prefix):
             assert item[len(prefix):] in declared, f"{module} references {item}"
 
@@ -152,7 +163,7 @@ def test_every_plugin_field_in_a_tagset_actually_exists(plugin, module):
 @pytest.mark.parametrize("module", TAGSETS)
 def test_tagset_items_are_namespaced(plugin, module):
     """A bare field ID silently resolves to nothing; it needs the plugin ID."""
-    for item in lua_list(plugin.require(module)["items"]):
+    for item in field_items(plugin, module):
         assert item.startswith("com.adobe.") or item.startswith(TOOLKIT_ID + ".")
 
 
@@ -217,7 +228,7 @@ BUILT_IN_TAGSET_ITEMS = {
 def test_built_in_fields_are_ones_lightroom_itself_uses(plugin, module):
     """Presence of a com.adobe.* string in the binaries does not make it a valid
     tagset item. Lightroom's own tagsets are the authority."""
-    for item in lua_list(plugin.require(module)["items"]):
+    for item in field_items(plugin, module):
         if item.startswith("com.adobe."):
             assert item in BUILT_IN_TAGSET_ITEMS, f"{module} uses {item}"
 
@@ -241,7 +252,7 @@ def test_the_only_url_field_shown_is_one_we_always_fill_in(plugin, module):
     fields = metadata_fields(plugin)
     prefix = TOOLKIT_ID + "."
 
-    for item in lua_list(plugin.require(module)["items"]):
+    for item in field_items(plugin, module):
         if not item.startswith(prefix):
             continue
         field = fields[item[len(prefix):]]
@@ -256,7 +267,7 @@ def test_every_metadata_field_is_reachable_from_a_tagset(plugin, module):
     """A field defined but in no preset is invisible: the plugin's own presets
     are the only place its fields appear, so anything missing here is data the
     user has no way to see."""
-    items = set(lua_list(plugin.require(module)["items"]))
+    items = set(field_items(plugin, module))
 
     for field_id in declared_field_ids(plugin):
         assert TOOLKIT_ID + "." + field_id in items, f"{field_id} is not shown"
@@ -278,19 +289,41 @@ def test_synced_fields_are_read_only(plugin):
         assert fields[field_id]["readOnly"] is True, field_id
 
 
-def test_the_species_guess_is_editable_and_separate_from_the_synced_taxon(plugin):
-    """One field says what to upload, the other says what the community
-    decided. Merging them would mean a sync silently changed what the next
-    publish sends."""
+def test_every_field_is_read_only(plugin):
+    """The floating panel is the only way to change anything, so a field you can
+    type into here is a promise the plugin cannot keep.
+
+    Two of these used to be editable and both were traps. Editing
+    inat_species_guess wrote a string to the catalog and nothing else --
+    iNaturalist ignores species_guess once an observation has a taxon, so it was
+    saved, uploaded and silently discarded. Editing inat_observation_id let a
+    pasted ID land on a whole selection at once with nothing to confirm it.
+    """
     fields = metadata_fields(plugin)
 
-    assert fields["inat_species_guess"]["readOnly"] is False
-    assert fields["inat_taxon_name"]["readOnly"] is True
+    for field_id, field in fields.items():
+        assert field["readOnly"] is True, f"{field_id} is editable"
 
 
-def test_the_observation_id_stays_editable(plugin):
-    """Pasting an ID is how a photo adopts an observation made elsewhere."""
-    assert metadata_fields(plugin)["inat_observation_id"]["readOnly"] is False
+def test_the_species_guess_stays_separate_from_the_synced_taxon(plugin):
+    """One field says what was sent, the other says what the community decided.
+    Merging them would mean a sync silently rewrote the record of what this
+    plugin claimed."""
+    fields = metadata_fields(plugin)
+
+    assert "inat_species_guess" in fields
+    assert "inat_taxon_name" in fields
+
+
+def test_the_panel_tells_you_where_the_controls_are(plugin):
+    """A panel of greyed-out fields with no explanation reads as broken rather
+    than deliberate."""
+    items = lua_list(plugin.require("TagsetInat")["items"])
+    labels = [i["label"] for i in items
+              if not isinstance(i, str) and i["formatter"] == "com.adobe.label"]
+
+    assert labels, "no heading row"
+    assert any("Plug-in Extras" in label for label in labels)
 
 
 def test_a_bumped_schema_version_brings_a_migration_hook(plugin):

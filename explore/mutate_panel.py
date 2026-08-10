@@ -15,9 +15,12 @@ PLUGIN = Path(__file__).parent.parent / "plugin" / "inat.lrplugin"
 TARGETS = {
     "PanelCore": PLUGIN / "PanelCore.lua",
     "ObservationPanel": PLUGIN / "ObservationPanel.lua",
+    "CustomMetadata": PLUGIN / "CustomMetadata.lua",
+    "TagsetInat": PLUGIN / "TagsetInat.lua",
 }
 
-TESTS = ["test_panel_core_lua.py", "test_observation_panel_lua.py"]
+TESTS = ["test_panel_core_lua.py", "test_observation_panel_lua.py",
+         "test_plugin_surface_lua.py"]
 
 MUTATIONS = [
     # --- the identification trap, the whole reason for this rewrite ----------
@@ -238,6 +241,50 @@ MUTATIONS = [
         "stale suggestions survive a change of selection",
         "      props.suggestions       = {}\n      props.suggestionItems   = {}",
         "      props.suggestions       = props.suggestions or {}\n      props.suggestionItems   = props.suggestionItems or {}",
+    ),
+
+    # --- the metadata panel, which is now display only -----------------------
+    (
+        "CustomMetadata",
+        "the species guess is editable again, and edits go nowhere",
+        '      title       = LOC "$$$/iNatLightroom/Meta/SpeciesGuess=Species Guess",\n      dataType    = "string",\n      searchable  = true,\n      browsable   = false,\n      readOnly    = true,',
+        '      title       = LOC "$$$/iNatLightroom/Meta/SpeciesGuess=Species Guess",\n      dataType    = "string",\n      searchable  = true,\n      browsable   = false,\n      readOnly    = false,',
+    ),
+    (
+        "CustomMetadata",
+        "the observation ID is editable again",
+        '      title       = LOC "$$$/iNatLightroom/Meta/ObsId=Observation ID",\n      dataType    = "string",\n      searchable  = true,\n      browsable   = false,\n      readOnly    = true,',
+        '      title       = LOC "$$$/iNatLightroom/Meta/ObsId=Observation ID",\n      dataType    = "string",\n      searchable  = true,\n      browsable   = false,\n      readOnly    = false,',
+    ),
+    (
+        "CustomMetadata",
+        "the schema version is not bumped with the field changes",
+        "  schemaVersion = 4,",
+        "  schemaVersion = 3,",
+    ),
+    (
+        "CustomMetadata",
+        "the migration hook is dropped",
+        "  updateFromEarlierSchemaVersion = function(_catalog, _previousSchemaVersion, _progressScope)",
+        "  _unusedMigration = function(_catalog, _previousSchemaVersion, _progressScope)",
+    ),
+    (
+        "TagsetInat",
+        "the hint telling people where the controls are is dropped",
+        '    {\n      formatter = "com.adobe.label",',
+        '    --[[ {\n      formatter = "com.adobe.label",',
+    ),
+    (
+        "TagsetInat",
+        "a field is defined but never shown, so its data is invisible",
+        '    prefix .. "inat_taxon_id",',
+        "",
+    ),
+    (
+        "TagsetInat",
+        "a field name loses its plugin namespace and resolves to nothing",
+        '    prefix .. "inat_quality_grade",',
+        '    "inat_quality_grade",',
     ),
 ]
 

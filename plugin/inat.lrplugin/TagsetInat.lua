@@ -9,15 +9,16 @@
   iNaturalist panel -- the closest available equivalent of a section under
   Comments.
 
-  Deliberately just this plugin's fields plus the file name. A preset replaces
-  the panel contents rather than adding to them, and Default is one dropdown
-  away when the ordinary fields are wanted; shipping our own copy of Default
-  would only be a second thing to keep in step with Lightroom.
+  Read-only, all of it. Every field here mirrors something that lives on
+  iNaturalist or was sent there, and the floating panel is where any of it gets
+  changed. There were two clickable "url" rows here that acted as buttons; they
+  are gone, because Lightroom owns that row entirely -- it labels the arrow "Go
+  to URL", shows the raw URL as the value, and fires on an empty field.
 
-  Data only. There were two clickable "url" rows here that acted as buttons;
-  they are gone, because Lightroom owns that row entirely -- it labels the
-  arrow "Go to URL", shows the raw URL as the value, and fires on an empty
-  field. Actions belong to the publish service now.
+  The heading rows are `com.adobe.label` items, which is how Adobe's own IPTC
+  preset draws "Contact" and "Description". Confirmed in LibraryToolkit.dll: the
+  formatter table maps com.adobe.separator to `separator` and com.adobe.label to
+  `label`, and the shipped IPTC tagset uses exactly this shape.
 
   Plugin fields are addressed as "<LrToolkitIdentifier>.<field id>". Built-in
   Lightroom fields use their "com.adobe.*" IDs, and only IDs that Lightroom's
@@ -36,10 +37,15 @@ return {
     "com.adobe.filename",
     "com.adobe.separator",
 
-    -- What will be uploaded, first: it is the only row here you type into
-    -- before publishing, and everything below it is a result.
+    -- Nothing on this panel can be edited, and a panel of greyed-out fields
+    -- with no explanation reads as broken rather than deliberate. This says
+    -- where the controls actually are.
+    {
+      formatter = "com.adobe.label",
+      label     = LOC "$$$/iNatLightroom/Tagset/Hint=Edit in Library > Plug-in Extras > iNaturalist Panel",
+    },
+
     prefix .. "inat_species_guess",
-    prefix .. "inat_crop",
     "com.adobe.separator",
 
     prefix .. "inat_observation_id",
