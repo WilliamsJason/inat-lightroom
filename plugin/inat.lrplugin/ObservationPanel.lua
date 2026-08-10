@@ -129,15 +129,42 @@ end
 --------------------------------------------------------------------------------
 
 --- Copy the current selection's values onto the bound property table.
-local function refresh(props)
-  local catalog = LrApplication.activeCatalog()
-  local photos  = catalog:getTargetPhotos() or {}
-  local photo   = photos[1]
+--
+-- The catalog reads happen on a task because they have to. Lightroom calls the
+-- window's observers outside any task, and reading plugin metadata yields --
+-- doing it inline fails with "We can only wait from within a task" (and, when
+-- the observer is reached through a metamethod, "Yielding is not allowed within
+-- a C or metamethod call"). Both were swallowed silently, which is why the
+-- panel appeared to ignore the filmstrip: the observers were firing perfectly
+-- and every refresh was dying halfway through.
+--
+-- Each call gets a generation number and only the newest one is allowed to
+-- write. Arrow-keying down the filmstrip fires the observer faster than the
+-- reads complete, and Lightroom emits transient selections on the way (a folder
+-- change reports the whole folder selected before settling on one photo), so
+-- without this the panel can land on a stale value and stay there.
+local function makeRefresh(props)
+  local generation = 0
 
-  props.photo = photo
+  return function()
+    generation = generation + 1
+    local mine = generation
 
-  for key, value in pairs(ObservationPanel.valuesFor(photo, #photos)) do
-    props[key] = value
+    LrTasks.startAsyncTask(function()
+      local catalog = LrApplication.activeCatalog()
+      local photos  = catalog:getTargetPhotos() or {}
+      local photo   = photos[1]
+      local values  = ObservationPanel.valuesFor(photo, #photos)
+
+      -- Read before the check, applied after: a newer refresh started while
+      -- this one was reading, so what it read is already out of date.
+      if mine ~= generation then return end
+
+      props.photo = photo
+      for key, value in pairs(values) do
+        props[key] = value
+      end
+    end)
   end
 end
 
@@ -266,8 +293,9 @@ function ObservationPanel.show()
     function(context)
       local f     = LrView.osFactory()
       local props = LrBinding.makePropertyTable(context)
+      local refresh = makeRefresh(props)
 
-      refresh(props)
+      refresh()
 
       local actions = {
         saveSpeciesGuess = function()
@@ -284,7 +312,7 @@ function ObservationPanel.show()
             function(syncContext)
               local SyncCore = require "SyncCore"
               SyncCore.syncTargetPhotos(syncContext)
-              refresh(props)
+              refresh()
             end)
         end,
 
@@ -292,7 +320,7 @@ function ObservationPanel.show()
           LrFunctionContext.postAsyncTaskWithContext("inat_panel_link",
             function(linkContext)
               require("LinkObservation").run(linkContext)
-              refresh(props)
+              refresh()
             end)
         end,
 
@@ -324,16 +352,16 @@ function ObservationPanel.show()
         save_frame = WINDOW_ID,
 
         -- The point of the whole thing: follow the filmstrip.
-        selectionChangeObserver = function()
-          refresh(props)
-        end,
+        --
+        -- These fire outside any task, so refresh() does its catalog reads on
+        -- one rather than inline. Any error raised here is swallowed by
+        -- Lightroom, so getting that wrong is invisible.
+        selectionChangeObserver = refresh,
 
         -- Changing folder or collection changes the selection too, and
         -- without this the window would keep describing a photo that is no
         -- longer on screen.
-        sourceChangeObserver = function()
-          refresh(props)
-        end,
+        sourceChangeObserver = refresh,
 
         -- Holds this task open for as long as the window is up, which is what
         -- keeps the function context -- and therefore the property table the

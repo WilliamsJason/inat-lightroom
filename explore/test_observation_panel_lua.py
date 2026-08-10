@@ -199,9 +199,76 @@ def test_the_observer_picks_up_the_new_selection(plugin, panel):
 
     plugin.set_target_photos([second])
     plugin.call(args["selectionChangeObserver"])
+    plugin.run_pending_tasks()
 
     assert props["status"] == "Not uploaded yet"
     assert props["selection"] == "two.jpg"
+
+
+def test_the_observer_reads_the_catalog_on_a_task(plugin, panel):
+    """Lightroom calls the window's observers outside any task, and reading
+    plugin metadata yields. Doing it inline raises "We can only wait from
+    within a task", which Lightroom then swallows -- so the panel silently
+    stops following the filmstrip. Observed in the host exactly that way."""
+    first = plugin.new_photo(formatted={"fileName": "one.jpg"})
+    second = plugin.new_photo(formatted={"fileName": "two.jpg"})
+
+    plugin.set_target_photos([first])
+    args = show(plugin, panel)
+    props = args["contents"]["bind_to_object"]
+
+    plugin.set_target_photos([second])
+    plugin.call(args["selectionChangeObserver"])
+
+    assert props["selection"] == "one.jpg", (
+        "the observer must hand the catalog reads to a task rather than doing "
+        "them inline"
+    )
+    assert plugin.pending_task_count() > 0, "and it must actually queue one"
+
+
+def test_the_source_observer_also_reads_on_a_task(plugin, panel):
+    """Same trap, same fix: a folder or collection change fires this one."""
+    first = plugin.new_photo(formatted={"fileName": "one.jpg"})
+    second = plugin.new_photo(formatted={"fileName": "two.jpg"})
+
+    plugin.set_target_photos([first])
+    args = show(plugin, panel)
+    props = args["contents"]["bind_to_object"]
+
+    plugin.set_target_photos([second])
+    plugin.call(args["sourceChangeObserver"])
+
+    assert props["selection"] == "one.jpg"
+    assert plugin.pending_task_count() > 0
+
+
+def test_a_superseded_refresh_does_not_overwrite_a_newer_one(plugin, panel):
+    """Arrow-keying fires the observer faster than the reads finish, and a
+    folder change reports the whole folder selected before settling on one
+    photo. Whichever refresh was asked for last has to win, whatever order the
+    reads happen to complete in."""
+    stale = plugin.new_photo(formatted={"fileName": "stale.jpg"})
+    fresh = plugin.new_photo(formatted={"fileName": "fresh.jpg"})
+
+    plugin.set_target_photos([stale])
+    args = show(plugin, panel)
+    props = args["contents"]["bind_to_object"]
+
+    # Two refreshes queued back to back, each reading a different selection.
+    plugin.set_target_photos([stale])
+    plugin.call(args["selectionChangeObserver"])
+    plugin.set_target_photos([fresh])
+    plugin.call(args["selectionChangeObserver"])
+
+    # Drained back to front: the older refresh finishes last, which is the
+    # ordering that would let it win.
+    plugin.run_pending_tasks(reverse=True)
+
+    assert props["selection"] == "fresh.jpg", (
+        "the newest refresh must win; an older one completing later must not "
+        "put the panel back on the previous photo"
+    )
 
 
 def test_the_window_offers_the_actions_the_metadata_panel_cannot(plugin, panel):
