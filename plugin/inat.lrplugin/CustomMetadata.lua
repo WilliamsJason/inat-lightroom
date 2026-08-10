@@ -10,13 +10,19 @@
   Field IDs must be unique and stable; changing them will break existing
   catalogs that already have values stored.
 
-  Almost everything here is readOnly because it mirrors state that lives on
-  iNaturalist: a user editing the synced taxon name in Lightroom would have it
-  silently overwritten by the next sync, which is worse than not letting them
-  type at all. The deliberate exceptions are the observation ID -- pasting one
-  is how you link a photo to an observation that already exists -- the species
-  guess, which is an instruction to the uploader rather than synced state, and
-  the crop.
+  Everything here is readOnly. The panel is the only way to change anything now,
+  and a field you can type into is a promise that typing does something. Two of
+  these used to be editable and both were traps:
+
+    * inat_observation_id. Pasting one and syncing was how you adopted an
+      existing observation, before there was a Link to Observation button to do
+      it properly -- with a confirmation, and without the chance of pasting a
+      stranger's ID onto forty photos in one go.
+    * inat_species_guess. Editing it here wrote a string to the catalog and
+      nothing else. iNaturalist ignores species_guess once an observation has a
+      taxon, so a guess typed here was saved, uploaded and silently discarded.
+      Identifying now means posting an identification, which needs a taxon id,
+      which a text field cannot supply.
 --]]
 
 return {
@@ -24,10 +30,6 @@ return {
 
     -- -----------------------------------------------------------------------
     -- Primary link to iNaturalist
-    --
-    -- The ID stays editable on purpose: typing an existing observation ID into
-    -- the Metadata panel and syncing is the only way to adopt an observation
-    -- that was created outside Lightroom.
     -- -----------------------------------------------------------------------
     {
       id          = "inat_observation_id",
@@ -35,7 +37,7 @@ return {
       dataType    = "string",
       searchable  = true,
       browsable   = false,
-      readOnly    = false,
+      readOnly    = true,
     },
 
     -- The observation's UUID, and the reason it is stored rather than derived.
@@ -120,34 +122,20 @@ return {
     },
 
     -- -----------------------------------------------------------------------
-    -- What to upload
+    -- What was sent as the guess
     --
     -- Kept apart from inat_taxon_name on purpose. That field holds what the
     -- iNaturalist community decided, and every sync overwrites it; if the same
     -- field also carried the user's intent, syncing a photo would quietly
-    -- change what a later publish uploads. This one is only ever read by the
-    -- uploader and never written by a sync.
+    -- change what a later upload sends. This one is never written by a sync.
     -- -----------------------------------------------------------------------
     {
       id          = "inat_species_guess",
-      title       = LOC "$$$/iNatLightroom/Meta/SpeciesGuess=Species Guess (upload)",
+      title       = LOC "$$$/iNatLightroom/Meta/SpeciesGuess=Species Guess",
       dataType    = "string",
       searchable  = true,
       browsable   = false,
-      readOnly    = false,
-    },
-
-    -- -----------------------------------------------------------------------
-    -- iNat-specific crop (stored as "x,y,w,h" fraction string)
-    -- Written by the Export dialog before the photo is rendered.
-    -- -----------------------------------------------------------------------
-    {
-      id          = "inat_crop",
-      title       = LOC "$$$/iNatLightroom/Meta/Crop=iNat Crop (x,y,w,h)",
-      dataType    = "string",
-      searchable  = false,
-      browsable   = false,
-      readOnly    = false,
+      readOnly    = true,
     },
   },
 
@@ -155,17 +143,20 @@ return {
   --
   -- v2 added two "url" fields holding lightroom:// links, because a url field
   -- renders as a clickable row and that was the only button the Metadata panel
-  -- would give us. v3 removes them: the panel supplies its own "Go to URL"
+  -- would give us. v3 removed them: the panel supplies its own "Go to URL"
   -- arrow that a plugin cannot relabel or retarget, and it fires even when the
-  -- field is empty, which on Windows opens Explorer. Those actions now live on
-  -- the publish service. v3 also adds the observation UUID that lets several
-  -- photos publish into one observation, and the species guess.
-  schemaVersion = 3,
+  -- field is empty, which on Windows opens Explorer. v3 also added the
+  -- observation UUID and the species guess.
+  --
+  -- v4 makes every field read-only and drops inat_crop. The crop was written by
+  -- an Export dialog that no longer exists and read by nothing that ever did --
+  -- an editable box inviting input that went nowhere. Read-only is the point of
+  -- this version: the floating panel is the only way to change anything, so a
+  -- field you can type into here is a promise the plugin cannot keep.
+  schemaVersion = 4,
 
   updateFromEarlierSchemaVersion = function(_catalog, _previousSchemaVersion, _progressScope)
-    -- Nothing to rewrite. Removed fields are dropped by Lightroom, and the
-    -- added ones are filled in by the first publish or sync rather than
-    -- backfilled here -- the UUID is not something this plugin can invent for
-    -- a photo it has never uploaded.
+    -- Nothing to rewrite. Lightroom drops removed fields itself, and making a
+    -- field read-only does not change what is stored in it.
   end,
 }
