@@ -2,10 +2,13 @@
 
 ## Overview
 
-The plugin is an **Adobe Lightroom Classic** plugin written in Lua using the [Lightroom SDK](https://www.adobe.io/apis/creativecloud/lightroomsdk.html). It consists of two main capabilities:
+The plugin is an **Adobe Lightroom Classic** plugin written in Lua using the [Lightroom SDK](https://www.adobe.io/apis/creativecloud/lightroomsdk.html). It does two things:
 
-1. **Publish** – a Publish Service that turns photos into iNaturalist observations and keeps them in step with them.
+1. **Identify and upload** – ask iNaturalist's vision model what a photo is, and turn the answer into an observation or an identification on one.
 2. **Sync** – pull the latest community identification from iNaturalist and write the full taxonomic tree into Lightroom keywords.
+
+Both live in a floating panel. There is no Publish Service and no export
+target; see [Why there is no publish service](#why-there-is-no-publish-service).
 
 ---
 
@@ -15,18 +18,22 @@ The plugin is an **Adobe Lightroom Classic** plugin written in Lua using the [Li
 inat.lrplugin/
 ├── Info.lua                   # Plugin identity, SDK version, menu, tagsets, URL handler
 ├── ObservationPanelMenu.lua   # Menu script: opens the floating panel
-├── ObservationPanel.lua       # The floating panel itself
+├── ObservationPanel.lua       # The panel's window: view and wiring
+├── PanelCore.lua              # What the panel's buttons do, minus the UI
+├── RenderPhoto.lua            # Renders a JPEG with no export service to do it
+├── UploadCore.lua             # Creating and updating observations
+├── SyncCore.lua               # Sync logic, callable from any entry point
+├── LinkObservation.lua        # Adopting an observation that already exists
+├── SettingsMenu.lua           # Menu script: opens the settings window
+├── SettingsDialog.lua         # The settings window
+├── Settings.lua               # Reading, writing and validating settings
 ├── WindowFix.lua              # Fixes the panel's z-order (Windows only)
 ├── fix_window_z_order.ps1     # The Win32 helper WindowFix shells out to
-├── CredentialsMenu.lua        # Menu script: opens the credentials dialog
-├── CredentialsDialog.lua      # The credentials dialog itself
-├── LinkObservation.lua        # Adopting an observation that already exists
-├── SyncCore.lua               # Sync logic, callable from any entry point
-├── ExportServiceProvider.lua  # Publish service (upload to iNaturalist)
+├── InatAuth.lua               # Token acquisition and credential storage
+├── InatAPI.lua                # HTTP helpers wrapping iNaturalist REST API (LrHttp)
 ├── PluginUrls.lua             # Builds and parses lightroom:// plugin URLs
 ├── URLHandler.lua             # Receives those URLs and dispatches
 ├── TagsetInat.lua             # Metadata panel preset: the plugin's fields
-├── InatAPI.lua                # HTTP helpers wrapping iNaturalist REST API (LrHttp)
 └── CustomMetadata.lua         # Custom metadata schema definition
 ```
 
@@ -35,8 +42,13 @@ bottom when the item is clicked, so a file registered as a menu item cannot be
 required from anywhere else without performing its action as a side effect. Each
 one is a single line that calls into a real module.
 
+Each window is split the same way: `ObservationPanel` / `SettingsDialog` build
+views and wire buttons, and `PanelCore` / `Settings` hold what those buttons do.
+Only the second half can be tested outside Lightroom, so the split is drawn to
+leave as little as possible on the untestable side.
+
 `Library > Plug-in Extras` holds two items, and both of them only *open*
-something: **iNaturalist Panel** and **Set Up Credentials…**. That is the test
+something: **iNaturalist Panel** and **iNaturalist Settings…**. That is the test
 for whether something belongs in the menu — features live where the user is
 already looking, and a menu is somewhere you have to go.
 
@@ -60,23 +72,48 @@ version is:
 Nothing is both. Third-party products that appear to have a real panel are
 companion applications drawing their own window over the panel column.
 
-So the plugin spreads across three surfaces, each doing the part it can.
+So the plugin uses two: floating windows for everything it does, and the
+Metadata panel as a read-only display of what it has done.
 
-### The Publish Services panel — publishing
+### Why there is no publish service
 
-`ExportServiceProvider.lua` sets `supportsIncrementalPublish = "only"`, which
-turns the export target into a publish service. There is no `LrPublishService`
-manifest key; Adobe's own `Flickr.lrplugin` registers under
-`LrExportServiceProvider` and becomes a publish service the same way.
+The plugin was a publish service first (`supportsIncrementalPublish = "only"`
+on `LrExportServiceProvider` — there is no `LrPublishService` manifest key;
+Adobe's own `Flickr.lrplugin` registers the same way). It worked. It was
+removed anyway.
 
-That buys a left-panel entry, a real **Publish** button, Lightroom's own
-New/Modified/Published bookkeeping, and a settings dialog whose buttons can run
-code — which is where **Sync selected photos now** lives.
+A publish service models *choose photos, then send them*. That is right for a
+gallery and wrong here, because on iNaturalist the interesting question is
+**what is this animal**, and answering it needs the photo, a round trip to the
+vision API, a list of candidates, and a choice — before anything is sent. A
+publish service has nowhere to put that. Its only interactive surface is the
+connection dialog, which is not open at the moment of publishing and does not
+know the selection. The suggestions would have had to live somewhere other than
+the place you decide.
 
-Because the settings belong to the *connection* rather than to a batch,
-everything specific to one observation comes off the photo: species guess, date
-(`dateTimeOriginal`), GPS, description. The connection keeps only genuine
-preferences — default taxon, geoprivacy, project, and the two toggles.
+There is a real cost, and it is worth naming rather than pretending the
+replacement is strictly better:
+
+| Lost | Consequence |
+| --- | --- |
+| New / Modified / Published bookkeeping | The catalog no longer tells you at a glance what has been uploaded; the metadata fields do, one photo at a time. |
+| `metadataThatTriggersRepublish` | Editing a photo no longer flags it. Nothing re-uploads by itself. |
+| Removing a photo from a collection detaching it | Replaced by an explicit **Unlink**, which is narrower — it detaches in Lightroom only. |
+| The **Comments panel** | The largest loss. Only a publish service can fill it (`getCommentsFromPublishedCollection`, `addCommentToPublishedPhoto`), and it is exactly where iNaturalist's identifications and comments belong. |
+
+The ordinary Export target went with it, for a smaller reason: with no settings
+worth choosing per-export and the real workflow elsewhere, an iNaturalist entry
+in the Export dialog was a second, worse way in.
+
+**Migration.** The link between a photo and its observation lives in the
+photo's metadata, not in the published collection, so removing the service
+orphans nothing on either side. An existing published collection becomes an
+ordinary inert collection; delete it whenever. Photos in it keep working.
+
+One consequence worth knowing: `export_destinationType = "tempFolder"` is
+refused to a plugin that declares no export service provider — and the error
+names a different field entirely (`LR_export_destinationPathPrefix`). That is
+why `RenderPhoto.lua` manages its own temporary directory.
 
 ### The Metadata panel — data only
 
@@ -104,6 +141,22 @@ photo that could not offer it.
 `PluginUrls.lua` and `URLHandler.lua` stay, because OAuth needs the same
 mechanism to receive its `lightroom://com.github.inat-lightroom/authorization-redirect`
 callback.
+
+**Every field is read-only.** Two were editable and both were traps.
+`inat_species_guess` accepted text, wrote it to the catalog, and did nothing
+else — and given what `species_guess` means on iNaturalist (see [A species guess
+is not an identification](#a-species-guess-is-not-an-identification)) the text
+could then be uploaded and discarded with every step looking successful.
+`inat_observation_id` was how a photo adopted an existing observation, before
+the panel had a button that fetches it and asks; a text field applies to the
+whole selection with nothing to check it against.
+
+A panel of greyed-out fields reads as broken rather than deliberate, so the
+preset opens with a heading row saying where the controls are. That uses
+`{ formatter = "com.adobe.label", label = ... }`, which is a real tagset item —
+`LibraryToolkit.dll`'s formatter table maps `com.adobe.label` to `label`, and
+Adobe's shipped IPTC presets use exactly this shape for their own headings. It
+does mean a tagset's `items` list is no longer all strings.
 
 ### The floating panel — data and actions together
 
@@ -146,11 +199,68 @@ refresh that started earlier and finished later can leave the panel on the wrong
 photo, and there is nothing to correct it until the next click.
 
 The panel shows the selection, what the observation currently is, its quality
-grade and last sync, an editable **Species guess**, and buttons for **Sync**,
-**Link to Observation…** and **View on iNaturalist**. Everything below the
-heading describes the *first* selected photo and the heading says so — but
-saving a species guess deliberately applies to the whole selection, because one
-name across the six frames of the same animal is the common case.
+grade and last sync, a **Species guess** with a **Get Suggestions** button and a
+list of what came back, one button that is **Upload to iNaturalist** or **Update
+species guess** depending on whether the selection is already linked, and
+**Sync**, **Link to Observation…**, **View on iNaturalist** and **Unlink**.
+
+Everything below the heading describes the *first* selected photo and the
+heading says so. Uploading is the exception: it takes the whole selection into a
+single observation, because several frames of one animal is the usual reason to
+select several. Details come from the first photo.
+
+The upload button is one button that renames itself rather than two buttons, one
+of which is always wrong. Upload-or-update is a single decision, its answer is
+already on screen, and a disabled second button would only invite the question
+of why.
+
+**Suggestions cost differently depending on the photo, so they take different
+routes.** A linked photo can be scored by `GET /computervision/score_observation`
+— iNaturalist already holds the image, no render, and scoring the observation's
+own photos is a better question than scoring a fresh JPEG of one of them. Only
+an unlinked photo needs `RenderPhoto.renderForSuggestions` and
+`score_image`, and that render is cleaned up afterwards.
+
+`suggestionItems` maps list entries to *row positions*, not taxon ids, because a
+malformed result may have no id and a list that silently drops rows is worse
+than one that shows a row it cannot act on.
+
+### A species guess is not an identification
+
+`species_guess` is free text iNaturalist shows **only while an observation has
+no taxon**. As soon as anything identifies it — including the uploader — it is
+ignored. So a guess could be typed, saved, uploaded, and silently discarded,
+with every step reporting success. This is the single behaviour that shaped the
+whole panel.
+
+So when a taxon id is known the plugin posts an **identification**
+(`POST /identifications`), and uses free text only when nothing resolved.
+
+It never sets `taxon_id` through `updateObservation`. That moves the
+observation's taxon but leaves the author's earlier identification standing, so
+the observation disagrees with itself. Posting a new identification withdraws
+the previous one automatically.
+
+Every mutating path — upload, update, unlink's counterpart, link — ends in a
+sync, so the catalog is never left describing an older version of the
+observation than the one that now exists.
+
+### The settings window
+
+`SettingsDialog.lua` is a modal `f:tab_view` with three tabs: **Account**
+(credentials), **Observations** (geoprivacy, GPS, project, sync-after-upload,
+and **Sync All Linked Photos**) and **Image** (metadata inclusion, location and
+person stripping, watermark).
+
+These were the publish connection's settings. They had to go somewhere when the
+connection did, and they are genuine preferences rather than per-batch choices,
+so a settings window is where they belong. `Settings.lua` holds reading, writing
+and validation so the tabs stay declarative.
+
+Tab identifiers are exposed for testing: `ui.dll` raises *"Multiple
+tab_view_item views with the same identifier"* and *"tab_view_item needs to have
+a string or number identifier"*, and neither is discoverable without opening a
+modal dialog.
 
 One rough edge Lightroom leaves us: the window is created `WS_EX_TOPMOST` with
 no owner, so out of the box it floats above every application and does not
@@ -172,109 +282,97 @@ a URL.
 
 ## Custom metadata schema (`CustomMetadata.lua`)
 
-| Field ID | Type | Access | Description |
-|---|---|---|---|
-| `inat_observation_id` | `string` | editable | iNaturalist observation ID |
-| `inat_observation_uuid` | `string` | read-only | Observation UUID; the grouping key at publish time |
-| `inat_observation_url` | `url` | read-only | Direct URL to the observation |
-| `inat_taxon_id` | `string` | read-only | Taxon ID of the community determination |
-| `inat_taxon_name` | `string` | read-only | Scientific name of the taxon |
-| `inat_common_name` | `string` | read-only | Vernacular/common name |
-| `inat_quality_grade` | `string` | read-only | `casual`, `needs_id`, or `research` |
-| `inat_last_synced` | `string` | read-only | ISO 8601 timestamp of last sync |
-| `inat_species_guess` | `string` | editable | What to upload this photo as |
-| `inat_crop` | `string` | editable | iNat-specific crop, `x,y,w,h` |
+`schemaVersion = 4`. Every field is **read-only**; the panel writes them, the
+user does not.
 
-Everything mirroring iNaturalist state is read-only: an edit would be silently
-overwritten by the next sync, which is worse than not being editable. The
-observation ID stays editable on purpose — pasting one is how a photo adopts an
-observation that already exists.
+| Field ID | Type | Description |
+|---|---|---|
+| `inat_observation_id` | `string` | iNaturalist observation ID |
+| `inat_observation_uuid` | `string` | The observation's stable identifier |
+| `inat_observation_url` | `url` | Direct URL to the observation |
+| `inat_taxon_id` | `string` | Taxon ID of the community determination |
+| `inat_taxon_name` | `string` | Scientific name of the taxon |
+| `inat_common_name` | `string` | Vernacular/common name |
+| `inat_quality_grade` | `string` | `casual`, `needs_id`, or `research` |
+| `inat_last_synced` | `string` | ISO 8601 timestamp of last sync |
+| `inat_species_guess` | `string` | What the photo was last uploaded or identified as |
 
-`inat_species_guess` is deliberately separate from `inat_taxon_name`. One says
-what to upload, the other says what the community decided; merging them would
-let a sync quietly change what the next publish sends.
+Everything mirroring iNaturalist state would be silently overwritten by the next
+sync, which is worse than not being editable. The two that were once editable
+are covered above.
+
+`inat_species_guess` is deliberately separate from `inat_taxon_name`. One
+records what this photo was said to be, the other what the community decided;
+merging them would let a sync quietly rewrite the first.
 
 `inat_observation_url` is the only `url` field the preset shows, because it is
 the only one that is either filled in or hidden.
+
+`inat_crop` was removed in schema 4. It held `x,y,w,h` for an iNat-specific crop
+that was written by an export dialog that no longer exists and read by nothing
+that ever did — an editable box inviting input that went nowhere. The idea is
+not dead, but it belongs to the panel, and the field can come back when
+something reads it. The obvious design for it — drag a rectangle over a preview
+— is **not possible in pure Lua**: `LrView` has no canvas, no drawing primitives
+and no mouse coordinates, checked against the shipped binaries rather than
+assumed. Sliders bound to four numbers would work; so would creating a virtual
+copy with a different crop and uploading that, which puts the cropping in
+Lightroom's hands where it belongs.
 
 These fields appear in Lightroom's **Metadata** panel under the iNaturalist
 preset.
 
 ---
 
-## Publish workflow
+## Upload workflow
 
-One photo is one observation, unless photos share an `inat_observation_uuid`,
-in which case they publish into the same one.
+The whole selection becomes **one observation**. Details come from the first
+photo.
 
 ```
-User drags photos into the iNaturalist publish collection, clicks Publish
+Select photos, choose a suggestion (or type a guess), click Upload
         │
         ▼
-Lightroom renders each JPEG at 2048 px long edge (sRGB, q90)
+RenderPhoto renders each photo: JPEG, 2048 px long edge, sRGB, q90,
+into a temp folder the plugin owns and cleans up
         │
         ▼
-For each rendition:
-  photo has inat_observation_uuid?
-        │              │
-        │ no           │ yes
-        ▼              ▼
-  POST /observations   GET /observations?uuid=…
-  store .uuid and      found: PUT /observations/{id} with the photo's current
-  .id onto the photo   details (ignore_photos, or every photo is detached)
-                       gone:  POST /observations reusing the same uuid
+POST /observations   ← species_guess only if no taxon was resolved
         │
         ▼
-  POST /observation_photos           → recordPublishedPhotoId
+For each rendition: POST /observation_photos, then verify
         │
         ▼
-  republish? DELETE the previous observation_photo — only after the new
-  upload has succeeded, so a failure can never leave an observation with
-  zero photos (that drops it to casual grade permanently)
+zero photos attached? → do NOT record the link, and say so
+        │
+        ▼
+taxon resolved? → POST /identifications
         │
         ▼
 (optional) POST /project_observations
         │
         ▼
-(optional) sync taxa back for the photos just published
+sync taxa back for the photos just uploaded
 ```
 
-The connection's default taxon is a fallback, not an override: it is sent only
-when the photo has no species guess of its own, and never on an update. By
-republish time the observation may carry other people's identifications, and
-iNaturalist prefers `taxon_id` over `species_guess` — so sending it regardless
-would first discard what the user typed, then argue with the community.
+Uploads are verified rather than trusted: iNaturalist returns success before it
+has finished processing an image, so the plugin polls until it can confirm the
+photo attached, and retries if it cannot.
 
-Removing a photo from the published collection detaches its
-`observation_photo`; when the last photo of an observation goes, the
-observation goes with it.
-
-### iNat-specific crop — stored, not yet applied
-
-`inat_crop` holds `x,y,w,h` as fractions of the original. Nothing reads it yet;
-applying it at upload is Phase 2.
-
-The obvious design — drag a rectangle over a preview — is **not possible in
-pure Lua**. `LrView` has no canvas, no drawing primitives and no mouse
-coordinates, which was checked against the shipped binaries rather than
-assumed. See [lightroom-sdk-notes.md](lightroom-sdk-notes.md). What is
-available is sliders bound to the four numbers with a preview that redraws as
-they move, in a floating dialog.
-
-At upload time `processRenderedPhotos` would read the stored crop and produce a
-cropped JPEG rather than sending the rendition as-is.
-
-> **Alternative (simpler):** use a Lightroom virtual copy with a different crop
-> and publish that. The plugin could create the virtual copy automatically, and
-> Lightroom does the cropping.
+Refusing to record the link when nothing attached is deliberate. An observation
+with zero photos drops to casual grade permanently, and a recorded link would
+make the catalog claim a success that is not there — the next thing the user
+does would be an *update*, not a retry.
 
 ---
 
 ## Sync workflow
 
-Started from the publish service's settings dialog (the selected photos), from
-a `lightroom://` URL, or automatically after a publish (the photos that were
-just published — not the selection, which by then is usually something else).
+Started from the panel (the selection), from the settings window's **Sync All
+Linked Photos** (everything in the catalog with an observation ID), from a
+`lightroom://` URL, or automatically after an upload — in which case it syncs
+the photos that were just uploaded, not the selection, which by then is usually
+something else.
 
 ```
 SyncCore.lua reads inat_observation_id from each photo
@@ -296,14 +394,13 @@ Either way, write:
 ```
 
 **"No taxon yet" is not an error.** Nobody has identified an observation the
-moment it is created, so with sync-on-publish enabled it is the outcome of
-almost every first publish. It is counted separately (`Not identified yet`) and
+moment it is created, so with sync-after-upload enabled it is the outcome of
+almost every first upload. It is counted separately (`Not identified yet`) and
 reported as information.
 
-The write happens either way for a reason: the UUID is what stops the next
-publish creating a duplicate observation, and a photo linked by pasting the ID
-of something unidentified is exactly the case that needs it. An early return
-would drop it precisely when it mattered.
+The write happens either way for a reason: a photo linked to something
+unidentified is exactly the case that needs its UUID, URL and grade recorded,
+and an early return would drop them precisely then.
 
 ---
 
@@ -341,6 +438,11 @@ The Lightroom SDK provides `LrHttp` for HTTP requests. Key points:
 - Multipart form data (for photo upload) requires manually building the MIME boundary string.
 - SSL is supported but certificate errors will surface as empty responses; ensure the iNaturalist API certificate chain is valid on the user's machine.
 
+`score_image` is the trap here: its `lat`, `lng` and `observed_on` hints must be
+sent as **multipart form fields**. Sent as query parameters the request returns
+200 and every `frequency_score` is silently zero, so the suggestions come back
+plausible-looking and worse.
+
 A thin `InatAPI.lua` module wraps these calls and handles JSON encode/decode (via a bundled `json.lua`).
 
 ---
@@ -368,38 +470,43 @@ Using `LrCatalog:createKeyword(name, synonyms, includeOnExport, parent, skipIfAl
 ## Export size
 
 iNaturalist displays at most **2048 px** on the long edge and rejects uploads
-over roughly 20 MB. The publish service therefore locks JPEG / 2048 px long
-edge / sRGB / quality 90 in `updateExportSettings` rather than offering it as a
-default: a full-resolution raw conversion would fail the upload for an image
-nobody would ever see at that size.
+over roughly 20 MB. `RenderPhoto.lua` therefore fixes JPEG / 2048 px long edge /
+sRGB / quality 90 rather than offering it as a default: a full-resolution raw
+conversion would fail the upload for an image nobody would ever see at that
+size.
+
+Omitted export settings are the hazard. `fillInDefaultSettings` fills gaps from
+the *user's own last export*, not from documented defaults, so an omitted key is
+invisible on the machine that wrote it and a bug everywhere else. Four are set
+explicitly for that reason: `collisionHandling` (`"ask"` would open a dialog
+mid-render), `reimportExportedPhoto`, `export_postProcessing` (several shipped
+presets carry `"revealInFinder"`), and `includeVideoFiles`.
 
 ---
 
 ## What comes next
 
-**Phase 2 — the floating panel.** Started: `ObservationPanel.lua` follows the
-selection and carries the actions. Still to come, in it:
+**Now.** The panel is the whole interface. What is missing from it:
 
-- A **crop preview** and sliders bound to `inat_crop`. `f:catalog_photo` shows a
-  live catalog photo but applies Lightroom's own crop and cannot show a custom
-  region; overlays go on with `f:view { place = "overlapping" }` and `f:picture`.
-  Draggable handles are impossible — `LrView` has no canvas and no mouse
-  coordinates. It is not yet known whether `catalog_photo`'s `photo` property can
-  be re-bound to follow the selection, or whether the window has to be rebuilt.
-- A **Publish** button.
-- **Group into observation**, for the several-frames-of-one-animal case. This is
-  the one thing that needs a client-side UUID generator, since it has to invent
-  an ID before any observation exists.
+- **Group into observation** across separate uploads. Uploading a selection
+  already produces one observation, so this only matters for adding to one
+  later. It needs a client-side UUID generator, since it has to invent an ID
+  before any observation exists.
+- A **crop**. `f:catalog_photo` shows a live catalog photo but applies
+  Lightroom's own crop and cannot show a custom region; overlays go on with
+  `f:view { place = "overlapping" }` and `f:picture`. Draggable handles are
+  impossible — `LrView` has no canvas and no mouse coordinates.
 
-**Phase 3 — OAuth**, once the iNaturalist application is approved.
+**OAuth**, once the iNaturalist application is approved (revisit October 2026).
 
-**Phase 4 — the Comments panel.** A publish service can fill in Lightroom's own
-Comments panel through `getCommentsFromPublishedCollection`,
-`canAddCommentsToService` and `addCommentToPublishedPhoto`. iNaturalist
-identifications and comments map onto it directly, and
-`getRatingsFromPublishedCollection` + `titleForPhotoRating` could carry the
-faves count. This is the panel the whole design started out trying to sit next
-to; a publish service does not get a panel beside it, it fills it in.
+**The Comments panel** is now out of reach, and it was the panel this whole
+design started out trying to sit next to. Only a publish service can fill it
+(`getCommentsFromPublishedCollection`, `canAddCommentsToService`,
+`addCommentToPublishedPhoto`, and `getRatingsFromPublishedCollection` +
+`titleForPhotoRating` for the faves count). Recovering it would mean a publish
+service existing *alongside* the panel purely as a comments feed, which may yet
+be worth it — the objection to a publish service was that it is a bad place to
+identify a photo, not that it is a bad place to read comments.
 
 Smaller ideas:
 

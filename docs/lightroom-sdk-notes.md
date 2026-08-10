@@ -323,6 +323,32 @@ attachErrorDialogToFunctionContext showStringsDialog
 handles and hit-testing are impossible in pure Lua. Nobody in the ecosystem has
 done it.
 
+#### `f:simple_list` is real, but undocumented
+
+It sits in the constructor list above, beside `popup_menu`. The string
+`simple_list` appears **exactly once** in the whole binary — the factory entry —
+so it has no property surface to scan for. Its implementation chunk (index
+~265542 in `ui.dll`) gives it away instead: it builds a `table_view` inside a
+`scroll_view`, reading
+
+```
+bind_to_object auto_resize width autoresize_columns no_column_headers
+allows_multiple_selection fill columns title resizable truncation
+value items selected_indexes height enabled visible
+```
+
+which is enough to conclude it takes `items` and a `value`, and that the SDK's
+usual `{ title = ..., value = ... }` item shape is the one to try.
+
+**"The binary accepts these keys" is not "this displays."** This plugin uses it
+for the panel's suggestions list, isolated in `ObservationPanel.suggestionsView`
+so that falling back to `f:popup_menu` is a one-line change. Until it has been
+seen on screen, treat this entry as inference.
+
+Same caution for a bound `title` on `f:push_button`: the panel's Upload/Update
+button relies on it, and the failure mode would be a blank button rather than an
+error.
+
 ### The floating window, in detail
 
 `LrDialogs.presentFloatingDialog(_PLUGIN, { ... })` is the only non-modal,
@@ -483,7 +509,9 @@ There is **no `LrPublishService` manifest key.** The string exists inside
 `LibraryToolkit.dll` but it is internal; Adobe's own `Flickr.lrplugin` registers
 under `LrExportServiceProvider` and becomes a publish service by setting
 `supportsIncrementalPublish = "only"` on the provider table. **Confirmed in the
-host**: the plugin ships this way and appears in the Publish Services panel.
+host**: this plugin shipped that way for a while and appeared in the Publish
+Services panel. It no longer does — the panel replaced it, for reasons in
+[plugin-architecture.md](plugin-architecture.md) — but the finding stands.
 
 Over a plain export target it adds:
 
@@ -599,6 +627,25 @@ holds that list and asserts this plugin's tagsets stay inside it.
 
 Plugin fields are addressed as `<LrToolkitIdentifier>.<field id>`; a bare field
 ID silently resolves to nothing.
+
+### A tagset item can be a table, not just a field ID
+
+Two formatters take that form. The formatter table in `LibraryToolkit.dll`
+(index ~28441) maps `com.adobe.separator → separator` and
+`com.adobe.label → label`, and Adobe's own shipped IPTC and IPTC Extension
+tagsets use `com.adobe.label` to draw their "Contact" and "Description"
+headings:
+
+```lua
+{ formatter = "com.adobe.label", label = LOC "$$$/…=Some heading" },
+```
+
+This plugin uses one to say where its controls are, since a panel of read-only
+fields with no explanation reads as broken.
+
+The consequence bites tests rather than the plugin: a tagset's `items` list is
+no longer all strings, so anything iterating it to check field IDs has to skip
+the tables first.
 
 ## `LrLogger` writes nothing until it is enabled
 

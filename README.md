@@ -8,7 +8,6 @@ Exploratory work around [iNaturalist](https://www.inaturalist.org/) APIs, with t
 
 ### 1. Upload photos to iNaturalist
 
-- **iNat-specific crop** – choose a crop used only for the iNaturalist upload, independent of the main Lightroom crop.
 - **Multi-photo observations** – select multiple photos of the same species and associate them with a single iNaturalist observation record.
 - **Native resolution** – export at iNaturalist's recommended maximum (2048 px on the long edge) so Lightroom never has to upscale or over-downscale.
 - **Two-way link** – write the iNaturalist observation ID back to the Lightroom photo as custom metadata so the two records stay connected.
@@ -26,34 +25,42 @@ Any other useful functionality identified as the project matures.
 
 ## Status
 
-The plugin does the full round trip today: publish a photo from Lightroom, have
-it become an iNaturalist observation with the image attached, and sync the
-community determination back as a taxonomic keyword tree. Verified end to end
-against the live API — there is no iNaturalist sandbox, so every test writes to
-a real account.
+The plugin does the full round trip today: identify a photo, upload it as an
+iNaturalist observation with the image attached, and sync the community
+determination back as a taxonomic keyword tree. Verified end to end against the
+live API — there is no iNaturalist sandbox, so every test writes to a real
+account.
 
-It lives in the **Publish Services** panel, so Lightroom tracks what is new,
-modified and published. Republishing an edited photo pushes its current details
-to the existing observation and replaces the uploaded image rather than
-creating a duplicate, and removing a photo from the collection detaches it on
-iNaturalist.
+Everything happens in a floating **iNaturalist panel** (Library → Plug-in
+Extras). It follows the filmstrip selection, asks iNaturalist's vision model
+what the photo is, and turns the answer into an upload or an identification on
+an observation you already have. A second window holds settings: credentials,
+export options, and a sync of everything in the catalog that is linked.
 
-There is also a floating **iNaturalist panel** (Library → Plug-in Extras) that
-follows the filmstrip selection and carries the per-photo actions. Lightroom
-gives a plugin no docked surface that can hold a button — that was checked
-against the shipped binaries, not assumed — so a floating window is as close to
-a panel as a plugin gets. On Windows it is nudged into behaving like one: a
-small helper hands the window to Lightroom so it stays above Lightroom, and
-only Lightroom, instead of the whole desktop.
+Lightroom gives a plugin no docked surface that can hold a button — that was
+checked against the shipped binaries, not assumed — so a floating window is as
+close to a panel as a plugin gets. On Windows it is nudged into behaving like
+one: a small helper hands the window to Lightroom so it stays above Lightroom,
+and only Lightroom, instead of the whole desktop.
+
+The **Metadata panel** carries an iNaturalist preset, but it is display only.
+It shows what the observation says; it does not change it.
+
+There was a Publish Service and an ordinary Export target. Both are gone. A
+publish service gives you Lightroom's new/modified/published bookkeeping, but
+it makes publishing the moment you identify a photo, and by then it is too late
+to ask what the photo is. See [`docs/plugin-architecture.md`](docs/plugin-architecture.md)
+for what that costs and why it was still worth it — and for what to do if you
+have an existing published collection.
 
 Authentication is currently a pasted API token, which expires daily. The
 frictionless path needs an approved iNaturalist application, and since 2022
 those are reviewed manually. See [`plugin/README.md`](plugin/README.md).
 
-Rough edges worth knowing: one photo is one observation so far (grouping several
-photos into a single observation is next), the iNat crop is stored but not yet
-applied at upload, and the AI species suggestions are prototyped in Python but
-not in the plugin.
+Rough edges worth knowing: an upload takes the whole selection into one
+observation, but there is no way yet to group photos across separate uploads;
+and the panel's suggestions list has not been through a full host round trip on
+macOS.
 
 ---
 
@@ -73,26 +80,31 @@ inat-lightroom/
 │   ├── suggest_species.py       # Computer-vision species suggestions
 │   ├── lua_harness.py           # Runs the plugin's Lua outside Lightroom
 │   ├── check_lua.py             # Parses the plugin under Lua 5.1
-│   └── test_*_lua.py            # Tests over the plugin's actual Lua
+│   ├── test_*_lua.py            # Tests over the plugin's actual Lua
+│   └── mutate_*.py              # Breaks the plugin on purpose to check the
+│                                #   tests would notice
 │
 └── plugin/                      # Adobe Lightroom Classic plugin (Lua)
     ├── README.md
     └── inat.lrplugin/
         ├── Info.lua             # Plugin identity, version, menu, tagsets, URL handler
         ├── ObservationPanelMenu.lua  # Plug-in Extras entry: opens the panel
-        ├── ObservationPanel.lua # Floating panel that follows the selection
+        ├── ObservationPanel.lua # The panel's window: view and wiring
+        ├── PanelCore.lua        # What its buttons do, minus the UI
+        ├── RenderPhoto.lua      # Renders a JPEG without an export service
+        ├── UploadCore.lua       # Creating and updating observations
+        ├── SyncCore.lua         # Sync taxon data → Lightroom keywords
+        ├── LinkObservation.lua  # Adopting an existing observation
+        ├── SettingsMenu.lua     # Plug-in Extras entry: settings
+        ├── SettingsDialog.lua   # The settings window
+        ├── Settings.lua         # Reading, writing and validating settings
         ├── WindowFix.lua        # Keeps the panel above Lightroom, not the desktop
         ├── fix_window_z_order.ps1 # The Win32 helper it shells out to
-        ├── CredentialsMenu.lua   # Plug-in Extras entry: credentials
-        ├── CredentialsDialog.lua # The credentials dialog itself
-        ├── LinkObservation.lua  # Adopting an existing observation
         ├── InatAuth.lua         # Token acquisition and credential storage
         ├── InatAPI.lua          # HTTP client for the iNaturalist REST API
-        ├── ExportServiceProvider.lua  # Publish service (upload to iNaturalist)
-        ├── SyncCore.lua         # Sync taxon data → Lightroom keywords
         ├── PluginUrls.lua       # Builds and parses lightroom:// plugin URLs
         ├── URLHandler.lua       # Receives those URLs and dispatches
-        ├── TagsetInat.lua       # Metadata panel preset
+        ├── TagsetInat.lua       # Metadata panel preset (display only)
         ├── CustomMetadata.lua   # Custom metadata schema
         ├── Log.lua              # Shared logger
         └── json.lua             # Bundled JSON encoder/decoder
