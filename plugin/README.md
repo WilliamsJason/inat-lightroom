@@ -15,8 +15,8 @@ This directory contains the **inat.lrplugin** Adobe Lightroom Classic plugin.
 
 ## First-time setup
 
-Go to **Library → Plug-in Extras → Set Up Credentials…**. There are two ways to
-authenticate, and the dialog offers both.
+Go to **Library → Plug-in Extras → iNaturalist Settings…** and open the
+**Account** tab. There are two ways to authenticate, and the tab offers both.
 
 ### Option 1 — paste an API token (works today)
 
@@ -44,81 +44,55 @@ or more improving identifications for other users in the past month. Apply at
 
 Everything is stored in Lightroom's encrypted password store (`LrPasswords`),
 which is backed by the OS credential vault. Nothing is written to disk by the
-plugin. Use **Clear Stored Credentials** in the same dialog to remove it all.
+plugin. Use **Clear Stored Credentials** on the same tab to remove it all.
 
 ---
 
 ## Usage
 
-### Upload photos as iNaturalist observations
+Everything the plugin does happens in two floating windows, both under
+**Library → Plug-in Extras**. There is no Publish Service and no iNaturalist
+entry in the Export dialog — see [Why there is no publish
+service](#why-there-is-no-publish-service).
 
-1. In the **Publish Services** panel on the left of the Library module, click
-   the **+** next to **iNaturalist** (or **Set Up…** the first time) to create a
-   connection.
-2. In the settings dialog:
-   - **Default taxon** – a fallback for photos with no species guess of their own.
-   - **Geoprivacy** – open, obscured, or private.
-   - **Project ID** – optionally add every observation to a project.
-   - Whether to upload the photo's GPS location, and whether to sync taxa back
-     after publishing.
-3. Drag photos into the collection and click **Publish**.
+### The iNaturalist panel
 
-Each photo becomes its own observation. Species, date, location and description
-come from the photo itself — set the species with **Species Guess (upload)** in
-the Metadata panel's iNaturalist preset.
+**Library → Plug-in Extras → iNaturalist Panel** opens a window that follows
+whatever is selected in the filmstrip. It shows what the selection currently is
+on iNaturalist — observation ID, taxon, common name, quality grade, last sync —
+and carries every action.
 
-Lightroom then tracks the collection for you: photos are New, Modified or
-Published, and editing a photo's species guess or crop marks it for republish.
-Republishing pushes the photo's current details to the existing observation and
-replaces the uploaded image on it, rather than creating a second one; removing
-a photo from the collection detaches it on iNaturalist too.
+The usual run of it:
 
-The connection's **Default taxon** is a fallback only. A photo with its own
-species guess keeps it — iNaturalist prefers a taxon ID over free text, so
-sending both would mean the connection-wide default silently won. The default
-is also never re-sent on a republish, where the observation may already carry
-identifications from other people.
+1. Select the photo, or several photos of the same individual.
+2. Click **Get Suggestions**. The plugin asks iNaturalist's vision model what
+   the photo is and lists what comes back, best first, with how confident it is.
+3. Click a suggestion. It fills in **Species guess** and, invisibly, the taxon
+   ID behind it.
+4. Click **Upload to iNaturalist** — or, if the selection is already linked to
+   an observation, **Update species guess**.
 
-The export settings (JPEG, 2048 px long edge, sRGB, quality 90) are locked by
-the plugin. iNaturalist rejects uploads over roughly 20 MB and displays at most
-2048 px, so exporting a full-resolution raw conversion would fail for no gain.
+The button is one button that changes its name, because upload-or-update is one
+decision and the answer is already on screen. Uploading takes the whole
+selection into a **single observation** with several photos, which is what
+selecting several frames of one animal usually means. Date, location and
+description come from the first photo.
 
-Each photo upload is verified after the fact rather than trusted: iNaturalist
-returns success before it has finished processing an image, so the plugin polls
-until it can confirm the photo really attached, and retries if it cannot. If a
-photo still fails, the plugin says so explicitly instead of leaving you with a
-silently empty observation.
+Suggestions cost nothing extra once a photo is linked: iNaturalist can score an
+observation it already holds, and scoring its own photos is a better question
+than scoring a fresh JPEG. Only a photo that has never been uploaded needs
+rendering first.
 
-### Sync taxon data back to Lightroom
+The other buttons:
 
-1. Select photos that already have an iNaturalist observation ID.
-2. Click **Sync selected photos now** in the publish service's settings dialog
-   (right-click the service → **Edit Settings…**).
-3. The plugin fetches the latest community determination from iNaturalist and:
-   - Creates/updates the taxonomic keyword hierarchy under an **iNaturalist** root keyword.
-   - Updates the custom metadata fields (taxon name, common name, quality grade, etc.).
-
-Ticking **Sync taxa back from iNaturalist after publishing** does this
-automatically at the end of every publish.
-
-A freshly created observation has no community taxon until somebody identifies
-it, so **Not identified yet** is the normal result for anything just published.
-It is reported separately from errors, and the sync still records the
-observation's UUID, URL and quality grade.
-
----
-
-## The iNaturalist panel
-
-**Library → Plug-in Extras → iNaturalist Panel** opens a floating window that
-follows whatever is selected in the filmstrip. It is the only place that has
-both the photo's iNaturalist state and the buttons that act on it — the Metadata
-panel is docked but cannot hold a control, and the publish service has controls
-but no per-photo detail.
-
-It shows what the selected photo currently is on iNaturalist, its quality grade
-and last sync, an editable **Species guess**, and buttons for **Sync**, **Link
-to Observation…** and **View on iNaturalist**.
+- **Sync** — pull the current community determination for the selection.
+- **Link to Observation…** — adopt an observation that already exists on
+  iNaturalist, made in the app or on the web. Paste its ID; the plugin fetches
+  it and asks you to confirm before attaching.
+- **View on iNaturalist** — open it in a browser.
+- **Unlink** — forget the observation. It asks first, and it does not touch
+  iNaturalist or remove the keywords already synced; it only detaches the
+  Lightroom photo.
 
 The window remembers where you put it, so drag it somewhere out of the way once
 and it will reopen there. Close it and the menu item brings it back.
@@ -132,10 +106,84 @@ and clears the always-on-top flag. It touches nothing but that one window, and
 if it fails the panel simply stays always-on-top. On macOS it does not run at
 all.
 
-With several photos selected, everything shown describes the *first* one and the
-heading says so. Saving a species guess is the exception: it deliberately
-applies to the whole selection, since one name across several frames of the same
-animal is the usual reason to select several.
+### A species guess is not an identification
+
+This is the one piece of iNaturalist behaviour worth understanding, because it
+looks like it works when it does not.
+
+`species_guess` is free text iNaturalist shows *only while an observation has no
+taxon*. The moment anything identifies it — including you — it is ignored. So
+the plugin does not send a guess when it knows better. If a suggestion was
+chosen, it posts a real **identification**; the free text is used only when
+nothing could be resolved to a taxon.
+
+It also never sets the observation's taxon directly. That moves the taxon but
+leaves your earlier identification standing, so the observation ends up
+disagreeing with itself. Posting a new identification withdraws the old one.
+
+### The settings window
+
+**Library → Plug-in Extras → iNaturalist Settings…**, in three tabs:
+
+- **Account** — credentials, as above.
+- **Observations** — what new observations say: geoprivacy, whether to send the
+  photo's GPS coordinates, an optional project ID, and whether to sync taxa back
+  after uploading. Also **Sync All Linked Photos**, which refreshes every photo
+  in the catalog that has an observation ID.
+- **Image** — what gets uploaded: which metadata to include, whether to strip
+  location or person info, and an optional copyright watermark.
+
+Uploads are always JPEG, sRGB, 2048 px on the long edge, quality 90, and that is
+not adjustable. iNaturalist rejects uploads over roughly 20 MB and displays at
+most 2048 px, so a full-resolution raw conversion would fail for no gain.
+
+Each photo upload is verified after the fact rather than trusted: iNaturalist
+returns success before it has finished processing an image, so the plugin polls
+until it can confirm the photo really attached, and retries if it cannot. If a
+photo still fails, the plugin says so explicitly instead of leaving you with a
+silently empty observation.
+
+### Syncing taxa back
+
+Every path that changes something on iNaturalist ends in a sync, so the catalog
+is not left describing an older version of the observation. You can also sync
+on demand from the panel, or across the whole catalog from settings.
+
+A sync fetches the current community determination and:
+
+- creates or updates the taxonomic keyword hierarchy under an **iNaturalist**
+  root keyword, so searching any rank finds the photo;
+- updates the custom metadata fields.
+
+A freshly created observation has no community taxon until somebody identifies
+it, so **Not identified yet** is the normal result for anything just uploaded.
+It is reported separately from errors, and the sync still records the
+observation's UUID, URL and quality grade.
+
+---
+
+## Why there is no publish service
+
+The plugin used to be a Publish Service, and briefly an ordinary Export target
+as well. Both are gone.
+
+A publish service is a good fit for a gallery: you choose the photos, and
+publishing is the whole interaction. It is a bad fit here, because on
+iNaturalist the interesting question is *what is this animal*, and a publish
+service has nowhere to ask it. Suggestions would have had to live in a
+connection dialog that is not open at the moment you need it, on a selection it
+does not know about.
+
+What that costs, honestly: Lightroom's New / Modified / Published bookkeeping,
+`metadataThatTriggersRepublish`, and — the loss worth naming — the **Comments
+panel**, which only a publish service can fill in, and which is where
+iNaturalist's identifications and comments would have belonged.
+
+**If you used the publish service:** the observation link lives in the photo's
+metadata, not in the collection, so nothing is orphaned on iNaturalist and
+nothing needs re-uploading. The old published collection is inert; delete it
+when convenient. Removing a photo from it no longer detaches anything — use
+**Unlink** on the panel.
 
 ---
 
@@ -143,22 +191,20 @@ animal is the usual reason to select several.
 
 The plugin's fields live in the **Metadata** panel. Open the drop-down at the
 top left of that panel and choose **iNaturalist**. The panel then shows the file
-name and every iNaturalist field.
+name and every iNaturalist field, with a line at the top pointing at the panel.
 
 Switching back to **Default** gets your usual metadata fields back — the two
 presets are one drop-down apart, so use whichever suits what you are doing.
 
-Two fields are yours to edit:
+**Every field is read-only.** The Metadata panel is a display, not a control.
+Two fields used to be editable and both were quietly broken:
 
-- **Species Guess (upload)** — what to upload this photo as. Kept separate from
-  **Taxon Name**, which holds what the iNaturalist community decided and is
-  overwritten by every sync.
-- **Observation ID** — pasting an ID here attaches the photo to an observation
-  that already exists on iNaturalist, which is how you adopt observations made
-  in the app or on the web. Sync afterwards to pull its data in.
-
-Everything else is read-only, because it mirrors iNaturalist and the next sync
-would overwrite an edit.
+- **Species Guess** wrote a string to the catalog and did nothing else. Given
+  what `species_guess` actually means (above), a guess typed here could be
+  saved, uploaded, and silently discarded, with every step looking successful.
+- **Observation ID** was how you adopted an existing observation, before the
+  panel had a button that fetches it and asks you to confirm. A text field
+  applies to the whole selection with nothing to check it against.
 
 ---
 
@@ -166,16 +212,15 @@ would overwrite an edit.
 
 | Field | Description |
 |---|---|
-| **Species Guess (upload)** | What to upload this photo as (editable) |
-| **Observation ID** | iNaturalist observation ID (editable) |
-| **Observation UUID** | Identifies the observation across republishes |
+| **Species Guess** | What the photo was last uploaded or identified as |
+| **Observation ID** | iNaturalist observation ID |
+| **Observation UUID** | The observation's stable identifier |
 | **Observation URL** | Direct link to the observation |
 | **Taxon ID** | ID of the community-determined taxon |
 | **Taxon Name** | Scientific name |
 | **Common Name** | Vernacular/common name |
 | **Quality Grade** | `casual`, `needs_id`, or `research` |
 | **Last Synced** | Timestamp of the last sync |
-| **iNat Crop** | Crop used only for the uploaded image |
 
 ---
 
@@ -189,27 +234,41 @@ The plugin is written in **Lua** using the [Lightroom Classic SDK](https://www.a
 inat.lrplugin/
 ├── Info.lua                   # Plugin identity, version, menu, tagsets, URL handler
 ├── ObservationPanelMenu.lua   # Plug-in Extras entry: opens the panel
-├── ObservationPanel.lua       # The floating panel itself
+├── ObservationPanel.lua       # The panel's window: view and wiring
+├── PanelCore.lua              # What the panel's buttons do, minus the UI
+├── RenderPhoto.lua            # Renders a JPEG without an export service
+├── UploadCore.lua             # Creating and updating observations
+├── SyncCore.lua               # Sync logic, callable from any entry point
+├── LinkObservation.lua        # Adopting an existing observation
+├── SettingsMenu.lua           # Plug-in Extras entry: opens settings
+├── SettingsDialog.lua         # The settings window
+├── Settings.lua               # Reading, writing and validating settings
 ├── WindowFix.lua              # Fixes the panel's z-order (Windows only)
 ├── fix_window_z_order.ps1     # The Win32 helper WindowFix shells out to
-├── CredentialsMenu.lua        # Plug-in Extras entry: opens the credentials dialog
-├── CredentialsDialog.lua      # The credentials dialog itself
-├── LinkObservation.lua        # Adopting an existing observation
-├── SyncCore.lua               # Sync logic, callable from any entry point
 ├── InatAuth.lua               # Token acquisition and credential storage
 ├── InatAPI.lua                # HTTP client for the iNaturalist REST API
-├── ExportServiceProvider.lua  # Publish service (upload to iNaturalist)
 ├── PluginUrls.lua             # Builds and parses lightroom:// plugin URLs
 ├── URLHandler.lua             # Receives those URLs and dispatches
 ├── TagsetInat.lua             # Metadata panel preset: the plugin's fields
-├── CustomMetadata.lua         # Custom metadata schema
+├── CustomMetadata.lua         # Custom metadata schema (schemaVersion 4)
 ├── Log.lua                    # Shared, enabled logger
 └── json.lua                   # Bundled JSON encoder/decoder
 ```
 
+Each window is split in two: the `*Dialog` / `*Panel` file builds the view and
+wires the buttons, and a plain-Lua module beside it holds what those buttons
+actually do. Only the second half can be tested outside Lightroom, so the aim is
+for the first half to be too boring to be wrong.
+
+`RenderPhoto.lua` exists because rendering a JPEG normally belongs to an export
+service, and this plugin no longer has one. It drives `LrExportSession` directly
+into a temporary folder — `export_destinationType = "tempFolder"` is refused to
+a plugin that declares no export service provider, and the error names a
+different field, so this took a host round trip to establish.
+
 Lightroom runs a menu-item script top to bottom when the item is clicked, which
 means such a file cannot be required from anywhere else without performing its
-action as a side effect. `CredentialsMenu.lua` and `ObservationPanelMenu.lua`
+action as a side effect. `SettingsMenu.lua` and `ObservationPanelMenu.lua`
 are therefore one-line launchers; the real work lives in the modules they call.
 
 `InatAPI.lua` is a deliberate mirror of `explore/inat_api.py`, which was used to
@@ -240,6 +299,21 @@ stubbed `Lr*` modules, so token handling, HTTP shapes, keyword building and
 error paths are all testable without installing anything. It cannot tell you
 whether the real SDK matches the stubs, so new SDK calls still need one pass
 through Lightroom.
+
+A passing test proves nothing until it has been seen to fail. Each `mutate_*.py`
+script breaks the plugin on purpose — one plausible mistake at a time, described
+in the words of the bug it would be — runs the suite, and reports any mutation
+nothing noticed:
+
+```powershell
+.\.venv\Scripts\python.exe mutate_panel.py        # panel, metadata, tagset
+.\.venv\Scripts\python.exe mutate_upload_core.py
+.\.venv\Scripts\python.exe mutate_settings.py
+.\.venv\Scripts\python.exe mutate_render_photo.py
+```
+
+A survivor is the interesting result. Twice so far it has been a bad mutation
+rather than a missing test, which is worth checking before writing anything.
 
 The SDK behaviours that have actually broken this plugin — and how each is
 guarded — are written up in
