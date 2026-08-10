@@ -42,7 +42,7 @@ return {
     -- where the controls actually are.
     {
       formatter = "com.adobe.label",
-      label     = LOC "$$$/iNatLightroom/Tagset/Hint=Edit in Library > Plug-in Extras > iNaturalist Panel",
+      label     = LOC "$$$/iNatLightroom/Tagset/Hint=Edit in File > Plug-in Extras > iNaturalist Panel",
     },
 
     prefix .. "inat_species_guess",

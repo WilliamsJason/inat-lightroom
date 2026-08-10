@@ -61,12 +61,20 @@ return {
   -- same reason we will -- receiving an OAuth authorization code.
   URLHandler = "URLHandler.lua",
 
-  -- Library menu extras.
+  -- File > Plug-in Extras.
   --
   -- Two items, both of which open a window, because windows are now the only
   -- way into this plugin. The panel needs a way to be summoned back after it
   -- is closed, and settings has to be reachable before anything works at all.
-  LrLibraryMenuItems = {
+  --
+  -- The key name is a lie inherited from the SDK: `LrExportMenuItems` has
+  -- nothing to do with exporting. `Library.lrmodule` hangs one shared
+  -- "Plug-in Extras" submenu off three parents, and this key selects File --
+  -- see docs/lightroom-sdk-notes.md for the disassembly. File is the right
+  -- parent because the Library menu only exists in the Library module, while
+  -- both of these items open floating windows that work from anywhere, and
+  -- neither is an operation on the selected photos.
+  LrExportMenuItems = {
     {
       title = LOC "$$$/iNatLightroom/Menu/Panel=iNaturalist Panel",
       file  = "ObservationPanelMenu.lua",
