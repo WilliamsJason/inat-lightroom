@@ -270,6 +270,7 @@ stubs.LrFunctionContext = {
 local catalogWrites = {}
 local createdKeywords = {}
 local targetPhotos = {}
+local allPhotos = {}
 local publishedCollections = {}
 local catalog
 
@@ -347,6 +348,21 @@ catalog = {
 
   getTargetPhotos = function() return targetPhotos end,
 
+  -- The catalog's own index of photos carrying a value for one plugin field.
+  -- Deliberately returns photos whose value is the empty string too, because
+  -- the real one does: an unlinked photo keeps the field and empties it rather
+  -- than losing it, and code that trusts this call without filtering will sync
+  -- photos that are not linked to anything.
+  findPhotosWithProperty = function(_self, pluginId, fieldName)
+    local found = {}
+    for _, photo in ipairs(allPhotos) do
+      if pluginId == _PLUGIN.id and photo._props[fieldName] ~= nil then
+        found[#found + 1] = photo
+      end
+    end
+    return found
+  end,
+
   getPublishedCollectionByLocalIdentifier = function(_self, localId)
     return publishedCollections[localId]
   end,
@@ -405,6 +421,7 @@ return {
   createdKeywords = createdKeywords,
   newPhoto = newPhoto,
   setTargetPhotos = function(photos) targetPhotos = photos end,
+  setAllPhotos = function(photos) allPhotos = photos end,
 
   -- Build the object tree deletePhotosFromPublishedCollection walks: a
   -- collection of published photos, each pairing a remote ID with a catalog
@@ -614,6 +631,10 @@ class LuaPlugin:
     def set_target_photos(self, photos) -> None:
         """Set what catalog:getTargetPhotos() returns."""
         self.env["setTargetPhotos"](self.runtime.table_from(list(photos)))
+
+    def set_all_photos(self, photos) -> None:
+        """Set the catalog that findPhotosWithProperty searches."""
+        self.env["setAllPhotos"](self.runtime.table_from(list(photos)))
 
     def run_pending_tasks(self, reverse: bool = False) -> None:
         """Run queued async tasks, as Lightroom would once the caller returns.

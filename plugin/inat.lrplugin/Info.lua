@@ -15,16 +15,24 @@ return {
   LrPluginName        = LOC "$$$/iNatLightroom/PluginName=iNaturalist",
   LrPluginInfoUrl     = "https://github.com/WilliamsJason/inat-lightroom",
 
-  -- Publish service (upload photos to iNaturalist as observations).
+  -- No LrExportServiceProvider key, deliberately.
   --
-  -- There is no separate LrPublishService manifest key: a publish service is
-  -- an export service provider whose table sets supportsIncrementalPublish.
-  -- Adobe's own bundled Flickr.lrplugin declares itself exactly this way.
-  LrExportServiceProvider = {
-    title          = LOC "$$$/iNatLightroom/ExportTitle=iNaturalist",
-    file           = "ExportServiceProvider.lua",
-    builtInPresent = false,
-  },
+  -- That one key is both the publish service and the "iNaturalist" entry in
+  -- the ordinary Export dialog, so removing it removes both. It used to be
+  -- here, and the publish service was genuinely the best surface available
+  -- before the floating panel worked -- it had a Publish button in the left
+  -- panel, and Lightroom tracked New / Modified / Published for us.
+  --
+  -- It goes because two ways in is worse than one. Publishing kept its own
+  -- idea of what had been uploaded, in the published-collection records, next
+  -- to this plugin's idea of the same thing in custom metadata; they could
+  -- disagree, and when they did neither was obviously wrong. The panel has the
+  -- selection in front of it and the metadata on the photos, and that is
+  -- enough.
+  --
+  -- Removing it makes Lightroom drop the published collection. Nothing is
+  -- actually lost: the observation ID, UUID and URL live in custom metadata on
+  -- the photos and survive. See docs/plugin-architecture.md.
 
   -- Custom metadata panel shown in the Metadata panel set
   LrMetadataProvider = "CustomMetadata.lua",
@@ -39,8 +47,7 @@ return {
   -- close as a plugin gets to owning a section of that column, so that is where
   -- this plugin's data lives. Only its data: LibraryToolkit.dll validates
   -- custom fields down to 'string', 'enum' or 'url', so nothing there can
-  -- become a control. Actions live on the publish service and in the floating
-  -- panel below.
+  -- become a control. Actions live in the floating panel below.
   --
   -- One preset, not two. A preset replaces the panel contents rather than
   -- adding to them, and the answer to wanting the ordinary fields back is to
@@ -56,11 +63,9 @@ return {
 
   -- Library menu extras.
   --
-  -- Two items, both of which open something. Credentials because nothing works
-  -- until they are entered, and the panel because a floating window needs a way
-  -- to be summoned back after it is closed. Everything else belongs on the
-  -- publish service or in the panel itself, which are in front of the user
-  -- while they work; a menu is not.
+  -- Two items, both of which open a window, because windows are now the only
+  -- way into this plugin. The panel needs a way to be summoned back after it
+  -- is closed, and settings has to be reachable before anything works at all.
   LrLibraryMenuItems = {
     {
       title = LOC "$$$/iNatLightroom/Menu/Panel=iNaturalist Panel",
@@ -68,9 +73,9 @@ return {
       id    = "inat_panel",
     },
     {
-      title = LOC "$$$/iNatLightroom/Menu/Credentials=Set Up Credentials…",
-      file  = "CredentialsMenu.lua",
-      id    = "inat_credentials",
+      title = LOC "$$$/iNatLightroom/Menu/Settings=iNaturalist Settings…",
+      file  = "SettingsMenu.lua",
+      id    = "inat_settings",
     },
   },
 
