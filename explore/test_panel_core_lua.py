@@ -1,0 +1,676 @@
+"""Tests for PanelCore.lua -- what the floating panel's buttons actually do.
+
+Three behaviours here are the reason this module exists at all, and each was
+wrong at some point in a way Lightroom could not show:
+
+  * a species guess is not a determination. iNaturalist ignores species_guess
+    once an observation has a taxon, so a guess that was faithfully saved,
+    faithfully uploaded and silently discarded looked exactly like success.
+  * suggestions for a photo that is already on iNaturalist need no render, no
+    temporary file and no upload -- and asking the wrong way costs a full
+    export of a raw file every time somebody presses the button.
+  * every path that changes an observation has to sync it back, or the taxonomy
+    keywords -- the whole point of the plugin -- quietly stop matching the
+    website.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+pytest.importorskip("lupa.lua51", reason="lupa is not installed")
+
+from lua_harness import LuaPlugin
+
+
+@pytest.fixture
+def plugin():
+    return LuaPlugin()
+
+
+@pytest.fixture
+def core(plugin):
+    return plugin.require("PanelCore")
+
+
+def deep(plugin, value):
+    """Convert nested Python containers into Lua tables.
+
+    table_from only converts the outermost level, so a nested dict arrives in
+    Lua as userdata and fails at the first ipairs. Every fixture here is nested.
+    """
+    if isinstance(value, dict):
+        return plugin.runtime.table_from(
+            {k: deep(plugin, v) for k, v in value.items()})
+    if isinstance(value, list):
+        return plugin.runtime.table_from(
+            {i + 1: deep(plugin, v) for i, v in enumerate(value)})
+    return value
+
+
+def settings(plugin, **overrides):
+    values = {
+        "inat_geoprivacy": "open",
+        "inat_upload_location": True,
+        "inat_project_id": "",
+        "inat_sync_after_upload": True,
+    }
+    values.update(overrides)
+    return plugin.runtime.table_from(values)
+
+
+def rows(plugin, *entries):
+    table = {}
+    for i, entry in enumerate(entries, start=1):
+        table[i] = plugin.runtime.table_from(entry)
+    return plugin.runtime.table_from(table)
+
+
+def fake_api(plugin, **options):
+    """An InatAPI stand-in recording every call, with per-call outcomes.
+
+    Returns (api, calls). ``calls`` is a Lua list of {method, arg} tables.
+    """
+    builder = plugin.eval(
+        """
+        function(opts)
+          local calls = {}
+          local function record(method, arg)
+            calls[#calls + 1] = { method = method, arg = arg }
+          end
+
+          local api = {}
+
+          function api:findObservationByUuid(uuid)
+            record("find", uuid)
+            return opts.found, nil
+          end
+
+          function api:createObservation(params)
+            record("create", params)
+            if opts.createError then return nil, opts.createError end
+            return opts.created or { id = 4242, uuid = "made-up-uuid" }, nil
+          end
+
+          function api:updateObservation(id, params, ignorePhotos)
+            record("update", { id = id, params = params, ignorePhotos = ignorePhotos })
+            if opts.updateError then return nil, opts.updateError end
+            return { id = id }, nil
+          end
+
+          local uploads = 0
+          function api:uploadPhotoVerified(id, path, options)
+            uploads = uploads + 1
+            record("upload", { id = id, path = path })
+            if opts.uploadError then return nil, opts.uploadError end
+            if opts.uploadFailAfter and uploads > opts.uploadFailAfter then
+              return nil, "photo " .. uploads .. " would not attach"
+            end
+            return { id = 7 }, nil
+          end
+
+          function api:addIdentification(id, taxonId)
+            record("identify", { id = id, taxon_id = taxonId })
+            if opts.identifyError then return nil, opts.identifyError end
+            return { id = 9 }, nil
+          end
+
+          function api:addToProject(id, projectId)
+            record("project", { id = id, project_id = projectId })
+            if opts.projectError then return nil, opts.projectError end
+            return {}, nil
+          end
+
+          function api:scoreObservation(id)
+            record("scoreObservation", id)
+            if opts.scoreError then return nil, opts.scoreError end
+            return opts.score or { results = {} }, nil
+          end
+
+          function api:scoreImage(path, lat, lng, observedOn)
+            record("scoreImage",
+              { path = path, lat = lat, lng = lng, observed_on = observedOn })
+            if opts.scoreError then return nil, opts.scoreError end
+            return opts.score or { results = {} }, nil
+          end
+
+          -- SyncCore reaches for these after every change.
+          function api:getObservation(id)
+            record("getObservation", id)
+            if opts.observation == nil then
+              return nil, "no such observation"
+            end
+            return opts.observation, nil
+          end
+
+          function api:getTaxon(id)
+            record("getTaxon", id)
+            return opts.taxon, nil
+          end
+
+          return api, calls
+        end
+        """
+    )
+    return builder(plugin.runtime.table_from(options))
+
+
+def methods(calls) -> list[str]:
+    return [calls[i]["method"] for i in range(1, len(calls) + 1)]
+
+
+def call_named(calls, name):
+    return [calls[i]["arg"] for i in range(1, len(calls) + 1)
+            if calls[i]["method"] == name]
+
+
+def strings(lua_list) -> list[str]:
+    return [lua_list[i] for i in range(1, len(lua_list) + 1)]
+
+
+# ---------------------------------------------------------------------------
+# Describing a suggestion
+# ---------------------------------------------------------------------------
+
+
+def test_a_suggestion_shows_both_names_and_a_score(plugin, core):
+    """The common name is what people choose between; the scientific name is
+    what gets uploaded. Hiding either makes the list impossible to check."""
+    row = plugin.runtime.table_from({
+        "name": "Apis mellifera",
+        "common_name": "Western Honey Bee",
+        "combined_score": 87.4,
+    })
+
+    assert core["describeSuggestion"](row) == \
+        "Western Honey Bee (Apis mellifera) - 87%"
+
+
+def test_a_suggestion_with_no_common_name_still_reads_properly(plugin, core):
+    """Most taxa above species have no common name. Showing "() " around an
+    empty string would be the visible symptom."""
+    row = plugin.runtime.table_from({"name": "Apoidea", "combined_score": 12})
+
+    assert core["describeSuggestion"](row) == "Apoidea - 12%"
+
+
+def test_a_suggestion_with_no_score_omits_the_percentage(plugin, core):
+    """score_observation does not always carry combined_score, and "- nil%" or
+    "- 0%" would both be lies."""
+    row = plugin.runtime.table_from({"name": "Apoidea"})
+
+    assert core["describeSuggestion"](row) == "Apoidea"
+
+
+def test_a_nameless_suggestion_does_not_produce_a_blank_row(plugin, core):
+    """A blank row in a list is selectable and says nothing about what it does."""
+    row = plugin.runtime.table_from({"combined_score": 3})
+
+    assert core["describeSuggestion"](row).startswith("Unnamed taxon")
+
+
+# ---------------------------------------------------------------------------
+# Turning suggestions into list items
+# ---------------------------------------------------------------------------
+
+
+def test_items_carry_the_row_position_as_their_value(plugin, core):
+    """Not the taxon id: a malformed result comes back with a taxon that has no
+    id, and a list with nil or colliding values selects the wrong row rather
+    than failing."""
+    items = core["suggestionItems"](rows(plugin,
+        {"name": "Apis mellifera"},
+        {"name": "Bombus terrestris"},
+    ))
+
+    assert items[1]["value"] == 1
+    assert items[2]["value"] == 2
+
+
+def test_items_are_capped(plugin, core):
+    """iNaturalist returns a long tail of noise, and a list that needs scrolling
+    is harder to use than a short one."""
+    many = rows(plugin, *[{"name": f"Taxon {i}"} for i in range(20)])
+
+    items = core["suggestionItems"](many)
+
+    assert len(list(items.values())) == core["SUGGESTION_LIMIT"]
+
+
+def test_no_suggestions_makes_no_items(plugin, core):
+    assert len(list(core["suggestionItems"](None).values())) == 0
+
+
+# ---------------------------------------------------------------------------
+# Asking for suggestions
+# ---------------------------------------------------------------------------
+
+
+def test_an_uploaded_photo_is_scored_without_rendering(plugin, core):
+    """score_observation is a plain GET against something iNaturalist already
+    holds. Rendering a raw file to ask it would be a full export per click."""
+    photo = plugin.new_photo(inat_observation_id="4242")
+    api, calls = fake_api(plugin)
+
+    core["getSuggestions"](api, photo)
+
+    assert methods(calls) == ["scoreObservation"]
+    assert len(plugin.export_sessions) == 0
+
+
+def test_an_unlinked_photo_is_rendered_and_scored(plugin, core):
+    photo = plugin.new_photo()
+    api, calls = fake_api(plugin)
+
+    core["getSuggestions"](api, photo)
+
+    assert methods(calls) == ["scoreImage"]
+    assert len(plugin.export_sessions) == 1
+
+
+def test_scoring_an_image_sends_location_and_date(plugin, core):
+    """Sent properly these collapse the candidate list, because a species from
+    the wrong hemisphere stops being plausible. iNaturalist returns 200 and
+    ignores them if they go in the query string instead."""
+    photo = plugin.new_photo(
+        raw={"gps": {"latitude": 47.6, "longitude": -122.3},
+             "dateTimeOriginal": 801234567})
+    api, calls = fake_api(plugin)
+
+    core["getSuggestions"](api, photo)
+
+    arg = call_named(calls, "scoreImage")[0]
+    assert arg["lat"] == 47.6
+    assert arg["lng"] == -122.3
+    assert arg["observed_on"] == "2026-07-29"
+
+
+def test_scoring_cleans_up_the_rendered_file(plugin, core):
+    """The render goes into a directory this plugin made. Nobody else will ever
+    delete it."""
+    api, _ = fake_api(plugin)
+
+    core["getSuggestions"](api, plugin.new_photo())
+
+    assert len(plugin.deleted_paths) == 1
+
+
+def test_a_failed_render_reports_rather_than_scoring_nothing(plugin, core):
+    plugin.set_render_failure("the disk is full")
+    api, calls = fake_api(plugin)
+
+    result, err = core["getSuggestions"](api, plugin.new_photo())
+
+    assert result is None
+    assert "disk is full" in err
+    assert methods(calls) == []
+
+
+def test_suggestions_are_flattened_into_rows(plugin, core):
+    api, _ = fake_api(plugin, score=plugin.runtime.table_from({
+        "results": plugin.runtime.table_from({
+            1: plugin.runtime.table_from({
+                "combined_score": 91,
+                "taxon": plugin.runtime.table_from(
+                    {"id": 47219, "name": "Apis mellifera"}),
+            }),
+        }),
+    }))
+
+    result, _ = core["getSuggestions"](api, plugin.new_photo())
+
+    assert result[1]["taxon_id"] == 47219
+    assert result[1]["combined_score"] == 91
+
+
+def test_asking_with_no_photo_says_so(plugin, core):
+    api, _ = fake_api(plugin)
+
+    result, err = core["getSuggestions"](api, None)
+
+    assert result is None
+    assert err
+
+
+# ---------------------------------------------------------------------------
+# Uploading
+# ---------------------------------------------------------------------------
+
+
+def upload(plugin, core, photos, api, **overrides):
+    return core["upload"](plugin.catalog, api, settings(plugin, **overrides),
+                          plugin.runtime.table_from(
+                              {i + 1: p for i, p in enumerate(photos)}))
+
+
+def test_the_whole_selection_becomes_one_observation(plugin, core):
+    """The thing the publish service could not do. Six frames of one animal are
+    one sighting, and iNaturalist wants them on one observation."""
+    photos = [plugin.new_photo(), plugin.new_photo(), plugin.new_photo()]
+    api, calls = fake_api(plugin)
+
+    obs_id, url, errors = upload(plugin, core, photos, api)
+
+    assert obs_id == 4242
+    assert methods(calls).count("create") == 1
+    assert methods(calls).count("upload") == 3
+
+
+def test_every_photo_in_the_group_records_the_link(plugin, core):
+    """So the panel shows the right thing whichever of them is selected next,
+    and so a second upload finds the observation instead of duplicating it."""
+    photos = [plugin.new_photo(), plugin.new_photo()]
+    api, _ = fake_api(plugin)
+
+    upload(plugin, core, photos, api)
+
+    for photo in photos:
+        assert photo["_props"]["inat_observation_id"] == "4242"
+        assert photo["_props"]["inat_observation_uuid"] == "made-up-uuid"
+
+
+def test_the_observation_details_come_from_the_first_photo(plugin, core):
+    """One sighting however many frames were taken of it."""
+    first = plugin.new_photo(inat_species_guess="Apis mellifera")
+    api, calls = fake_api(plugin)
+
+    upload(plugin, core, [first, plugin.new_photo()], api)
+
+    assert call_named(calls, "create")[0]["species_guess"] == "Apis mellifera"
+
+
+def test_the_rendered_files_are_cleaned_up(plugin, core):
+    api, _ = fake_api(plugin)
+
+    upload(plugin, core, [plugin.new_photo()], api)
+
+    assert len(plugin.deleted_paths) == 1
+
+
+def test_a_failed_upload_does_not_record_an_empty_observation(plugin, core):
+    """The observation exists but has no photo in it. Recording the link would
+    make the panel report success and stop offering to upload."""
+    photo = plugin.new_photo()
+    api, _ = fake_api(plugin, uploadError="the connection dropped")
+
+    obs_id, _, errors = upload(plugin, core, [photo], api)
+
+    assert obs_id is None
+    assert photo["_props"]["inat_observation_id"] is None
+    assert any("no photo" in e for e in strings(errors))
+
+
+def test_one_failed_photo_out_of_several_still_records_the_link(plugin, core):
+    """Losing the link because the third frame failed would orphan the two that
+    worked, and the next upload would make a duplicate observation rather than
+    finding the one already sitting there."""
+    photos = [plugin.new_photo(), plugin.new_photo(), plugin.new_photo()]
+    api, _ = fake_api(plugin, uploadFailAfter=2)
+
+    obs_id, _, errors = upload(plugin, core, photos, api)
+
+    assert obs_id == 4242
+    for photo in photos:
+        assert photo["_props"]["inat_observation_id"] == "4242"
+    assert any("would not attach" in e for e in strings(errors)), (
+        "the photo that failed has to be reported, or the user never finds out "
+        "the observation is short an image"
+    )
+
+
+def test_nothing_selected_is_refused(plugin, core):
+    """And refused by name. Falling through to the renderer produces "the render
+    failed", which sends somebody looking for a problem with their photo."""
+    api, calls = fake_api(plugin)
+
+    obs_id, _, errors = upload(plugin, core, [], api)
+
+    assert obs_id is None
+    assert methods(calls) == []
+    assert len(plugin.export_sessions) == 0
+    assert "Select" in strings(errors)[0]
+
+
+def test_a_render_that_produces_nothing_never_creates_an_observation(plugin, core):
+    """An observation with no photo is rubbish on a public dataset, and it is
+    the user who has to go and delete it."""
+    plugin.set_render_failure("no renditions")
+    api, calls = fake_api(plugin)
+
+    obs_id, _, _ = upload(plugin, core, [plugin.new_photo()], api)
+
+    assert obs_id is None
+    assert "create" not in methods(calls)
+
+
+def test_the_project_is_only_used_when_one_is_configured(plugin, core):
+    api, calls = fake_api(plugin)
+
+    upload(plugin, core, [plugin.new_photo()], api)
+
+    assert "project" not in methods(calls)
+
+
+def test_a_configured_project_gets_the_observation(plugin, core):
+    api, calls = fake_api(plugin)
+
+    upload(plugin, core, [plugin.new_photo()], api, inat_project_id="12345")
+
+    assert call_named(calls, "project")[0]["project_id"] == "12345"
+
+
+def test_a_project_failure_does_not_fail_the_upload(plugin, core):
+    """The photo is on iNaturalist. Reporting the whole thing as a failure would
+    invite a second upload of something that already worked."""
+    api, _ = fake_api(plugin, projectError="not a member of that project")
+
+    obs_id, _, errors = upload(plugin, core, [plugin.new_photo()], api,
+                               inat_project_id="12345")
+
+    assert obs_id == 4242
+    assert any("project" in e for e in strings(errors))
+
+
+# ---------------------------------------------------------------------------
+# Syncing back -- the reason the plugin exists
+# ---------------------------------------------------------------------------
+
+
+OBSERVATION = {
+    "id": 4242,
+    "uuid": "made-up-uuid",
+    "quality_grade": "research",
+    "community_taxon": {
+        "id": 47219,
+        "name": "Apis mellifera",
+        "preferred_common_name": "Western Honey Bee",
+        "ancestors": {},
+    },
+}
+
+
+def test_uploading_writes_the_taxonomy_keywords(plugin, core):
+    """The keywords are the whole point. An upload that left the catalog knowing
+    only an observation ID meant they appeared whenever somebody happened to
+    press Sync, which is to say sometimes."""
+    photo = plugin.new_photo()
+    api, calls = fake_api(plugin,
+                          observation=deep(plugin, OBSERVATION))
+
+    upload(plugin, core, [photo], api)
+
+    assert "getObservation" in methods(calls)
+    assert photo["_props"]["inat_taxon_name"] == "Apis mellifera"
+    assert any(k["name"] == "Apis mellifera" for k in plugin.keywords)
+
+
+def test_the_sync_after_upload_can_be_turned_off(plugin, core):
+    api, calls = fake_api(plugin,
+                          observation=deep(plugin, OBSERVATION))
+
+    upload(plugin, core, [plugin.new_photo()], api,
+           inat_sync_after_upload=False)
+
+    assert "getObservation" not in methods(calls)
+
+
+def test_a_sync_that_fails_does_not_undo_the_upload(plugin, core):
+    """By the time it runs the photo is on iNaturalist. Reporting failure would
+    invite a second upload of something that already worked."""
+    photo = plugin.new_photo()
+    api, _ = fake_api(plugin)  # getObservation returns nil
+
+    obs_id, _, errors = upload(plugin, core, [photo], api)
+
+    assert obs_id == 4242
+    assert photo["_props"]["inat_observation_id"] == "4242"
+    assert len(strings(errors)) > 0
+
+
+# ---------------------------------------------------------------------------
+# Changing the determination
+# ---------------------------------------------------------------------------
+
+
+def update(plugin, core, photos, api, guess, taxon_id=None):
+    return core["updateSpeciesGuess"](
+        plugin.catalog, api,
+        plugin.runtime.table_from({i + 1: p for i, p in enumerate(photos)}),
+        guess, taxon_id)
+
+
+def test_a_known_taxon_is_posted_as_an_identification(plugin, core):
+    """species_guess is free text iNaturalist shows only while an observation
+    has no taxon. Sending a chosen suggestion that way is why an edited guess
+    appeared to vanish."""
+    photo = plugin.new_photo(inat_observation_id="4242")
+    api, calls = fake_api(plugin,
+                          observation=deep(plugin, OBSERVATION))
+
+    ok, _ = update(plugin, core, [photo], api, "Apis mellifera", 47219)
+
+    assert ok
+    assert call_named(calls, "identify")[0]["taxon_id"] == 47219
+    assert "update" not in methods(calls)
+
+
+def test_free_text_is_only_used_when_there_is_no_taxon(plugin, core):
+    """Somebody typed something we could not resolve. It is worth sending, but
+    it is not an identification and must not pretend to be one."""
+    photo = plugin.new_photo(inat_observation_id="4242")
+    api, calls = fake_api(plugin,
+                          observation=deep(plugin, OBSERVATION))
+
+    update(plugin, core, [photo], api, "some kind of bee")
+
+    assert "identify" not in methods(calls)
+    assert call_named(calls, "update")[0]["params"]["species_guess"] == \
+        "some kind of bee"
+
+
+def test_updating_never_touches_the_photos_on_the_observation(plugin, core):
+    """A PUT to /observations replaces the observation wholesale. Without
+    ignore_photos it detaches every image on it."""
+    photo = plugin.new_photo(inat_observation_id="4242")
+    api, calls = fake_api(plugin,
+                          observation=deep(plugin, OBSERVATION))
+
+    update(plugin, core, [photo], api, "some kind of bee")
+
+    assert call_named(calls, "update")[0]["ignorePhotos"] is True
+
+
+def test_the_guess_is_written_to_every_selected_photo(plugin, core):
+    """The panel shows the first photo but the buttons act on the selection: one
+    name across the six frames of the same animal is the common case."""
+    photos = [plugin.new_photo(inat_observation_id="4242"), plugin.new_photo()]
+    api, _ = fake_api(plugin,
+                      observation=deep(plugin, OBSERVATION))
+
+    update(plugin, core, photos, api, "Apis mellifera", 47219)
+
+    for photo in photos:
+        assert photo["_props"]["inat_species_guess"] == "Apis mellifera"
+
+
+def test_a_guess_is_never_written_into_the_synced_taxon_field(plugin, core):
+    """inat_taxon_id means "what iNaturalist currently says this is". Putting a
+    guess in it would make the Metadata panel claim a determination nobody --
+    including us -- has actually made."""
+    photo = plugin.new_photo(inat_observation_id="4242")
+    api, _ = fake_api(plugin)
+
+    update(plugin, core, [photo], api, "Apis mellifera", 47219)
+
+    assert photo["_props"]["inat_taxon_id"] is None
+
+
+def test_an_unlinked_photo_cannot_have_its_identification_changed(plugin, core):
+    """There is nothing to identify yet. Saying so is better than a 404."""
+    api, calls = fake_api(plugin)
+
+    ok, err = update(plugin, core, [plugin.new_photo()], api, "Apis", 47219)
+
+    assert ok is False
+    assert "uploaded" in err
+    assert methods(calls) == []
+
+
+def test_a_rejected_identification_reports_the_reason(plugin, core):
+    photo = plugin.new_photo(inat_observation_id="4242")
+    api, _ = fake_api(plugin, identifyError="that taxon is inactive")
+
+    ok, err = update(plugin, core, [photo], api, "Apis", 47219)
+
+    assert ok is False
+    assert "inactive" in err
+
+
+def test_changing_the_identification_syncs_the_keywords_back(plugin, core):
+    """The community taxon may now be something other than what was posted, and
+    the keywords have to follow the website rather than the guess."""
+    photo = plugin.new_photo(inat_observation_id="4242")
+    api, calls = fake_api(plugin,
+                          observation=deep(plugin, OBSERVATION))
+
+    update(plugin, core, [photo], api, "Apis mellifera", 47219)
+
+    assert "getObservation" in methods(calls)
+    assert photo["_props"]["inat_taxon_name"] == "Apis mellifera"
+
+
+def test_updating_with_nothing_selected_is_refused(plugin, core):
+    api, calls = fake_api(plugin)
+
+    ok, _ = update(plugin, core, [], api, "Apis", 47219)
+
+    assert ok is False
+    assert methods(calls) == []
+
+
+# ---------------------------------------------------------------------------
+# Unlinking
+# ---------------------------------------------------------------------------
+
+
+def test_unlinking_clears_the_link_but_keeps_the_keywords(plugin, core):
+    """By the time somebody unlinks, the keywords are part of their catalog --
+    used in smart collections and exports. Taking them away is a bigger and less
+    reversible act than the button appears to offer."""
+    photo = plugin.new_photo(inat_observation_id="4242",
+                             inat_taxon_name="Apis mellifera")
+    api, _ = fake_api(plugin, observation=deep(plugin, OBSERVATION))
+
+    # Give it a keyword the honest way first, so there is something to lose.
+    core["syncBack"](plugin.catalog, api, plugin.runtime.table_from({1: photo}),
+                     plugin.runtime.table_from({}))
+    before = len(list(photo["keywords"].values()))
+    assert before == 1, "the sync should have applied a keyword to lose"
+
+    count = core["unlink"](plugin.catalog,
+                           plugin.runtime.table_from({1: photo}))
+
+    assert count == 1
+    assert photo["_props"]["inat_observation_id"] == ""
+    assert photo["_props"]["inat_taxon_name"] == ""
+    assert len(list(photo["keywords"].values())) == before

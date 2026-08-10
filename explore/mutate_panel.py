@@ -1,0 +1,290 @@
+"""Prove the PanelCore and panel tests actually catch the bugs they claim to.
+
+Each mutation is a plausible way of getting the code wrong -- most are things
+that were got wrong at some point, or that a reasonable person would write. A
+mutation no test notices means the suite is decoration, not verification.
+"""
+
+from __future__ import annotations
+
+import subprocess
+import sys
+from pathlib import Path
+
+PLUGIN = Path(__file__).parent.parent / "plugin" / "inat.lrplugin"
+TARGETS = {
+    "PanelCore": PLUGIN / "PanelCore.lua",
+    "ObservationPanel": PLUGIN / "ObservationPanel.lua",
+}
+
+TESTS = ["test_panel_core_lua.py", "test_observation_panel_lua.py"]
+
+MUTATIONS = [
+    # --- the identification trap, the whole reason for this rewrite ----------
+    (
+        "PanelCore",
+        "a chosen suggestion is sent as free text instead of an identification",
+        "  if taxonId then\n    local _, identifyErr = api:addIdentification",
+        "  if false then\n    local _, identifyErr = api:addIdentification",
+    ),
+    (
+        "PanelCore",
+        "an identification is posted even when no taxon was chosen",
+        "  if taxonId then\n    local _, identifyErr = api:addIdentification",
+        "  if true then\n    local _, identifyErr = api:addIdentification",
+    ),
+    (
+        "PanelCore",
+        "the update detaches every photo on the observation",
+        "      species_guess = guess or \"\",\n    }, true)",
+        "      species_guess = guess or \"\",\n    }, false)",
+    ),
+    (
+        "PanelCore",
+        "an unlinked photo is allowed to post an identification",
+        "  if not observationId then\n    return false, \"That photo has not been uploaded",
+        "  if false then\n    return false, \"That photo has not been uploaded",
+    ),
+    (
+        "PanelCore",
+        "a rejected identification is reported as success",
+        "  if err then\n    return false, err\n  end",
+        "",
+    ),
+    (
+        "PanelCore",
+        "the guess lands only on the first photo of the selection",
+        "    for _, photo in ipairs(photos) do\n      photo:setPropertyForPlugin(_PLUGIN, \"inat_species_guess\"",
+        "    for _, photo in ipairs({ photos[1] }) do\n      photo:setPropertyForPlugin(_PLUGIN, \"inat_species_guess\"",
+    ),
+
+    # --- suggestions ---------------------------------------------------------
+    (
+        "PanelCore",
+        "an uploaded photo is re-rendered instead of scored on the server",
+        "  local obsId = UploadCore.pluginField(photo, \"inat_observation_id\")\n  if obsId then",
+        "  local obsId = UploadCore.pluginField(photo, \"inat_observation_id\")\n  if false then",
+    ),
+    (
+        "PanelCore",
+        "location and date are left off the vision request",
+        "  local payload, err = api:scoreImage(path, latitude, longitude,\n    UploadCore.observedOnFor(photo))",
+        "  local payload, err = api:scoreImage(path)",
+    ),
+    (
+        "PanelCore",
+        "the temporary render is never deleted",
+        "  RenderPhoto.cleanUp(folder)\n\n  if not payload then return nil, err end",
+        "  if not payload then return nil, err end",
+    ),
+    (
+        "PanelCore",
+        "a failed render is scored anyway",
+        "  if not path then\n    return nil, renderErr\n  end",
+        "",
+    ),
+    (
+        "PanelCore",
+        "the suggestion list is not capped",
+        "    if i > PanelCore.SUGGESTION_LIMIT then break end",
+        "",
+    ),
+    (
+        "PanelCore",
+        "list items are keyed by taxon id, which can be nil",
+        "      value = i,",
+        "      value = row.taxon_id,",
+    ),
+    (
+        "PanelCore",
+        "a suggestion with no score claims zero percent",
+        "  local score = tonumber(row.combined_score)\n  if score then",
+        "  local score = tonumber(row.combined_score) or 0\n  if score then",
+    ),
+    (
+        "PanelCore",
+        "the scientific name is dropped from the list",
+        "    name = name .. \" (\" .. row.name .. \")\"",
+        "    name = name",
+    ),
+
+    # --- uploading -----------------------------------------------------------
+    (
+        "PanelCore",
+        "each photo becomes its own observation",
+        "  local seen = {}\n  local observationId, uuid, resolveErr =\n    UploadCore.resolveObservation(api, settings, photos[1], seen, errors)",
+        "  local seen = {}\n  local observationId, uuid, resolveErr\n  for _, photo in ipairs(photos) do\n    observationId, uuid, resolveErr =\n      UploadCore.resolveObservation(api, settings, photo, {}, errors)\n  end",
+    ),
+    (
+        "PanelCore",
+        "an observation with no photo attached is recorded as a success",
+        "  if attached == 0 then",
+        "  if false then",
+    ),
+    (
+        "PanelCore",
+        "the observation is created before anything has rendered",
+        "  if #rendered == 0 then\n    RenderPhoto.cleanUp(folder)",
+        "  if false then\n    RenderPhoto.cleanUp(folder)",
+    ),
+    (
+        "PanelCore",
+        "the rendered files are left behind after the upload",
+        "  RenderPhoto.cleanUp(folder)\n\n  if attached == 0 then",
+        "  if attached == 0 then",
+    ),
+    (
+        "PanelCore",
+        "an empty selection is uploaded anyway",
+        "  if not photos or #photos == 0 then\n    return nil, nil, { \"Select at least one photo first.\" }\n  end",
+        "",
+    ),
+    (
+        "PanelCore",
+        "a project failure fails the whole upload",
+        "      errors[#errors + 1] = \"Could not add it to the project: \" .. tostring(projectErr)",
+        "      return nil, nil, { tostring(projectErr) }",
+    ),
+    (
+        "PanelCore",
+        "the project is used even when none is configured",
+        "  if settings.inat_project_id and settings.inat_project_id ~= \"\" then",
+        "  if settings.inat_project_id then",
+    ),
+
+    # --- keywords, the point of the plugin -----------------------------------
+    (
+        "PanelCore",
+        "an upload never syncs the taxonomy back",
+        "  if settings.inat_sync_after_upload ~= false then\n    onEvent(\"Syncing…\")\n    PanelCore.syncBack(catalog, api, photos, errors)\n  end",
+        "",
+    ),
+    (
+        "PanelCore",
+        "the sync-after-upload preference is ignored",
+        "  if settings.inat_sync_after_upload ~= false then",
+        "  if true then",
+    ),
+    (
+        "PanelCore",
+        "changing the identification does not refresh the keywords",
+        "  local errors = {}\n  PanelCore.syncBack(catalog, api, photos, errors)\n\n  return true, errors[1]",
+        "  return true, nil",
+    ),
+    (
+        "PanelCore",
+        "a failed sync-back is swallowed silently",
+        "      if errors then errors[#errors + 1] = err end",
+        "",
+    ),
+    (
+        "PanelCore",
+        "unlinking silently does nothing",
+        "  return UploadCore.unlink(catalog, photos)",
+        "  return 0",
+    ),
+
+    # --- the panel itself ----------------------------------------------------
+    (
+        "ObservationPanel",
+        "the action button always says Upload, even for a linked photo",
+        "    uploadTitle   = linked and ObservationPanel.UPDATE_TITLE\n                           or ObservationPanel.UPLOAD_TITLE,",
+        "    uploadTitle   = ObservationPanel.UPLOAD_TITLE,",
+    ),
+    (
+        "ObservationPanel",
+        "choosing a suggestion fills the name but forgets the taxon",
+        "  props.suggestionTaxonId = row.taxon_id",
+        "  props.suggestionTaxonId = nil",
+    ),
+    (
+        "ObservationPanel",
+        "a suggestion that is not there leaves the previous taxon armed",
+        "  if not row then\n    props.suggestionTaxonId = nil\n    return nil\n  end",
+        "  if not row then\n    return nil\n  end",
+    ),
+    (
+        "ObservationPanel",
+        "choosing a suggestion fills in the common name, which is ambiguous",
+        "  props.speciesGuess      = row.name or row.common_name or \"\"",
+        "  props.speciesGuess      = row.common_name or row.name or \"\"",
+    ),
+    (
+        "ObservationPanel",
+        "unlinking happens without asking",
+        "  if answer ~= \"ok\" then return 0 end",
+        "",
+    ),
+    (
+        "ObservationPanel",
+        "the confirmation does not say the keywords are kept",
+        "    .. \"Nothing on iNaturalist is changed or deleted, and the taxonomy \"\n    .. \"keywords already applied are kept.\",",
+        "    .. \"This cannot be undone.\",",
+    ),
+    (
+        "ObservationPanel",
+        "the Save button comes back",
+        "        title   = \"Get Suggestions\",",
+        "        title   = \"Save\",",
+    ),
+    (
+        "ObservationPanel",
+        "the Unlink button is dropped",
+        "      f:push_button {\n        title   = \"Unlink\",",
+        "      f:spacer {\n        title   = \"nothing\",",
+    ),
+    (
+        "ObservationPanel",
+        "stale suggestions survive a change of selection",
+        "      props.suggestions       = {}\n      props.suggestionItems   = {}",
+        "      props.suggestions       = props.suggestions or {}\n      props.suggestionItems   = props.suggestionItems or {}",
+    ),
+]
+
+
+def main() -> int:
+    backups = {name: path.read_text(encoding="utf-8") for name, path in TARGETS.items()}
+    survivors = []
+
+    try:
+        for name, description, old, new in MUTATIONS:
+            path = TARGETS[name]
+            source = backups[name]
+
+            if old not in source:
+                print(f"SKIP  {description}\n      (anchor not found -- fix the script)")
+                survivors.append(description)
+                continue
+
+            path.write_text(source.replace(old, new, 1), encoding="utf-8")
+
+            result = subprocess.run(
+                [sys.executable, "-m", "pytest", *TESTS, "-q",
+                 "--no-header", "-x", "--tb=no", "-p", "no:cacheprovider"],
+                cwd=Path(__file__).parent,
+                capture_output=True,
+                text=True,
+            )
+
+            if result.returncode == 0:
+                print(f"SURVIVED  {description}")
+                survivors.append(description)
+            else:
+                print(f"caught    {description}")
+    finally:
+        for name, path in TARGETS.items():
+            path.write_text(backups[name], encoding="utf-8")
+
+    print()
+    if survivors:
+        print(f"{len(survivors)} of {len(MUTATIONS)} mutations survived:")
+        for s in survivors:
+            print(f"  - {s}")
+        return 1
+
+    print(f"All {len(MUTATIONS)} mutations caught.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

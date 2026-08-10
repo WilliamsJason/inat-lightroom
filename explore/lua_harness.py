@@ -214,12 +214,24 @@ stubs.LrDate = {
 -- would have been shown to the user.
 local dialogMessages = {}
 local floatingDialogs = {}
+local confirmAnswer = "cancel"
 stubs.LrDialogs = {
   message = function(title, message, style)
     dialogMessages[#dialogMessages + 1] =
       { title = title, message = message, style = style }
   end,
   presentModalDialog = function() return "cancel" end,
+
+  -- Answers whatever the test told it to, defaulting to Cancel. Defaulting to
+  -- "ok" would make a missing confirmation look like a working one, and the
+  -- whole point of a confirmation is that it can say no.
+  confirm = function(title, message, actionVerb, cancelVerb)
+    dialogMessages[#dialogMessages + 1] = {
+      title = title, message = message, style = "confirm",
+      actionVerb = actionVerb, cancelVerb = cancelVerb,
+    }
+    return confirmAnswer
+  end,
 
   -- Records the args rather than showing anything, so a test can find the
   -- observers and call them the way Lightroom would. The real one blocks the
@@ -265,8 +277,50 @@ stubs.LrView = {
   bind = function(spec) return { __bind = spec } end,
 }
 
+-- A property table that notices writes.
+--
+-- The real one is not a plain table: assigning to it fires anything registered
+-- with addObserver, which is the only way a list or a slider tells a plugin
+-- that the user changed it. A plain stub table made every observer look like it
+-- worked while never firing, so the code under test could not be wrong.
+--
+-- Values live in a table behind a proxy rather than in the proxy itself,
+-- because __newindex only fires for keys the table does not already have, and
+-- every interesting write here is an update to an existing key.
 stubs.LrBinding = {
-  makePropertyTable = function() return {} end,
+  makePropertyTable = function()
+    local values    = {}
+    local observers = {}
+    local proxy     = {}
+
+    setmetatable(proxy, {
+      __index = function(_table, key)
+        if key == "addObserver" then
+          return function(_self, watched, fn)
+            observers[watched] = observers[watched] or {}
+            table.insert(observers[watched], fn)
+          end
+        end
+        return values[key]
+      end,
+
+      __newindex = function(_table, key, value)
+        local previous = values[key]
+        values[key] = value
+
+        -- Lightroom does not re-notify for a write that changed nothing, and
+        -- an observer that fires on every assignment can loop forever when it
+        -- writes back to the table it is watching.
+        if previous == value then return end
+
+        for _, fn in ipairs(observers[key] or {}) do
+          fn(proxy, key, value)
+        end
+      end,
+    })
+
+    return proxy
+  end,
   negativeOfKey = function(key) return { __negative = key } end,
 }
 
@@ -514,6 +568,7 @@ return {
   executedCommands = executedCommands,
   timeline = timeline,
   setExecuteExitCode = function(code) executeExitCode = code end,
+  setConfirmAnswer = function(answer) confirmAnswer = answer end,
   dialogMessages = dialogMessages,
   floatingDialogs = floatingDialogs,
   catalogWrites = catalogWrites,
@@ -685,6 +740,10 @@ class LuaPlugin:
     def set_execute_exit_code(self, code: int) -> None:
         """Make the next LrTasks.execute calls report this exit code."""
         self.env["setExecuteExitCode"](code)
+
+    def set_confirm_answer(self, answer: str) -> None:
+        """Make LrDialogs.confirm return this. Defaults to "cancel"."""
+        self.env["setConfirmAnswer"](answer)
 
     def set_platform(self, windows: bool) -> None:
         """Flip the WIN_ENV / MAC_ENV pair Lightroom sets in the sandbox."""

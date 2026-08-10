@@ -39,7 +39,9 @@ local LrHttp            = import "LrHttp"
 local LrTasks           = import "LrTasks"
 local LrView            = import "LrView"
 
-local logger = require "Log"
+local PanelCore  = require "PanelCore"
+local Settings   = require "Settings"
+local UploadCore = require "UploadCore"
 
 local ObservationPanel = {}
 
@@ -52,6 +54,10 @@ local OBSERVATION_URL = "https://www.inaturalist.org/observations/"
 -- Both the window's caption and the handle the z-order fix-up finds it by, so
 -- they cannot drift apart.
 local WINDOW_TITLE = "iNaturalist"
+
+-- The two captions the one action button alternates between.
+ObservationPanel.UPLOAD_TITLE = "Upload to iNaturalist"
+ObservationPanel.UPDATE_TITLE = "Update species guess"
 
 --------------------------------------------------------------------------------
 -- Reading the selection
@@ -99,6 +105,8 @@ end
 function ObservationPanel.valuesFor(photo, selectionCount)
   selectionCount = selectionCount or (photo and 1 or 0)
 
+  local linked = photo ~= nil and field(photo, "inat_observation_id") ~= nil
+
   local values = {
     status        = ObservationPanel.statusFor(photo),
     observationId = photo and field(photo, "inat_observation_id") or "",
@@ -107,7 +115,13 @@ function ObservationPanel.valuesFor(photo, selectionCount)
     speciesGuess  = photo and field(photo, "inat_species_guess") or "",
     url           = photo and field(photo, "inat_observation_url") or "",
     hasPhoto      = photo ~= nil,
-    hasObservation = photo ~= nil and field(photo, "inat_observation_id") ~= nil,
+    hasObservation = linked,
+
+    -- The action button's caption. Uploading and correcting an identification
+    -- are the same intent at different points in a photo's life, so they share
+    -- a button and it says which one it is about to do.
+    uploadTitle   = linked and ObservationPanel.UPDATE_TITLE
+                           or ObservationPanel.UPLOAD_TITLE,
   }
 
   if selectionCount > 1 then
@@ -164,8 +178,37 @@ local function makeRefresh(props)
       for key, value in pairs(values) do
         props[key] = value
       end
+
+      -- Suggestions belong to the photo they were asked about. Leaving them on
+      -- screen after the selection moves is worse than showing nothing: the
+      -- list would still be clickable, and clicking it would put the previous
+      -- photo's species onto this one.
+      props.suggestions       = {}
+      props.suggestionItems   = {}
+      props.selectedSuggestion = nil
+      props.suggestionTaxonId = nil
+      props.suggestionStatus  = ""
     end)
   end
+end
+
+--- The control that shows the suggestions.
+--
+-- Isolated because f:simple_list is the one view in this window that has not
+-- been rendered in the host. It is real -- ui.dll's view-constructor list has
+-- it beside popup_menu, and its implementation there wraps a table_view in a
+-- scroll_view, reading items / value / height / enabled -- but "the binary
+-- accepts these keys" is not the same as "this displays". If it turns out not
+-- to, swapping the constructor here for f:popup_menu is the whole fix: the
+-- items are the SDK's usual { title = ..., value = ... } shape either way.
+function ObservationPanel.suggestionsView(f)
+  return f:simple_list {
+    items           = LrView.bind("suggestionItems"),
+    value           = LrView.bind("selectedSuggestion"),
+    fill_horizontal = 1,
+    height          = 110,
+    enabled         = LrView.bind("hasPhoto"),
+  }
 end
 
 --- Build the window contents.
@@ -213,9 +256,10 @@ function ObservationPanel.contents(f, props, actions)
 
     f:separator { fill_horizontal = 1 },
 
-    -- The one editable thing here. It is what a later publish uploads, so it
-    -- belongs next to the buttons that publish rather than only in the
-    -- Metadata panel.
+    -- The identification half of the window. There is no Save button any more:
+    -- a guess saved to the catalog and never sent anywhere was the thing that
+    -- looked like it worked and did not. Everything here ends at one of the two
+    -- buttons below, which both talk to iNaturalist.
     f:row {
       f:static_text { title = "Species guess:", width = LABEL, alignment = "right" },
       f:edit_field {
@@ -226,9 +270,31 @@ function ObservationPanel.contents(f, props, actions)
         placeholder_string = "What is it?",
       },
       f:push_button {
-        title   = "Save",
+        title   = "Get Suggestions",
         enabled = LrView.bind("hasPhoto"),
-        action  = actions.saveSpeciesGuess,
+        action  = actions.getSuggestions,
+      },
+    },
+
+    ObservationPanel.suggestionsView(f),
+
+    f:static_text {
+      title           = LrView.bind("suggestionStatus"),
+      fill_horizontal = 1,
+      height_in_lines = 1,
+    },
+
+    -- One button, two jobs, because they are the same intent at different
+    -- points in a photo's life: tell iNaturalist what this is. Which one it is
+    -- depends only on whether the photo is linked yet, so making the user
+    -- choose between two buttons would be asking them a question the plugin
+    -- already knows the answer to.
+    f:row {
+      f:push_button {
+        title   = LrView.bind("uploadTitle"),
+        enabled = LrView.bind("hasPhoto"),
+        action  = actions.uploadOrUpdate,
+        width   = 180,
       },
     },
 
@@ -251,6 +317,11 @@ function ObservationPanel.contents(f, props, actions)
         enabled = LrView.bind("hasObservation"),
         action  = actions.view,
       },
+      f:push_button {
+        title   = "Unlink",
+        enabled = LrView.bind("hasObservation"),
+        action  = actions.unlink,
+      },
     },
   }
 end
@@ -259,28 +330,167 @@ end
 -- Actions
 --------------------------------------------------------------------------------
 
---- Write the edited species guess onto every selected photo.
--- Unlike the display, this deliberately applies to the whole selection: typing
--- one name and having it land on the six frames of the same animal is the
--- common case, and the heading says how many are selected.
-function ObservationPanel.saveSpeciesGuess(props)
+--- Ask iNaturalist what the selected photo might be, and fill the list.
+--
+-- MUST be called from inside a task.
+--
+-- Everything it reports goes to props.suggestionStatus rather than a modal.
+-- Suggestions are a thing you ask for repeatedly while making up your mind, and
+-- a dialog to dismiss after every one would make that unbearable.
+function ObservationPanel.loadSuggestions(props)
   local catalog = LrApplication.activeCatalog()
   local photos  = catalog:getTargetPhotos() or {}
 
   if #photos == 0 then
-    return 0
+    props.suggestionStatus = "Select a photo first."
+    return
   end
 
-  local guess = props.speciesGuess or ""
+  props.suggestionStatus = "Asking iNaturalist…"
 
-  catalog:withWriteAccessDo("iNat species guess", function()
-    for _, photo in ipairs(photos) do
-      photo:setPropertyForPlugin(_PLUGIN, "inat_species_guess", guess)
+  local api, authErr = UploadCore.requireAPI()
+  if not api then
+    props.suggestionStatus = authErr
+    return
+  end
+
+  local rows, err = PanelCore.getSuggestions(api, photos[1])
+  if not rows then
+    props.suggestionStatus = err or "Could not get suggestions."
+    return
+  end
+
+  props.suggestions        = rows
+  props.suggestionItems    = PanelCore.suggestionItems(rows)
+  props.selectedSuggestion = nil
+  props.suggestionTaxonId  = nil
+
+  if #rows == 0 then
+    props.suggestionStatus = "iNaturalist had no suggestions for this photo."
+  else
+    props.suggestionStatus = "Pick one to use it as the species guess."
+  end
+end
+
+--- Copy a chosen suggestion into the species guess.
+--
+-- The scientific name goes into the field, not the common name: it is
+-- unambiguous, and it is what gets uploaded when there is no taxon to point at.
+-- The taxon id is remembered separately, and it is the more important half --
+-- it is what turns the next button press into a real identification rather than
+-- free text iNaturalist will ignore.
+function ObservationPanel.chooseSuggestion(props, index)
+  local rows = props.suggestions or {}
+  local row  = index and rows[index]
+
+  if not row then
+    props.suggestionTaxonId = nil
+    return nil
+  end
+
+  props.speciesGuess      = row.name or row.common_name or ""
+  props.suggestionTaxonId = row.taxon_id
+
+  return row
+end
+
+--- Upload the selection, or correct the identification of what is already up.
+--
+-- MUST be called from inside a task.
+function ObservationPanel.uploadOrUpdate(props)
+  local catalog = LrApplication.activeCatalog()
+  local photos  = catalog:getTargetPhotos() or {}
+
+  if #photos == 0 then
+    LrDialogs.message("iNaturalist", "Select at least one photo first.", "warning")
+    return
+  end
+
+  local api, authErr = UploadCore.requireAPI()
+  if not api then
+    LrDialogs.message("iNaturalist", authErr, "critical")
+    return
+  end
+
+  local settings = Settings.all()
+  local guess    = props.speciesGuess or ""
+  local taxonId  = props.suggestionTaxonId
+
+  -- Which of the two jobs this is depends on the photo, not on the button: the
+  -- caption is only a description of what is about to happen.
+  if UploadCore.pluginField(photos[1], "inat_observation_id") then
+    props.suggestionStatus = "Updating the identification…"
+
+    local ok, err = PanelCore.updateSpeciesGuess(catalog, api, photos, guess, taxonId)
+    if not ok then
+      LrDialogs.message("iNaturalist", err or "Could not update the observation.", "critical")
+      props.suggestionStatus = ""
+      return
     end
-  end)
 
-  logger:info("Species guess set on " .. #photos .. " photo(s): " .. guess)
-  return #photos
+    props.suggestionStatus = taxonId and "Identification posted."
+                                     or "Species guess sent."
+    return
+  end
+
+  props.suggestionStatus = "Uploading…"
+
+  local observationId, _, errors = PanelCore.upload(catalog, api, settings, photos, {
+    sleep   = LrTasks.sleep,
+    onEvent = function(message) props.suggestionStatus = message end,
+  })
+
+  if not observationId then
+    LrDialogs.message("iNaturalist Upload",
+      errors[1] or "The upload failed.", "critical")
+    props.suggestionStatus = ""
+    return
+  end
+
+  -- A taxon chosen before the upload could not be sent with it: an
+  -- identification needs an observation to attach to, and there was not one
+  -- until a moment ago. So it is posted now, as a second step.
+  if taxonId then
+    local ok, err = PanelCore.updateSpeciesGuess(catalog, api, photos, guess, taxonId)
+    if not ok then
+      errors[#errors + 1] = err
+    end
+  end
+
+  if #errors > 0 then
+    LrDialogs.message("iNaturalist Upload",
+      "Uploaded as observation " .. tostring(observationId)
+      .. ", but some things did not work:\n\n" .. table.concat(errors, "\n"),
+      "warning")
+  end
+
+  props.suggestionStatus = "Uploaded as observation " .. tostring(observationId) .. "."
+end
+
+--- Forget the link between the selected photos and their observation.
+--
+-- MUST be called from inside a task.
+--
+-- Confirmed first, because the button is next to three that are harmless and
+-- this one is not obviously reversible: relinking means finding the observation
+-- ID again by hand. The dialog says what it will and will not touch, since the
+-- word "unlink" does not make clear that nothing on iNaturalist is deleted.
+function ObservationPanel.unlink(props)
+  local catalog = LrApplication.activeCatalog()
+  local photos  = catalog:getTargetPhotos() or {}
+
+  if #photos == 0 then return 0 end
+
+  local answer = LrDialogs.confirm(
+    "Unlink from iNaturalist?",
+    "This forgets the observation link on " .. #photos .. " photo(s).\n\n"
+    .. "Nothing on iNaturalist is changed or deleted, and the taxonomy "
+    .. "keywords already applied are kept.",
+    "Unlink", "Cancel")
+
+  if answer ~= "ok" then return 0 end
+
+  return PanelCore.unlink(catalog, photos)
 end
 
 --------------------------------------------------------------------------------
@@ -295,12 +505,37 @@ function ObservationPanel.show()
       local props = LrBinding.makePropertyTable(context)
       local refresh = makeRefresh(props)
 
+      props.suggestions      = {}
+      props.suggestionItems  = {}
+      props.suggestionStatus = ""
+
       refresh()
 
+      -- Picking a row in the list is the selection changing, not a click on
+      -- anything, so there is no action callback to hang this off. The property
+      -- observer is how a list control tells us anything at all.
+      props:addObserver("selectedSuggestion", function()
+        ObservationPanel.chooseSuggestion(props, props.selectedSuggestion)
+      end)
+
       local actions = {
-        saveSpeciesGuess = function()
+        getSuggestions = function()
           LrTasks.startAsyncTask(function()
-            ObservationPanel.saveSpeciesGuess(props)
+            ObservationPanel.loadSuggestions(props)
+          end)
+        end,
+
+        uploadOrUpdate = function()
+          LrTasks.startAsyncTask(function()
+            ObservationPanel.uploadOrUpdate(props)
+            refresh()
+          end)
+        end,
+
+        unlink = function()
+          LrTasks.startAsyncTask(function()
+            ObservationPanel.unlink(props)
+            refresh()
           end)
         end,
 
