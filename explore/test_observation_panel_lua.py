@@ -275,12 +275,25 @@ def test_the_window_offers_the_actions_the_metadata_panel_cannot(plugin, panel):
     """The Metadata panel is validated down to string/enum/url fields, so it can
     never hold a button. These are the actions that had nowhere else to live."""
     args = show(plugin, panel)
-    titles = {b["title"] for b in of_type(args["contents"], "push_button")}
+    titles = {b["title"] for b in of_type(args["contents"], "push_button")
+              if isinstance(b["title"], str)}
     assert "Sync" in titles
     assert "View on iNaturalist" in titles
+    assert "Unlink" in titles
+    assert "Get Suggestions" in titles
     # The ellipsis is a multi-byte character and Lua hands back raw bytes, so
     # match the part of the label that is plain ASCII.
     assert any(t.startswith("Link to Observation") for t in titles)
+
+
+def test_there_is_no_save_button(plugin, panel):
+    """A guess saved to the catalog and never sent anywhere is what looked like
+    it worked and did not. Every route out of the field now ends at iNaturalist,
+    so a Save button reappearing is a regression, not a convenience."""
+    args = show(plugin, panel)
+    titles = {b["title"] for b in of_type(args["contents"], "push_button")
+              if isinstance(b["title"], str)}
+    assert "Save" not in titles
 
 
 def test_the_species_guess_is_editable_here(plugin, panel):
@@ -303,45 +316,68 @@ def test_the_view_button_is_disabled_without_an_observation(plugin, panel):
 # ---------------------------------------------------------------------------
 
 
-def test_saving_the_species_guess_writes_every_selected_photo(plugin, panel):
-    """Deliberately the whole selection, unlike the display: one name across the
-    six frames of the same animal is the common case."""
-    photos = [plugin.new_photo(), plugin.new_photo(), plugin.new_photo()]
-    plugin.set_target_photos(photos)
+def test_choosing_a_suggestion_fills_the_species_guess(plugin, panel):
+    """Selecting a row is the point of the list. The scientific name goes in the
+    field because it is unambiguous and it is what gets uploaded."""
+    props = plugin.runtime.table_from({})
+    props["suggestions"] = plugin.runtime.table_from({
+        1: plugin.runtime.table_from(
+            {"taxon_id": 47219, "name": "Apis mellifera",
+             "common_name": "Western Honey Bee"}),
+    })
 
-    props = plugin.runtime.table_from({"speciesGuess": "Apis mellifera"})
-    count = plugin.call(panel.saveSpeciesGuess, props)[0]
+    plugin.call(panel.chooseSuggestion, props, 1)
 
-    assert count == 3
-    for photo in photos:
-        assert photo["_props"]["inat_species_guess"] == "Apis mellifera"
-
-
-def test_saving_the_species_guess_opens_a_write_transaction(plugin, panel):
-    """setPropertyForPlugin outside one throws in the real catalog."""
-    plugin.set_target_photos([plugin.new_photo()])
-    props = plugin.runtime.table_from({"speciesGuess": "Apis"})
-    plugin.call(panel.saveSpeciesGuess, props)
-    assert plugin.catalog_writes == ["iNat species guess"]
+    assert props["speciesGuess"] == "Apis mellifera"
+    assert props["suggestionTaxonId"] == 47219
 
 
-def test_saving_with_nothing_selected_does_nothing(plugin, panel):
-    plugin.set_target_photos([])
-    props = plugin.runtime.table_from({"speciesGuess": "Apis"})
-    assert plugin.call(panel.saveSpeciesGuess, props)[0] == 0
-    assert plugin.catalog_writes == []
+def test_choosing_a_suggestion_that_is_not_there_clears_the_taxon(plugin, panel):
+    """A stale taxon id is worse than none: the next button press would post an
+    identification for a species nobody picked."""
+    props = plugin.runtime.table_from({})
+    props["suggestionTaxonId"] = 47219
+    props["suggestions"] = plugin.runtime.table_from({})
+
+    plugin.call(panel.chooseSuggestion, props, 3)
+
+    assert props["suggestionTaxonId"] is None
 
 
-def test_clearing_the_species_guess_is_allowed(plugin, panel):
-    """Emptying the field has to reach the photo. Treating "" as "no change"
-    would make a wrong guess impossible to take back."""
-    photo = plugin.new_photo(inat_species_guess="Wrong")
+def test_unlinking_asks_first(plugin, panel):
+    """Relinking means finding the observation ID by hand, so it is not a thing
+    to do on a stray click next to three harmless buttons."""
+    photo = plugin.new_photo(inat_observation_id="123")
     plugin.set_target_photos([photo])
+    # The harness answers Cancel unless told otherwise.
 
-    props = plugin.runtime.table_from({"speciesGuess": ""})
-    plugin.call(panel.saveSpeciesGuess, props)
+    plugin.call(panel.unlink, plugin.runtime.table_from({}))
 
-    assert photo["_props"]["inat_species_guess"] == ""
+    assert photo["_props"]["inat_observation_id"] == "123"
+
+
+def test_unlinking_when_confirmed_forgets_the_observation(plugin, panel):
+    photo = plugin.new_photo(inat_observation_id="123",
+                             inat_observation_url="https://x", inat_taxon_name="Apis")
+    plugin.set_target_photos([photo])
+    plugin.set_confirm_answer("ok")
+
+    count = plugin.call(panel.unlink, plugin.runtime.table_from({}))[0]
+
+    assert count == 1
+    assert photo["_props"]["inat_observation_id"] == ""
+    assert photo["_props"]["inat_observation_url"] == ""
+
+
+def test_unlinking_says_it_leaves_inaturalist_alone(plugin, panel):
+    """The word "unlink" does not make clear that nothing is deleted on the
+    website. Somebody reading the dialog has to be able to tell."""
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="123")])
+    plugin.call(panel.unlink, plugin.runtime.table_from({}))
+
+    message = plugin.dialogs[-1]["message"]
+    assert "iNaturalist" in message
+    assert "keyword" in message.lower()
 
 
 def test_the_view_button_opens_the_observation(plugin, panel):
