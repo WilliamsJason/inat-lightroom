@@ -177,6 +177,49 @@ looks entirely ordinary, up to tens of kilometres out. The plugin refuses those
 rather than writing fiction into your catalog. Your own true position does come
 back if the API returns it to you as the owner.
 
+### Picking a rank you can defend
+
+Suggestions come back with a confidence score. When the best one is under 75%,
+the plugin puts coarser options at the **top** of the list — genus, family,
+order — each marked *"agreed by every suggestion"*.
+
+Those come from iNaturalist's own `common_ancestor`: the most specific taxon its
+model is confident about across *all* the candidates. If five results argue
+about the species but all sit in one genus, that genus is the honest answer, and
+it is the one the website itself falls back to. The ladder is never built by
+walking up from the top result, because at 40% that result's family is exactly
+what is in doubt — and it never offers a rank finer than the common ancestor.
+
+They sit at the top rather than the bottom because a safer choice listed below
+eight species is one nobody scrolls to.
+
+For the same reason, identifying something as a **species** on a score below 75%
+asks for confirmation first — on upload and on update, since an observation that
+already exists is a published record, not a safer place to be wrong. Choosing
+the genus instead is never questioned. A coarse record that is right is worth
+more than a precise one that is wrong, and it is much easier for somebody else
+to refine than to argue down.
+
+### Using a suggestion without publishing anything
+
+Two buttons sit next to the upload button and neither one uploads:
+
+- **Sync guess to Metadata tags** writes the chosen taxon's full keyword
+  hierarchy and taxon fields into the catalog and tells iNaturalist nothing. For
+  the frames worth filing under the right name and not worth publishing — a
+  duplicate, a soft focus, something already recorded. Before this the only way
+  to get the hierarchy onto a photo was to create an observation and then think
+  better of it.
+- **View guess on iNaturalist** opens the taxon page, for when two suggestions
+  look alike and the only way to decide is to go and look.
+
+Neither warns about anything. A keyword in your own catalog is not public, not
+permanent, and plainly visible; warning about it would only teach you to click
+past the warnings that matter.
+
+A later **Sync** overwrites the taxon fields with whatever iNaturalist says,
+which is the intended order of authority.
+
 ### A species guess is not an identification
 
 This is the one piece of iNaturalist behaviour worth understanding, because it
@@ -377,7 +420,7 @@ in the words of the bug it would be — runs the suite, and reports any mutation
 nothing noticed:
 
 ```powershell
-.\.venv\Scripts\python.exe mutate_panel.py        # panel, metadata, tagset, location
+.\.venv\Scripts\python.exe mutate_panel.py        # panel, metadata, tagset, location, sync, API
 .\.venv\Scripts\python.exe mutate_upload_core.py
 .\.venv\Scripts\python.exe mutate_settings.py
 .\.venv\Scripts\python.exe mutate_render_photo.py

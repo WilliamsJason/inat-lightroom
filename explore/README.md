@@ -177,7 +177,7 @@ runs the suite, restores the file, and reports any mutation that nothing
 noticed:
 
 ```powershell
-.\.venv\Scripts\python.exe mutate_panel.py        # panel, metadata, tagset, location
+.\.venv\Scripts\python.exe mutate_panel.py        # panel, metadata, tagset, location, sync, API
 .\.venv\Scripts\python.exe mutate_upload_core.py
 .\.venv\Scripts\python.exe mutate_settings.py
 .\.venv\Scripts\python.exe mutate_render_photo.py

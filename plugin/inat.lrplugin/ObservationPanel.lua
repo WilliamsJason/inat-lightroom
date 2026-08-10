@@ -197,6 +197,9 @@ local function makeRefresh(props)
       props.suggestionItems   = {}
       props.selectedSuggestion = nil
       props.suggestionTaxonId = nil
+      props.suggestionRank    = nil
+      props.suggestionScore   = nil
+      props.hasSuggestion     = false
       props.suggestionStatus  = ""
     end)
   end
@@ -332,12 +335,28 @@ function ObservationPanel.contents(f, props, actions)
     -- depends only on whether the photo is linked yet, so making the user
     -- choose between two buttons would be asking them a question the plugin
     -- already knows the answer to.
+    --
+    -- The other two are deliberately not that intent. One files the name in the
+    -- catalog and tells iNaturalist nothing; the other just opens a page to look
+    -- at. Neither publishes anything, which is why they sit apart from the
+    -- button that does.
     f:row {
+      spacing = f:control_spacing(),
       f:push_button {
         title   = LrView.bind("uploadTitle"),
         enabled = LrView.bind("hasPhoto"),
         action  = actions.uploadOrUpdate,
         width   = 180,
+      },
+      f:push_button {
+        title   = "Sync guess to Metadata tags",
+        enabled = LrView.bind("hasSuggestion"),
+        action  = actions.applyLocally,
+      },
+      f:push_button {
+        title   = "View guess on iNaturalist",
+        enabled = LrView.bind("hasSuggestion"),
+        action  = actions.viewTaxon,
       },
     },
 
@@ -407,6 +426,9 @@ function ObservationPanel.loadSuggestions(props)
   props.suggestionItems    = PanelCore.suggestionItems(rows)
   props.selectedSuggestion = nil
   props.suggestionTaxonId  = nil
+  props.suggestionRank     = nil
+  props.suggestionScore    = nil
+  props.hasSuggestion      = false
 
   if #rows == 0 then
     props.suggestionStatus = "iNaturalist had no suggestions for this photo."
@@ -429,11 +451,22 @@ function ObservationPanel.chooseSuggestion(props, selection)
 
   if not row then
     props.suggestionTaxonId = nil
+    props.suggestionRank    = nil
+    props.suggestionScore   = nil
+    props.hasSuggestion     = false
     return nil
   end
 
   props.speciesGuess      = row.name or row.common_name or ""
   props.suggestionTaxonId = row.taxon_id
+  props.hasSuggestion     = row.taxon_id ~= nil
+
+  -- Kept so the upload can argue about a weak species-level claim. Read off the
+  -- row at the moment it is chosen rather than looked up later, because the list
+  -- is replaced wholesale by the next Get Suggestions and the index would then
+  -- point at something else.
+  props.suggestionRank    = row.rank
+  props.suggestionScore   = row.combined_score
 
   return row
 end
@@ -489,6 +522,24 @@ function ObservationPanel.uploadOrUpdate(props)
   local guess    = props.speciesGuess or ""
   local taxonId  = props.suggestionTaxonId
   local accuracy = props.accuracy
+
+  -- Asked before the branch, because both jobs end with iNaturalist holding a
+  -- species-level claim. The location warning below is upload-only for a real
+  -- reason -- an update cannot add coordinates -- but a weak identification is
+  -- just as wrong on an observation that already exists.
+  local doubt = PanelCore.confidenceWarning({
+    rank           = props.suggestionRank,
+    combined_score = props.suggestionScore,
+    name           = guess,
+  })
+  if doubt then
+    local answer = LrDialogs.confirm("Identify as a species?", doubt,
+      "Identify Anyway", "Cancel")
+    if answer ~= "ok" then
+      props.suggestionStatus = ""
+      return
+    end
+  end
 
   -- Which of the two jobs this is depends on the photo, not on the button: the
   -- caption is only a description of what is about to happen.
@@ -569,6 +620,44 @@ function ObservationPanel.uploadOrUpdate(props)
   props.suggestionStatus = "Uploaded as observation " .. tostring(observationId) .. "."
 end
 
+--- File the chosen suggestion's taxonomy in the catalog, and tell nobody.
+--
+-- MUST be called from inside a task.
+--
+-- No location warning and no confidence warning here, deliberately. Both exist
+-- because a bad record on iNaturalist is a public artefact other people build
+-- on; a keyword in your own catalog is neither public nor permanent, and you can
+-- see it and change it. Warning about it anyway would train people to click past
+-- the warnings that matter.
+function ObservationPanel.applyLocally(props)
+  local catalog = LrApplication.activeCatalog()
+  local photos  = catalog:getTargetPhotos() or {}
+
+  if #photos == 0 then
+    LrDialogs.message("iNaturalist", "Select at least one photo first.", "warning")
+    return
+  end
+
+  local api, authErr = UploadCore.requireAPI()
+  if not api then
+    LrDialogs.message("iNaturalist", authErr, "critical")
+    return
+  end
+
+  props.suggestionStatus = "Applying keywords…"
+
+  local ok, err = PanelCore.applyGuessLocally(catalog, api, photos,
+    props.suggestionTaxonId)
+  if not ok then
+    LrDialogs.message("iNaturalist", err or "Could not apply that taxon.",
+      "critical")
+    props.suggestionStatus = ""
+    return
+  end
+
+  props.suggestionStatus = "Keywords applied to " .. #photos .. " photo(s)."
+end
+
 --- Forget the link between the selected photos and their observation.
 --
 -- MUST be called from inside a task.
@@ -610,6 +699,7 @@ function ObservationPanel.show()
       props.suggestions      = {}
       props.suggestionItems  = {}
       props.suggestionStatus = ""
+      props.hasSuggestion    = false
 
       refresh()
 
@@ -632,6 +722,22 @@ function ObservationPanel.show()
             ObservationPanel.uploadOrUpdate(props)
             refresh()
           end)
+        end,
+
+        applyLocally = function()
+          LrTasks.startAsyncTask(function()
+            ObservationPanel.applyLocally(props)
+            refresh()
+          end)
+        end,
+
+        -- Not on a task: opening a browser does not block, and there is nothing
+        -- to refresh afterwards.
+        viewTaxon = function()
+          local url = PanelCore.taxonUrl(props.suggestionTaxonId)
+          if url then
+            LrHttp.openUrlInBrowser(url)
+          end
         end,
 
         unlink = function()

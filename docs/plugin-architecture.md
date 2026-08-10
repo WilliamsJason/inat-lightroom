@@ -374,6 +374,78 @@ button and the `lightroom://` URL. It used to be a local function inside
 `URLHandler.lua`, which meant the panel could only reach it by pretending to be
 a URL.
 
+### Offering a rank the evidence supports
+
+`PanelCore.fallbackRows` prepends coarser taxa to the suggestion list when the
+top `combined_score` is below `CONFIDENT_SCORE` (75).
+
+The source is the vision response's `common_ancestor` — the most specific taxon
+the model is confident about *across all candidates* — and its `ancestors`,
+filtered to `FALLBACK_RANKS` (`order`, `family`, `genus`). Two properties follow
+from that choice and neither is incidental:
+
+- **It never descends below the common ancestor.** Offering the top result's
+  genus would assume the top result's lineage is right, which is precisely what
+  a 40% score doubts. Everything at or above the common ancestor is agreed on by
+  every candidate.
+- **It carries no score.** These are not rows the model ranked. A percentage
+  beside one would be a number nobody computed, so the row carries a `note` and
+  `describeSuggestion` renders that in place of a percentage.
+
+Ordered finest-first and inserted at the head of the list, because the most
+specific defensible answer is the one most people want and a safer option below
+eight species is one nobody scrolls to. The `/taxa/{id}` fetch for the lineage
+happens only when the list is unconfident, so a confident answer pays nothing.
+
+`InatAPI.summariseSuggestions` now returns `rows, commonAncestor`. It previously
+discarded the ancestor entirely, which left the picker with nothing to fall back
+to but the guess already under suspicion.
+
+### Arguing before a weak species claim
+
+`PanelCore.confidenceWarning` returns a message when a **species-rank** taxon is
+about to be committed on a score below 75, and nil otherwise.
+
+Restricted to species-level ranks (`species`, `subspecies`, `variety`) on
+purpose. Coming in at genus when the photo will not support more is what a
+careful observer does — warning about it would punish the behaviour the fallback
+list exists to encourage. A row with no score at all is either a fallback rank
+or a hand-typed name, where there is no evidence to call weak.
+
+Asked **before** the upload/update branch in `ObservationPanel.uploadOrUpdate`,
+unlike the location warning, which is upload-only because an update cannot add
+coordinates. A wrong species is equally wrong on an observation that already
+exists — arguably worse, because it is already public.
+
+The message names the alternative rather than only asking "are you sure?". A
+warning with no suggested action is one people learn to dismiss.
+
+### Applying a taxon without publishing
+
+`PanelCore.applyGuessLocally` fetches the chosen taxon, writes its keyword
+hierarchy and taxon fields to every selected photo, and stops. Nothing reaches
+iNaturalist and no observation link is made or implied.
+
+`SyncCore.applyTaxon` is the shared half. The sync learns a taxon from an
+observation and the panel learns one from a suggestion; they disagree about
+where it comes from and agree about everything that happens afterwards, so only
+the first half was worth writing twice. `SyncCore.withAncestors` is the other
+extraction — a taxon from either source usually arrives without the lineage that
+*is* the keyword hierarchy.
+
+Deliberately no warnings on this path. The location and confidence warnings both
+exist because a bad iNaturalist record is a public artefact other people build
+on; a keyword in a private catalog is none of those things, and warning about it
+would dilute the two that matter.
+
+Chosen policy for the taxon fields: fill them in, and let the next Sync
+overwrite them without asking. That is already how `syncPhoto` behaves, so it
+needed no change — the fields mean "best known taxon", with iNaturalist
+authoritative whenever it has an opinion.
+
+`PanelCore.taxonUrl` formats the id with `%d` rather than `tostring`, which
+gives `1.03486e+08` past a certain size and a URL that 404s.
+
 ---
 
 ## Custom metadata schema (`CustomMetadata.lua`)

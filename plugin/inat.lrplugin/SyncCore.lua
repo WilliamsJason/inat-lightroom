@@ -68,13 +68,57 @@ local function buildKeywordPath(taxon)
   return InatAPI.buildKeywordPath(taxon, "iNaturalist")
 end
 
+--- Fill in a taxon's ancestors if it arrived without them.
+--
+-- MUST be called from inside a task: it may make an HTTP call.
+--
+-- A taxon from an observation or a vision result carries a name and a rank but
+-- usually no lineage, and the lineage is the whole keyword hierarchy. Returns
+-- the original taxon when the fetch fails, because a leaf keyword under the
+-- wrong parent is still better than no keyword and an error the user cannot act
+-- on.
+function SyncCore.withAncestors(api, taxon)
+  if not taxon or taxon.ancestors then return taxon end
+
+  local full, err = api:getTaxon(taxon.id)
+  if full then return full end
+
+  logger:warn("Could not fetch full taxon: " .. (err or "unknown"))
+  return taxon
+end
+
+--- Write a taxon onto a photo: the keyword hierarchy and the taxon fields.
+--
+-- MUST be called from inside a write transaction. createKeyword needs write
+-- access exactly as the metadata setters do, and callers have other writes to
+-- batch with it.
+--
+-- Shared by the sync, which learns the taxon from an observation, and by the
+-- panel's local apply, which learns it from a suggestion the user picked. They
+-- disagree about where a taxon comes from and agree about everything that
+-- happens next, so only the first half is worth writing twice.
+--
+-- @return true when a taxon was written, false when there was none.
+function SyncCore.applyTaxon(catalog, photo, taxon)
+  if not taxon then return false end
+
+  local leafKw = ensureKeywordPath(catalog, buildKeywordPath(taxon))
+  if leafKw then
+    photo:addKeyword(leafKw)
+  end
+
+  photo:setPropertyForPlugin(_PLUGIN, "inat_taxon_id", tostring(taxon.id or ""))
+  photo:setPropertyForPlugin(_PLUGIN, "inat_taxon_name", taxon.name or "")
+  photo:setPropertyForPlugin(_PLUGIN, "inat_common_name",
+    taxon.preferred_common_name or "")
+
+  return true
+end
+
 --------------------------------------------------------------------------------
 -- Sync a single photo
 --------------------------------------------------------------------------------
 
---- Bring one photo up to date with its observation.
--- @return status  One of the SyncCore.* codes.
--- @return err     A message, when status is FAILED.
 --- The coordinates an observation is willing to tell us, if any.
 --
 -- @return latitude, longitude, accuracyInMetres -- all nil when there is
@@ -119,6 +163,9 @@ function SyncCore.coordinatesFrom(obs)
   return latitude, longitude, accuracy
 end
 
+--- Bring one photo up to date with its observation.
+-- @return status  One of the SyncCore.* codes.
+-- @return err     A message, when status is FAILED.
 function SyncCore.syncPhoto(catalog, photo, api)
   local obsId = photo:getPropertyForPlugin(_PLUGIN, "inat_observation_id")
   if not obsId or obsId == "" then
@@ -133,39 +180,14 @@ function SyncCore.syncPhoto(catalog, photo, api)
   end
 
   -- Prefer community_taxon; fall back to taxon
-  local taxon = obs.community_taxon or obs.taxon
+  local taxon = SyncCore.withAncestors(api, obs.community_taxon or obs.taxon)
 
-  -- Fetch full taxon with ancestors if not already present
-  if taxon and not taxon.ancestors then
-    local fullTaxon, taxErr = api:getTaxon(taxon.id)
-    if fullTaxon then
-      taxon = fullTaxon
-    else
-      logger:warn("Could not fetch full taxon: " .. (taxErr or ""))
-    end
-  end
-
-  -- Build and apply keyword hierarchy. createKeyword needs write access just
-  -- as the metadata setters do, so it shares the one transaction.
-  --
   -- Everything that is not the taxon is written either way. An observation
   -- nobody has identified yet is the normal state of one just published, and
   -- its UUID and URL are worth recording now: the UUID is what stops the next
   -- publish creating a duplicate.
   catalog:withWriteAccessDo("iNat sync", function()
-    if taxon then
-      local leafKw = ensureKeywordPath(catalog, buildKeywordPath(taxon))
-      if leafKw then
-        photo:addKeyword(leafKw)
-      end
-
-      photo:setPropertyForPlugin(_PLUGIN, "inat_taxon_id",
-        tostring(taxon.id or ""))
-      photo:setPropertyForPlugin(_PLUGIN, "inat_taxon_name",
-        taxon.name or "")
-      photo:setPropertyForPlugin(_PLUGIN, "inat_common_name",
-        taxon.preferred_common_name or "")
-    end
+    SyncCore.applyTaxon(catalog, photo, taxon)
 
     photo:setPropertyForPlugin(_PLUGIN, "inat_quality_grade",
       obs.quality_grade or "")
