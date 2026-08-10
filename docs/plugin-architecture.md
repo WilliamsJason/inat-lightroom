@@ -47,10 +47,18 @@ views and wire buttons, and `PanelCore` / `Settings` hold what those buttons do.
 Only the second half can be tested outside Lightroom, so the split is drawn to
 leave as little as possible on the untestable side.
 
-`Library > Plug-in Extras` holds two items, and both of them only *open*
+`File > Plug-in Extras` holds two items, and both of them only *open*
 something: **iNaturalist Panel** and **iNaturalist Settings…**. That is the test
 for whether something belongs in the menu — features live where the user is
 already looking, and a menu is somewhere you have to go.
+
+File rather than Library: the SDK offers a choice of three parent menus (see
+lightroom-sdk-notes.md), and the Library menu only exists in the Library
+module. Both items open floating windows that work from anywhere, and neither
+acts on the selected photos. A photo right-click entry would be the natural
+home for "send this to iNaturalist", but no SDK key reaches that menu — the
+only routes are an export preset or a publish service, both of which this
+plugin deliberately does not declare.
 
 ---
 

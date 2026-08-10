@@ -334,10 +334,10 @@ function InatAuth.getToken(forceRefresh)
       return nil, "Your iNaturalist token has expired. Tokens last 24 hours.\n\n"
         .. "Sign in at inaturalist.org, open www.inaturalist.org/users/api_token, "
         .. "and paste the new token via\n"
-        .. "Library > Plug-in Extras > iNaturalist: Set Up Credentials."
+        .. "File > Plug-in Extras > iNaturalist Settings…."
     end
     return nil, "iNaturalist credentials are not set up.\n\n"
-      .. "Use Library > Plug-in Extras > iNaturalist: Set Up Credentials."
+      .. "Use File > Plug-in Extras > iNaturalist Settings…."
   end
 
   local creds = {

@@ -15,7 +15,7 @@ This directory contains the **inat.lrplugin** Adobe Lightroom Classic plugin.
 
 ## First-time setup
 
-Go to **Library → Plug-in Extras → iNaturalist Settings…** and open the
+Go to **File → Plug-in Extras → iNaturalist Settings…** and open the
 **Account** tab. There are two ways to authenticate, and the tab offers both.
 
 ### Option 1 — paste an API token (works today)
@@ -51,13 +51,13 @@ plugin. Use **Clear Stored Credentials** on the same tab to remove it all.
 ## Usage
 
 Everything the plugin does happens in two floating windows, both under
-**Library → Plug-in Extras**. There is no Publish Service and no iNaturalist
+**File → Plug-in Extras**. There is no Publish Service and no iNaturalist
 entry in the Export dialog — see [Why there is no publish
 service](#why-there-is-no-publish-service).
 
 ### The iNaturalist panel
 
-**Library → Plug-in Extras → iNaturalist Panel** opens a window that follows
+**File → Plug-in Extras → iNaturalist Panel** opens a window that follows
 whatever is selected in the filmstrip. It shows what the selection currently is
 on iNaturalist — observation ID, taxon, common name, quality grade, last sync —
 and carries every action.
@@ -237,7 +237,7 @@ disagreeing with itself. Posting a new identification withdraws the old one.
 
 ### The settings window
 
-**Library → Plug-in Extras → iNaturalist Settings…**, in three tabs:
+**File → Plug-in Extras → iNaturalist Settings…**, in three tabs:
 
 - **Account** — credentials, as above.
 - **Observations** — what new observations say: geoprivacy, whether to send the

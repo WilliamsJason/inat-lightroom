@@ -393,13 +393,44 @@ def test_info_registers_the_tagset_and_url_handler(plugin):
     assert info["URLHandler"] == "URLHandler.lua"
 
 
+def test_the_menu_items_hang_off_the_file_menu(plugin):
+    """`Library.lrmodule` hangs one shared "Plug-in Extras" submenu off three
+    parents, selected by which Info.lua key you declare: LrExportMenuItems is
+    File, LrLibraryMenuItems is Library, LrHelpMenuItems is Help. The key name
+    is a lie -- LrExportMenuItems has nothing to do with exporting, and this
+    plugin has no export target at all. File is the right parent because the
+    Library menu only exists in the Library module, while both items open
+    floating windows that work from any module."""
+    info = plugin.require("Info")
+
+    assert info["LrExportMenuItems"] is not None
+    assert info["LrLibraryMenuItems"] is None
+    assert info["LrHelpMenuItems"] is None
+
+
+def test_no_user_facing_string_points_at_the_wrong_menu(plugin):
+    """Directions to a menu are a fact about Info.lua duplicated in prose, and
+    prose does not get updated when a key changes. Three of these strings were
+    already stale before this test existed -- two still named a "Set Up
+    Credentials" item that had been gone for two redesigns."""
+    from pathlib import Path
+
+    plugin_dir = Path(__file__).resolve().parent.parent / "plugin" / "inat.lrplugin"
+    for path in sorted(plugin_dir.glob("*.lua")):
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if "Plug-in Extras" not in line:
+                continue
+            assert "Library >" not in line, f"{path.name}:{number} {line.strip()}"
+            assert "Set Up Credentials" not in line, f"{path.name}:{number} {line.strip()}"
+
+
 def test_the_menu_only_opens_things(plugin):
     """The menu is not where features live -- the floating panel is, because it
     is in front of the user while they work. A menu item earns its place only by
     being the way to reach something that is not currently on screen: settings,
     which you need before anything works, and the panel, which can be closed."""
     info = plugin.require("Info")
-    items = lua_list(info["LrLibraryMenuItems"])
+    items = lua_list(info["LrExportMenuItems"])
 
     permanent = [item for item in items if not str(item["id"]).endswith("_probe")]
     assert len(permanent) == 2
@@ -413,7 +444,7 @@ def test_every_probe_menu_item_says_it_is_temporary(plugin):
     thing that actually gets forgotten is not the file, it is the menu item --
     so the title has to admit what it is while it is still there."""
     info = plugin.require("Info")
-    items = lua_list(info["LrLibraryMenuItems"])
+    items = lua_list(info["LrExportMenuItems"])
 
     for item in items:
         if str(item["id"]).endswith("_probe"):
@@ -424,7 +455,7 @@ def test_the_panel_menu_item_comes_first(plugin):
     """It is the one people will reach for repeatedly; settings is a
     once-per-install errand."""
     info = plugin.require("Info")
-    items = lua_list(info["LrLibraryMenuItems"])
+    items = lua_list(info["LrExportMenuItems"])
     assert items[0]["file"] == "ObservationPanelMenu.lua"
 
 
@@ -432,7 +463,10 @@ def test_the_plugin_offers_no_export_or_publish_target(plugin):
     """LrExportServiceProvider is one key doing two jobs: it is what puts
     iNaturalist in the Publish Services list AND what puts it in the Export
     dialog's target popup. The panel is the only way in now, so the key has to
-    be absent -- leaving it would quietly restore both."""
+    be absent -- leaving it would quietly restore both.
+
+    Not to be confused with LrExportMenuItems, which the plugin does declare;
+    despite the name that one only means "the File menu"."""
     info = plugin.require("Info")
 
     assert info["LrExportServiceProvider"] is None
@@ -447,7 +481,7 @@ def test_menu_scripts_are_never_required_by_other_modules():
     plugin_dir = Path(__file__).resolve().parent.parent / "plugin" / "inat.lrplugin"
     declared = {
         item["file"]
-        for item in lua_list(LuaPlugin().require("Info")["LrLibraryMenuItems"])
+        for item in lua_list(LuaPlugin().require("Info")["LrExportMenuItems"])
     }
     menu_scripts = {Path(name).stem for name in declared}
 

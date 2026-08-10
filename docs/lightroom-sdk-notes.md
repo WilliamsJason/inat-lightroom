@@ -213,6 +213,55 @@ The closest legitimate surface is `LrMetadataTagsetFactory`: a preset in the
 Metadata panel's dropdown that shows a chosen set of fields. It is a preset,
 not a new panel, so selecting it replaces whatever the user had there.
 
+## Which menu a plugin's items land in, and why there are only three
+
+`Info.lua` offers a choice of exactly three parents, and the key names are
+misleading — `LrExportMenuItems` has nothing to do with exporting, it just
+means the File menu:
+
+| `Info.lua` key | Menu it appears under |
+|---|---|
+| `LrExportMenuItems` | **File** › Plug-in Extras |
+| `LrLibraryMenuItems` | **Library** › Plug-in Extras |
+| `LrHelpMenuItems` | **Help** › Plug-in Extras |
+
+`Library.lrmodule` defines one `LrSdkMenus` module exposing exactly three
+functions — `addExportMenuItems`, `addLibraryMenuItems`, `addHelpMenuItems` —
+and the submenu title `$$$/AgSdkMenus/Menu/PluginExtras=Pl&ug-in Extras`
+occurs **once in the whole application**. One submenu, three parents. The
+mapping was read off the call sites: `addExportMenuItems` is invoked directly
+after the `$$$/Application/Menu/File/PluginManager` block, `addLibraryMenuItems`
+amid the `Menu/Library/*` items.
+
+This plugin uses File. The Library menu only exists in the Library module,
+whereas File is present everywhere; both of our items open floating windows
+that work from any module, and neither is an operation on selected photos.
+
+## A plugin cannot add anything to a photo's right-click menu
+
+Right-clicking a photo is the natural place to want "send this to
+iNaturalist", and there is no way to get there. Three independent checks:
+
+- Scanning every `.lrmodule`, `.exe` and `.dll` in the install for
+  `Lr[A-Za-z]*MenuItems` returns **exactly three keys**, all listed above.
+  Nothing matching `Context`, `Photo`, `Image`, `Grid` or `Filmstrip` exists.
+- Each of the three `add*MenuItems` functions has **exactly one call site**.
+  (Each name appears twice in `Library.lrmodule`: once in the consecutive run
+  of constants that is the `LrSdkMenus` module definition, once where it is
+  called.) So the Plug-in Extras submenu is attached to three menus, full stop.
+- The image context menu is built from `$$$/AgLibrary/Menu/ImageContext/*` and
+  never reaches the plugin submenu builder.
+
+`PluginContextMenu` does turn up in `libcef.dll`, but that is Chromium's
+embedded browser, not Lightroom's UI.
+
+The only two ways a plugin has ever appeared on that menu are the
+`ImageContext/ExportSubmenu` (an export preset built on an
+`LrExportServiceProvider`) and the publish-specific entries like
+`GoToPublishedPhoto` and `MarkPhotoDirty` (an `LrPublishService`). This plugin
+deliberately declares neither — see plugin-architecture.md — so the floating
+panel plus the File menu are the whole surface, by choice.
+
 The temptation is to also ship a combined preset — plugin fields plus the
 everyday Lightroom ones — so users are not giving anything up by leaving it
 selected. This plugin tried that and dropped it. Default is one dropdown away,
@@ -743,7 +792,8 @@ and `LrDate.currentTime()` for "now".
 
 ## Menu-item scripts run on load
 
-Anything in `LrLibraryMenuItems` executes its file top to bottom when clicked.
+Anything in `LrExportMenuItems` (or the Library/Help equivalents) executes its
+file top to bottom when clicked.
 Never `require` such a file from another module. This is not theoretical: the
 sync used to live in `SyncObservation.lua`, which made it unreachable from
 anywhere except its own menu item, and adding a second caller meant extracting

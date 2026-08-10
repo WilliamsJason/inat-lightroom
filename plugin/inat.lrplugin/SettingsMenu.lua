@@ -1,7 +1,7 @@
 --[[
   SettingsMenu.lua
   ----------------
-  Library > Plug-in Extras > "iNaturalist Settings…".
+  File > Plug-in Extras > "iNaturalist Settings…".
 
   Was "Set Up Credentials". It covers more than credentials now -- the publish
   service's settings had nowhere else to go once it was removed -- but the
