@@ -59,8 +59,8 @@ those are reviewed manually. See [`plugin/README.md`](plugin/README.md).
 
 Rough edges worth knowing: an upload takes the whole selection into one
 observation, but there is no way yet to group photos across separate uploads;
-and the panel's suggestions list has not been through a full host round trip on
-macOS.
+and nothing has been tested on macOS, where the panel's window handling is a
+deliberate no-op.
 
 ---
 
