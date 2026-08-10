@@ -707,6 +707,14 @@ class LuaPlugin:
         """Every LrExportSession built, in order."""
         return list(self.env["exportSessions"].values())
 
+    def view_factory(self):
+        """A view factory that records arguments instead of rendering.
+
+        Lets a test inspect the shape of a dialog -- what controls it has, what
+        identifiers they carry -- without opening one.
+        """
+        return self.env["stubs"]["LrView"]["osFactory"]()
+
     def run_pending_tasks(self, reverse: bool = False) -> None:
         """Run queued async tasks, as Lightroom would once the caller returns.
 
