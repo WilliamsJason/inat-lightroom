@@ -17,10 +17,11 @@ TARGETS = {
     "ObservationPanel": PLUGIN / "ObservationPanel.lua",
     "CustomMetadata": PLUGIN / "CustomMetadata.lua",
     "TagsetInat": PLUGIN / "TagsetInat.lua",
+    "UploadCore": PLUGIN / "UploadCore.lua",
 }
 
 TESTS = ["test_panel_core_lua.py", "test_observation_panel_lua.py",
-         "test_plugin_surface_lua.py"]
+         "test_plugin_surface_lua.py", "test_upload_core_lua.py"]
 
 MUTATIONS = [
     # --- the identification trap, the whole reason for this rewrite ----------
@@ -304,6 +305,68 @@ MUTATIONS = [
         "a field name loses its plugin namespace and resolves to nothing",
         '    prefix .. "inat_quality_grade",',
         '    "inat_quality_grade",',
+    ),
+
+    # --- location, the thing that decides whether an observation counts ------
+    (
+        "UploadCore",
+        "half a location is treated as a location",
+        "  if gps and gps.latitude and gps.longitude then",
+        "  if gps then",
+    ),
+    (
+        "UploadCore",
+        "a photo is always reported as having no location",
+        "  local gps = photo:getRawMetadata(\"gps\")",
+        "  local gps = nil",
+    ),
+    (
+        "PanelCore",
+        "the missing-location warning never fires",
+        "  local latitude = UploadCore.locationOf(photos[1])\n  if latitude then return nil end",
+        "  local latitude = UploadCore.locationOf(photos[1])\n  if true then return nil end",
+    ),
+    (
+        "PanelCore",
+        "the warning nags even when the user turned location off",
+        "  if not settings.inat_upload_location then return nil end",
+        "",
+    ),
+    (
+        "PanelCore",
+        "the warning judges a photo other than the one being uploaded",
+        "  local latitude = UploadCore.locationOf(photos[1])",
+        "  local latitude = UploadCore.locationOf(photos[#photos])",
+    ),
+    (
+        "PanelCore",
+        "a missing location is described without saying what it costs",
+        'local NO_LOCATION = "None - iNaturalist will mark this casual"',
+        'local NO_LOCATION = "None"',
+    ),
+    (
+        "PanelCore",
+        "no photo selected is reported as a missing location",
+        "  if not photo then return \"\" end\n\n  local latitude, longitude = UploadCore.locationOf(photo)",
+        "  local latitude, longitude\n  if photo then latitude, longitude = UploadCore.locationOf(photo) end",
+    ),
+    (
+        "ObservationPanel",
+        "the confirmation is asked and then ignored",
+        '    if answer ~= "ok" then',
+        '    if false then',
+    ),
+    (
+        "ObservationPanel",
+        "the Map button goes to a module that does not exist",
+        'LrApplicationView.switchToModule("map")',
+        'LrApplicationView.switchToModule("location")',
+    ),
+    (
+        "ObservationPanel",
+        "the location row is dropped from the window",
+        '      f:static_text { title = "Location:", width = LABEL, alignment = "right" },',
+        "",
     ),
 ]
 

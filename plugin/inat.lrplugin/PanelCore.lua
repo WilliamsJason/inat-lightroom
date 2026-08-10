@@ -33,6 +33,11 @@ local PanelCore = {}
 -- than a complete one.
 PanelCore.SUGGESTION_LIMIT = 8
 
+--- Shown in place of coordinates. Exposed so the panel and its tests agree on
+-- the wording without either one hardcoding it.
+local NO_LOCATION = "None - iNaturalist will mark this casual"
+PanelCore.NO_LOCATION = NO_LOCATION
+
 --------------------------------------------------------------------------------
 -- Describing suggestions
 --------------------------------------------------------------------------------
@@ -112,6 +117,49 @@ function PanelCore.selectedIndex(value)
   return tonumber(value.value)
 end
 
+--- Describe a photo's location for display.
+function PanelCore.describeLocation(photo)
+  if not photo then return "" end
+
+  local latitude, longitude = UploadCore.locationOf(photo)
+  if not latitude then return NO_LOCATION end
+
+  return string.format("%.5f, %.5f", latitude, longitude)
+end
+
+--- Decide whether an upload should be questioned for having no location.
+--
+-- Returns a message when it should, nil when it should not.
+--
+-- Missing coordinates are not a cosmetic problem. Measured against the live
+-- API: of 8,691,735 open-geoprivacy observations with no coordinates, 99.975%
+-- are casual grade, which keeps them out of most research use and out of the
+-- GBIF export. Only 1,793 of them ever reached research grade. An upload
+-- without a location is a record that will mostly not count, and the moment to
+-- say so is before it happens rather than after.
+--
+-- Silent when the user has turned off "send GPS coordinates". Warning about a
+-- thing they have deliberately switched off is nagging, and a warning that
+-- fires when it should not is a warning people learn to click past -- which
+-- would cost us the times it is right.
+function PanelCore.locationWarning(settings, photos)
+  settings = settings or {}
+
+  if not settings.inat_upload_location then return nil end
+  if not photos or #photos == 0 then return nil end
+
+  -- The observation's details come from the first photo, so it is the first
+  -- photo's location that decides, however many are selected.
+  local latitude = UploadCore.locationOf(photos[1])
+  if latitude then return nil end
+
+  return "This photo has no location.\n\n"
+      .. "iNaturalist marks observations without coordinates as casual grade, "
+      .. "which keeps them out of most research use. Almost nothing without a "
+      .. "location ever reaches research grade.\n\n"
+      .. "You can set one in Lightroom's Map module and upload afterwards."
+end
+
 --------------------------------------------------------------------------------
 -- Asking for suggestions
 --------------------------------------------------------------------------------
@@ -147,12 +195,7 @@ function PanelCore.getSuggestions(api, photo)
   -- collapse the candidate list dramatically, because a species from the wrong
   -- hemisphere stops being plausible. Sent as query parameters iNaturalist
   -- returns 200 and ignores them -- see InatAPI:scoreImage.
-  local latitude, longitude
-  local gps = photo:getRawMetadata("gps")
-  if gps and gps.latitude and gps.longitude then
-    latitude  = gps.latitude
-    longitude = gps.longitude
-  end
+  local latitude, longitude = UploadCore.locationOf(photo)
 
   local payload, err = api:scoreImage(path, latitude, longitude,
     UploadCore.observedOnFor(photo))

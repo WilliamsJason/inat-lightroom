@@ -67,6 +67,23 @@ function UploadCore.observedOnFor(photo)
   return LrDate.timeToUserFormat(captured, "%Y-%m-%d")
 end
 
+--- Read a photo's coordinates, if it has any.
+--
+-- Shared because three callers wanted it and each had grown its own copy: the
+-- observation body, the vision request, and now the panel's warning. Three
+-- copies of "does this photo have a location" is three chances to disagree
+-- about it, and the panel disagreeing with the uploader is exactly the bug
+-- that would teach users to ignore the warning.
+--
+-- @return latitude, longitude -- both nil when the photo has no location
+function UploadCore.locationOf(photo)
+  local gps = photo:getRawMetadata("gps")
+  if gps and gps.latitude and gps.longitude then
+    return gps.latitude, gps.longitude
+  end
+  return nil, nil
+end
+
 --- Build the observation body for one photo.
 --
 -- Everything specific to the observation comes off the photo. Only the things
@@ -96,10 +113,10 @@ function UploadCore.observationParamsFor(settings, photo, options)
   end
 
   if settings.inat_upload_location then
-    local gps = photo:getRawMetadata("gps")
-    if gps and gps.latitude and gps.longitude then
-      params.latitude  = gps.latitude
-      params.longitude = gps.longitude
+    local latitude, longitude = UploadCore.locationOf(photo)
+    if latitude then
+      params.latitude  = latitude
+      params.longitude = longitude
     end
   end
 

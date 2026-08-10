@@ -32,6 +32,7 @@
 --]]
 
 local LrApplication     = import "LrApplication"
+local LrApplicationView = import "LrApplicationView"
 local LrBinding         = import "LrBinding"
 local LrDialogs         = import "LrDialogs"
 local LrFunctionContext = import "LrFunctionContext"
@@ -42,6 +43,7 @@ local LrView            = import "LrView"
 local PanelCore  = require "PanelCore"
 local Settings   = require "Settings"
 local UploadCore = require "UploadCore"
+local logger     = require "Log"
 
 local ObservationPanel = {}
 
@@ -116,6 +118,10 @@ function ObservationPanel.valuesFor(photo, selectionCount)
     url           = photo and field(photo, "inat_observation_url") or "",
     hasPhoto      = photo ~= nil,
     hasObservation = linked,
+
+    location      = PanelCore.describeLocation(photo),
+    hasLocation   = photo ~= nil
+                    and select(1, UploadCore.locationOf(photo)) ~= nil,
 
     -- The action button's caption. Uploading and correcting an identification
     -- are the same intent at different points in a photo's life, so they share
@@ -255,6 +261,22 @@ function ObservationPanel.contents(f, props, actions)
     labelled("Observation:", "observationId"),
     labelled("Quality:", "quality"),
     labelled("Last synced:", "lastSynced"),
+
+    -- Location gets a row of its own rather than sitting with the others,
+    -- because it is the one field here the user can still do something about,
+    -- and the one whose absence quietly costs them the observation.
+    f:row {
+      f:static_text { title = "Location:", width = LABEL, alignment = "right" },
+      f:static_text {
+        title           = LrView.bind("location"),
+        fill_horizontal = 1,
+      },
+      f:push_button {
+        title   = "Set on Map",
+        enabled = LrView.bind("hasPhoto"),
+        action  = actions.openMap,
+      },
+    },
 
     f:separator { fill_horizontal = 1 },
 
@@ -397,6 +419,35 @@ function ObservationPanel.chooseSuggestion(props, selection)
   return row
 end
 
+--- Hand the user over to Lightroom's Map module to set a location.
+--
+-- Deliberately not a GPS control of our own. A plugin cannot draw a map --
+-- LrView has no canvas and no mouse coordinates -- so the best we could build
+-- is two number fields, against a module that already has place search,
+-- draggable pins, reverse geocoding, tracklogs and saved locations, and that
+-- writes the GPS itself. Sending people there is not a compromise; it is the
+-- better tool.
+--
+-- "map" is the module's public name, checked in Lightroom.exe's module table
+-- where it maps to com.adobe.ag.location, rather than guessed from the UI.
+--
+-- Wrapped because this is the first time the plugin has called
+-- LrApplicationView at all, and a button that silently does nothing is the
+-- worst outcome -- especially this button, whose whole job is to be the way out
+-- of a problem the panel just pointed at.
+function ObservationPanel.openMap()
+  local ok, err = pcall(function()
+    LrApplicationView.switchToModule("map")
+  end)
+
+  if not ok then
+    logger:warn("could not switch to the Map module: " .. tostring(err))
+    LrDialogs.message("iNaturalist",
+      "Could not open the Map module. You can reach it from the module picker "
+      .. "at the top right of the Lightroom window.", "info")
+  end
+end
+
 --- Upload the selection, or correct the identification of what is already up.
 --
 -- MUST be called from inside a task.
@@ -434,6 +485,18 @@ function ObservationPanel.uploadOrUpdate(props)
     props.suggestionStatus = taxonId and "Identification posted."
                                      or "Species guess sent."
     return
+  end
+
+  -- Asked only on the way to a new observation. An update cannot add
+  -- coordinates, so raising it there would be a warning with nothing behind it.
+  local warning = PanelCore.locationWarning(settings, photos)
+  if warning then
+    local answer = LrDialogs.confirm("Upload without a location?", warning,
+      "Upload Anyway", "Cancel")
+    if answer ~= "ok" then
+      props.suggestionStatus = ""
+      return
+    end
   end
 
   props.suggestionStatus = "Uploading…"
@@ -540,6 +603,14 @@ function ObservationPanel.show()
             ObservationPanel.unlink(props)
             refresh()
           end)
+        end,
+
+        -- Not on a task. Switching modules is a UI call, and the module change
+        -- is what makes the filmstrip selection observable again afterwards --
+        -- the panel refreshes itself from that, so there is nothing to wait for
+        -- here.
+        openMap = function()
+          ObservationPanel.openMap()
         end,
 
         sync = function()

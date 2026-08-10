@@ -690,6 +690,46 @@ LrPasswords.retrieve(key)
 
 No plugin ID argument — it is implicit. Storage is the OS credential vault.
 
+## `LrApplicationView.switchToModule` is real, and `"map"` is the Map module
+
+`LrApplicationView` is not in the SDK documentation this project was working
+from, but it is a real module: `LrApplicationView.lua` sits in `Lightroom.exe`'s
+Lua module registry (~index 1975723) alongside `LrApplication`, `LrSelection`
+and `LrUndo`. Its export table includes `switchToModule`, `getCurrentModuleName`,
+`showView`, `gridView` and `zoomIn`.
+
+The module names it accepts are a table at indices 2905266–2905279, mapping the
+public name to the internal one:
+
+| Name to pass | Internal identifier |
+|---|---|
+| `library` | |
+| `develop` | |
+| `map` | `com.adobe.ag.location` |
+| `book` | |
+| `slideshow` | |
+| `print` | |
+| `web` | `com.adobe.ag.wpg` |
+
+So it is `"map"`, not `"location"` — the internal name is what the binary calls
+it, not what the API takes.
+
+Two things this does **not** establish, and neither is relied on:
+
+- whether `switchToModule` must run inside a task. The plugin calls it directly
+  from a button action, wrapped in `pcall`, and falls back to telling the user
+  where the module picker is.
+- whether the Map module is available to every user. `Lightroom.exe` also
+  contains `isModuleBlockedForChineseUser`, so at least one build restricts it.
+  The `pcall` covers that too.
+
+### The `{4,}` string-scan regex silently drops three-letter names
+
+Every binary dump in this document was made by extracting printable runs with
+`[ -~]{4,}`. That minimum **hides `map` and `web`**, which is exactly why the
+module table first looked like it had two entries with missing names. Re-scan at
+`{3,}` whenever a table looks malformed — the data was fine, the sieve was not.
+
 ## `LrApplication.activeCatalog()`, not `LrCatalog`
 
 `LrCatalog` is the type of the object you get back, not a module with an
