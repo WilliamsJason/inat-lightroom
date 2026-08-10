@@ -159,9 +159,9 @@ MUTATIONS = [
         "  photos = photos or {}",
     ),
     (
-        "treats the rendition as the first loop value, ignoring the index",
-        "    local rendition = second or first",
-        "    local rendition = first",
+        "treats the index as the rendition, the way a one-value loop would",
+        "  for _, rendition in session:renditions() do",
+        "  for rendition in session:renditions() do",
     ),
     (
         "ignores waitForRender's success flag, so an error message becomes a path",
