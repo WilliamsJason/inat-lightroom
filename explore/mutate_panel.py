@@ -18,10 +18,12 @@ TARGETS = {
     "CustomMetadata": PLUGIN / "CustomMetadata.lua",
     "TagsetInat": PLUGIN / "TagsetInat.lua",
     "UploadCore": PLUGIN / "UploadCore.lua",
+    "SyncCore": PLUGIN / "SyncCore.lua",
 }
 
 TESTS = ["test_panel_core_lua.py", "test_observation_panel_lua.py",
-         "test_plugin_surface_lua.py", "test_upload_core_lua.py"]
+         "test_plugin_surface_lua.py", "test_upload_core_lua.py",
+         "test_sync_observation_lua.py"]
 
 MUTATIONS = [
     # --- the identification trap, the whole reason for this rewrite ----------
@@ -279,8 +281,8 @@ MUTATIONS = [
     (
         "CustomMetadata",
         "the schema version is not bumped with the field changes",
+        "  schemaVersion = 5,",
         "  schemaVersion = 4,",
-        "  schemaVersion = 3,",
     ),
     (
         "CustomMetadata",
@@ -367,6 +369,93 @@ MUTATIONS = [
         "the location row is dropped from the window",
         '      f:static_text { title = "Location:", width = LABEL, alignment = "right" },',
         "",
+    ),
+    # --- how precise the location claims to be --------------------------------
+    (
+        "PanelCore",
+        "a fractional accuracy is sent as-is",
+        'return string.format("%d", math.floor(metres + 0.5))',
+        "return tostring(metres)",
+    ),
+    (
+        "PanelCore",
+        "a nonsense accuracy is passed through instead of treated as unset",
+        "if not metres or metres <= 0 then return \"\" end",
+        "if not metres then return raw end",
+    ),
+    (
+        "PanelCore",
+        "a synced accuracy gets no item, so the popup renders blank",
+        "  if value then\n    items[#items + 1] = {\n      value = value,",
+        "  if false then\n    items[#items + 1] = {\n      value = value,",
+    ),
+    (
+        "PanelCore",
+        "the stored value is duplicated when it is already a preset",
+        "if preset.value == value then value = nil end",
+        "",
+    ),
+    (
+        "PanelCore",
+        "the accuracy lands only on the first photo of the selection",
+        '    for _, photo in ipairs(photos) do\n      photo:setPropertyForPlugin(_PLUGIN, "inat_positional_accuracy"',
+        '    for _, photo in ipairs({ photos[1] }) do\n      photo:setPropertyForPlugin(_PLUGIN, "inat_positional_accuracy"',
+    ),
+    (
+        "PanelCore",
+        "the accuracy update detaches every photo on the observation",
+        "    positional_accuracy = tonumber(value),\n  }, true)",
+        "    positional_accuracy = tonumber(value),\n  }, false)",
+    ),
+    (
+        "PanelCore",
+        "an unset accuracy is PUT anyway, overwriting what iNaturalist knows",
+        '  local value = PanelCore.accuracyValue(accuracy)\n  if value == "" then return true, nil end',
+        "  local value = PanelCore.accuracyValue(accuracy)",
+    ),
+    (
+        "PanelCore",
+        "an unlinked photo tries to update an observation it does not have",
+        "  local observationId = UploadCore.pluginField(photos[1], \"inat_observation_id\")\n  if not observationId then return true, nil end",
+        '  local observationId = UploadCore.pluginField(photos[1], "inat_observation_id")',
+    ),
+    (
+        "UploadCore",
+        "the accuracy is sent without any coordinates to describe",
+        "positional_accuracy",
+        "PositionalAccuracy",
+    ),
+
+    # --- bringing the location home ------------------------------------------
+    (
+        "SyncCore",
+        "an obscured observation's randomised coordinates are taken as real",
+        "if obs.obscured then return nil, nil, nil end",
+        "",
+    ),
+    (
+        "SyncCore",
+        "the owner's true position is ignored in favour of the public one",
+        "  local point = obs.private_location",
+        "  local point = nil",
+    ),
+    (
+        "SyncCore",
+        "a half-written location string is parsed as a coordinate",
+        'string.match(point, "^%s*(-?[%d%.]+)%s*,%s*(-?[%d%.]+)%s*$")',
+        'string.match(point, "^%s*(-?[%d%.]*)%s*,?%s*(-?[%d%.]*)")',
+    ),
+    (
+        "SyncCore",
+        "the sync moves a photo the user already placed",
+        "if latitude and not UploadCore.locationOf(photo) then",
+        "if latitude then",
+    ),
+    (
+        "SyncCore",
+        "the derived obscured accuracy is stored as the real one",
+        "local accuracy = tonumber(obs.positional_accuracy)",
+        "local accuracy = tonumber(obs.public_positional_accuracy or obs.positional_accuracy)",
     ),
 ]
 

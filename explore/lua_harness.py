@@ -412,6 +412,22 @@ local function newPhoto(props, raw, formatted)
   photo.getRawMetadata = function(self, key)
     return self._raw[key]
   end
+  -- Refuses keys Lightroom's own setRawMetadata refuses. Its whitelist raises
+  -- "unknown metadata key %q", so a stub that accepted anything would let a
+  -- typo pass here and fail only in the host, which is the failure this harness
+  -- exists to prevent. The list is the plugin-relevant part of the real one.
+  photo.setRawMetadata = function(self, key, value)
+    requireWriteAccess("LrPhoto:setRawMetadata")
+    local settable = {
+      gps = true, gpsAltitude = true, gpsImgDirection = true,
+      caption = true, title = true, rating = true, label = true,
+      pickStatus = true, copyrightState = true,
+    }
+    if not settable[key] then
+      error("LrPhoto:setRawMetadata: unknown metadata key '" .. tostring(key) .. "'", 0)
+    end
+    self._raw[key] = value
+  end
   photo.getFormattedMetadata = function(self, key)
     return self._formatted[key]
   end

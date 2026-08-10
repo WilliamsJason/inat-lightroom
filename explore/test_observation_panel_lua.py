@@ -473,9 +473,16 @@ def stub_upload_path(plugin):
       (function()
         local UploadCore = require "UploadCore"
         local PanelCore  = require "PanelCore"
-        local reached = { count = 0 }
+        local reached = { count = 0, updates = 0, accuracy = nil }
 
-        UploadCore.requireAPI = function() return {}, nil end
+        UploadCore.requireAPI = function()
+          return {
+            updateObservation = function(_self, _id, params, _ignorePhotos)
+              reached.accuracy = params.positional_accuracy
+              return { id = 4242 }, nil
+            end,
+          }, nil
+        end
         PanelCore.upload = function()
           reached.count = reached.count + 1
           return 42, nil, {}
@@ -581,3 +588,57 @@ def test_updating_an_existing_observation_asks_nothing(plugin, panel):
     assert reached["count"] == 0, "an update must not go through upload"
     assert reached["updates"] == 1, "it should have updated the identification"
     assert not any("casual" in d["message"].lower() for d in plugin.dialogs)
+
+
+# ---------------------------------------------------------------------------
+# Location accuracy
+# ---------------------------------------------------------------------------
+
+
+def test_the_panel_offers_an_accuracy_control(plugin, panel):
+    plugin.set_target_photos([plugin.new_photo()])
+    args = show(plugin, panel)
+
+    labels = [v["title"] for v in of_type(args["contents"], "static_text")
+              if isinstance(v["title"], str)]
+
+    assert "Accuracy:" in labels
+    assert of_type(args["contents"], "popup_menu"), "expected a popup for it"
+
+
+def test_the_panel_carries_the_stored_accuracy(plugin, panel):
+    photo = plugin.new_photo(inat_positional_accuracy="36")
+    values = plugin.call(panel.valuesFor, photo, 1)[0]
+
+    assert values["accuracy"] == "36"
+    offered = values["accuracyItems"]
+    assert "36" in [offered[i]["value"] for i in range(1, len(offered) + 1)]
+
+
+def test_uploading_records_the_chosen_accuracy_on_the_photo(plugin, panel):
+    """The upload builds its observation from what the photo says, not from
+    what the panel is showing, so a choice never written down is never sent."""
+    stub_upload_path(plugin)
+    photo = plugin.new_photo(raw={"gps": {"latitude": 51.5, "longitude": -0.1}})
+    plugin.set_target_photos([photo])
+
+    props = plugin.runtime.table_from({"accuracy": "100"})
+    plugin.call(panel.uploadOrUpdate, props)
+    plugin.run_pending_tasks()
+
+    assert photo["_props"]["inat_positional_accuracy"] == "100"
+
+
+def test_updating_pushes_a_changed_accuracy_to_inaturalist(plugin, panel):
+    """Upload reads the accuracy off the photo; the update path posts an
+    identification, which says nothing about location. Without its own step the
+    panel would accept a change iNaturalist never hears about."""
+    photo = plugin.new_photo(inat_observation_id="4242")
+    plugin.set_target_photos([photo])
+
+    props = plugin.runtime.table_from({"accuracy": "100"})
+    reached = stub_upload_path(plugin)
+    plugin.call(panel.uploadOrUpdate, props)
+    plugin.run_pending_tasks()
+
+    assert reached["accuracy"] == 100

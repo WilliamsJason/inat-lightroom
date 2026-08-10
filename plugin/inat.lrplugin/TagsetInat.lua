@@ -52,6 +52,7 @@ return {
     prefix .. "inat_observation_url",
     prefix .. "inat_observation_uuid",
     prefix .. "inat_quality_grade",
+    prefix .. "inat_positional_accuracy",
     prefix .. "inat_last_synced",
     "com.adobe.separator",
 

@@ -421,3 +421,53 @@ def test_unlinking_nothing_does_not_open_a_transaction(plugin, upload):
     'iNat unlink', which is a confusing thing to find after doing nothing."""
     assert upload["unlink"](plugin.catalog, plugin.eval("{}")) == 0
     assert plugin.catalog_writes == []
+
+
+def test_the_accuracy_is_sent_with_the_coordinates(plugin, upload):
+    photo = plugin.new_photo(raw={"gps": {"latitude": 51.5, "longitude": -0.1}},
+                             inat_positional_accuracy="100")
+
+    params = upload["observationParamsFor"](settings(plugin), photo)
+
+    assert params["positional_accuracy"] == 100
+
+
+def test_an_accuracy_without_coordinates_is_not_sent(plugin, upload):
+    """It would describe the precision of a location that was never sent, which
+    a reader of the observation could only guess at."""
+    photo = plugin.new_photo(inat_positional_accuracy="100")
+
+    params = upload["observationParamsFor"](settings(plugin), photo)
+
+    assert params["positional_accuracy"] is None
+
+
+def test_the_accuracy_is_withheld_with_the_location(plugin, upload):
+    """Location off means location off. An accuracy on its own still says
+    something about where the photo was taken."""
+    photo = plugin.new_photo(raw={"gps": {"latitude": 51.5, "longitude": -0.1}},
+                             inat_positional_accuracy="100")
+
+    params = upload["observationParamsFor"](
+        settings(plugin, inat_upload_location=False), photo)
+
+    assert params["positional_accuracy"] is None
+
+
+def test_an_unset_accuracy_sends_no_field(plugin, upload):
+    photo = plugin.new_photo(raw={"gps": {"latitude": 51.5, "longitude": -0.1}})
+
+    params = upload["observationParamsFor"](settings(plugin), photo)
+
+    assert params["positional_accuracy"] is None
+
+
+def test_a_nonsense_stored_accuracy_is_not_sent(plugin, upload):
+    """iNaturalist answers a non-numeric positional_accuracy with a 422 whose
+    message does not name the field."""
+    photo = plugin.new_photo(raw={"gps": {"latitude": 51.5, "longitude": -0.1}},
+                             inat_positional_accuracy="about a mile")
+
+    params = upload["observationParamsFor"](settings(plugin), photo)
+
+    assert params["positional_accuracy"] is None

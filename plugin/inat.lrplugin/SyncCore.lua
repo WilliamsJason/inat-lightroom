@@ -26,6 +26,7 @@ local LrProgressScope = import "LrProgressScope"
 
 local InatAPI      = require "InatAPI"
 local InatAuth     = require "InatAuth"
+local UploadCore   = require "UploadCore"
 local logger       = require "Log"
 
 local SyncCore = {}
@@ -74,6 +75,50 @@ end
 --- Bring one photo up to date with its observation.
 -- @return status  One of the SyncCore.* codes.
 -- @return err     A message, when status is FAILED.
+--- The coordinates an observation is willing to tell us, if any.
+--
+-- @return latitude, longitude, accuracyInMetres -- all nil when there is
+--         nothing safe to use.
+--
+-- The trap this exists for: **an obscured observation reports coordinates that
+-- are deliberately wrong.** iNaturalist randomises the public position of
+-- anything obscured -- by geoprivacy or because the taxon is threatened --
+-- within a box that measured ~30 km across on a live example, and still returns
+-- a `location` string and a `geojson` point. Nothing in the shape of the
+-- response says the numbers are fiction; only the `obscured` flag does.
+-- Trusting it would write a plausible coordinate up to 30 km from where the
+-- photo was taken, into the user's own catalog, silently.
+--
+-- The owner is told the truth through `private_location`, which the API only
+-- includes for authenticated requests on your own observations. So: use the
+-- private position when it is there, use the public one when nothing is
+-- obscured, and otherwise decline. Declining costs a user the convenience on
+-- their own obscured records; the alternative costs somebody a wrong location
+-- they will never think to check.
+function SyncCore.coordinatesFrom(obs)
+  if not obs then return nil, nil, nil end
+
+  local point = obs.private_location
+  if not point or point == "" then
+    if obs.obscured then return nil, nil, nil end
+    point = obs.location
+  end
+
+  if not point or point == "" then return nil, nil, nil end
+
+  local latitude, longitude = string.match(point, "^%s*(-?[%d%.]+)%s*,%s*(-?[%d%.]+)%s*$")
+  latitude, longitude = tonumber(latitude), tonumber(longitude)
+  if not latitude or not longitude then return nil, nil, nil end
+
+  -- positional_accuracy describes the true position, public_positional_accuracy
+  -- the obscured one. Since we only ever return a true position, only the
+  -- former belongs with it.
+  local accuracy = tonumber(obs.positional_accuracy)
+  if accuracy and accuracy <= 0 then accuracy = nil end
+
+  return latitude, longitude, accuracy
+end
+
 function SyncCore.syncPhoto(catalog, photo, api)
   local obsId = photo:getPropertyForPlugin(_PLUGIN, "inat_observation_id")
   if not obsId or obsId == "" then
@@ -135,6 +180,33 @@ function SyncCore.syncPhoto(catalog, photo, api)
     -- rather than getting a duplicate on its next publish.
     if obs.uuid and obs.uuid ~= "" then
       photo:setPropertyForPlugin(_PLUGIN, "inat_observation_uuid", obs.uuid)
+    end
+
+    -- Bring the location home, but only into an empty space.
+    --
+    -- The common case this serves: uploaded from a camera with no GPS, placed
+    -- on the map afterwards on the iNaturalist website. Without this the
+    -- catalog never learns where the photo was taken and the Map module stays
+    -- empty forever.
+    --
+    -- Never an overwrite. If the photo already has coordinates then
+    -- iNaturalist's copy came from them in the first place, so there is nothing
+    -- to gain; and in the case where they have genuinely diverged, quietly
+    -- moving a photo the user has already placed is not a sync, it is a
+    -- correction nobody asked for and cannot see happen.
+    local latitude, longitude, accuracy = SyncCore.coordinatesFrom(obs)
+    if latitude and not UploadCore.locationOf(photo) then
+      photo:setRawMetadata("gps", { latitude = latitude, longitude = longitude })
+      logger:info("Applied location from observation " .. tostring(obsId))
+    end
+
+    -- The accuracy is recorded whether or not the coordinates were, because it
+    -- describes what iNaturalist holds and the panel shows it back. Withheld
+    -- when the position was, since an accuracy for a position we declined to
+    -- read describes nothing we know.
+    if latitude and accuracy then
+      photo:setPropertyForPlugin(_PLUGIN, "inat_positional_accuracy",
+        string.format("%d", math.floor(accuracy + 0.5)))
     end
   end)
 

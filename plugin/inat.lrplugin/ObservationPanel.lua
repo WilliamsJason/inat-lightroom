@@ -122,6 +122,10 @@ function ObservationPanel.valuesFor(photo, selectionCount)
     location      = PanelCore.describeLocation(photo),
     hasLocation   = photo ~= nil
                     and select(1, UploadCore.locationOf(photo)) ~= nil,
+    accuracy      = PanelCore.accuracyValue(
+                      photo and field(photo, "inat_positional_accuracy")),
+    accuracyItems = PanelCore.accuracyItems(
+                      photo and field(photo, "inat_positional_accuracy")),
 
     -- The action button's caption. Uploading and correcting an identification
     -- are the same intent at different points in a photo's life, so they share
@@ -275,6 +279,21 @@ function ObservationPanel.contents(f, props, actions)
         title   = "Set on Map",
         enabled = LrView.bind("hasPhoto"),
         action  = actions.openMap,
+      },
+    },
+
+    -- Accuracy sits under the coordinates it qualifies. iNaturalist stores it
+    -- per observation and Lightroom has nowhere to keep it, so this control is
+    -- the only place it can be set -- and leaving it unset is a real answer,
+    -- not a missing one, which is why "Not specified" is a listed choice rather
+    -- than an empty popup.
+    f:row {
+      f:static_text { title = "Accuracy:", width = LABEL, alignment = "right" },
+      f:popup_menu {
+        value           = LrView.bind("accuracy"),
+        items           = LrView.bind("accuracyItems"),
+        enabled         = LrView.bind("hasPhoto"),
+        fill_horizontal = 1,
       },
     },
 
@@ -469,11 +488,23 @@ function ObservationPanel.uploadOrUpdate(props)
   local settings = Settings.all()
   local guess    = props.speciesGuess or ""
   local taxonId  = props.suggestionTaxonId
+  local accuracy = props.accuracy
 
   -- Which of the two jobs this is depends on the photo, not on the button: the
   -- caption is only a description of what is about to happen.
   if UploadCore.pluginField(photos[1], "inat_observation_id") then
     props.suggestionStatus = "Updating the identification…"
+
+    -- Before the identification, because this is the step that can be skipped
+    -- without the user noticing. The identification announces itself in the
+    -- status line; a silently dropped accuracy would not.
+    local accOk, accErr = PanelCore.updateAccuracy(catalog, api, photos, accuracy)
+    if not accOk then
+      LrDialogs.message("iNaturalist",
+        accErr or "Could not update the location accuracy.", "critical")
+      props.suggestionStatus = ""
+      return
+    end
 
     local ok, err = PanelCore.updateSpeciesGuess(catalog, api, photos, guess, taxonId)
     if not ok then
@@ -500,6 +531,11 @@ function ObservationPanel.uploadOrUpdate(props)
   end
 
   props.suggestionStatus = "Uploading…"
+
+  -- Written to the photos first, because the upload builds its observation from
+  -- what the photo says rather than from what the panel is showing. A choice
+  -- made in the popup and not written down here would simply not be sent.
+  PanelCore.recordAccuracy(catalog, photos, accuracy)
 
   local observationId, _, errors = PanelCore.upload(catalog, api, settings, photos, {
     sleep   = LrTasks.sleep,
