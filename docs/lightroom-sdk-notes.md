@@ -116,6 +116,69 @@ for _, rendition in exportSession:renditions() do ... end
 To look at the photos without disturbing the rendition queue, use
 `exportSession:photosToExport()`, which returns `LrPhoto` objects directly.
 
+Measured for `LrExportSession` too, not only for the `exportContext` an export
+provider is handed: a probe in Lightroom Classic 14 reported `first=number 1`,
+`second=table`, so both take the same shape.
+
+## `export_destinationType = "tempFolder"` needs an export service provider
+
+A plugin with no `LrExportServiceProvider` cannot render into Lightroom's temp
+folder, even though the destination type is real — it has its own preset label
+(`$$$/AgExport/DestinationFolder/TempFolder`) and its own progress scope
+(`$$$/AgExport/ToPluginTempDir/ScopeOperation…`). Asking for it produces:
+
+```
+export settings are missing the LR_export_destinationPathPrefix
+```
+
+which names the wrong field and sends you looking in the wrong place. The
+reason is in `Export.lrmodule`: the destination is resolved as
+
+```lua
+if kind == "specificFolder" or kind == "chooseLater" then
+  dir = settings.export_destinationPathPrefix
+else
+  dir = LrPathUtils.getStandardFilePath(kind)   -- "tempFolder" -> nil
+end
+assert(type(dir) == "string",
+  "export settings are missing the LR_export_destinationPathPrefix")
+```
+
+`tempFolder` *is* handled, but in `addRenditionsForPhotos`, and only when the
+export service provider declares **`exportToTemporaryLocation`** — a name that
+sits in the binary's list of provider callbacks beside `processRenderedPhotos`
+and `sectionsForTopOfDialog`. It is something a plugin's own provider declares
+about itself.
+
+Beware `canExportToTemporaryLocation`, which is a *different* name appearing
+nearby. Reading the two as one fact is what produced the failed attempt above.
+
+Without a provider, do what Lightroom does: build a directory under
+`LrPathUtils.getStandardFilePath("temp")`, pass it as
+`LR_export_destinationPathPrefix` with `LR_export_destinationType =
+"specificFolder"`, and delete it afterwards.
+
+## Omitted export settings come from the user's last export
+
+`LrExportSession` does not apply documented defaults to keys you leave out —
+`fillInDefaultSettings` fills them from the user's own preferences. So an
+omitted key does not mean "the sensible default", it means "whatever that
+person happened to do last time", which is invisible on the machine it was
+written on and a bug report from everyone else.
+
+Supply a complete preset. Four omissions that each look harmless:
+
+| Key | Lightroom's value | What it does to an upload |
+| --- | --- | --- |
+| `collisionHandling` | `"ask"` | Halts the render with a dialog. Two selected photos *do* collide: `DSC0001.ARW` and `DSC0001.JPG` both render to `DSC0001.jpg`. Use `"rename"` — `"overwrite"` silently drops one. |
+| `reimportExportedPhoto` | user's last | Adds a duplicate of every uploaded photo back into the catalog |
+| `export_postProcessing` | `"revealInFinder"` in shipped presets | Opens a file browser on a temp folder mid-upload. Use `"doNothing"`. |
+| `includeVideoFiles` | user's last | Passes a video through as an image; it fails later at upload, where the message makes no sense |
+
+The full set of valid keys and values is easiest to read from the export
+presets embedded in `Export.lrmodule` as plain Lua source — search for
+`collisionHandling = "ask"`.
+
 ## A plugin cannot add a panel to the Library right side
 
 There is no Info.lua key for it, and looking for one costs an afternoon because

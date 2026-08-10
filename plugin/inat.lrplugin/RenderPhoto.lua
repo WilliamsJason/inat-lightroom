@@ -216,13 +216,10 @@ function RenderPhoto.render(photos, options)
   -- Asking for the renditions is what starts the export; there is no separate
   -- "go" call to make here.
   --
-  -- The loop takes two variables because it is not established whether this
-  -- yields the rendition alone or an index alongside it, the way an export
-  -- provider's exportContext:renditions does. Taking whichever arrived is
-  -- cheap; guessing wrong is a nil index error at upload time.
-  for first, second in session:renditions() do
-    local rendition = second or first
-
+  -- This yields an index alongside the rendition, the same shape as an export
+  -- provider's exportContext:renditions. Measured in the host, not assumed:
+  -- the probe reported "first=number 1 second=table".
+  for _, rendition in session:renditions() do
     local ok, pathOrMessage = rendition:waitForRender()
     if ok then
       rendered[#rendered + 1] = { photo = rendition.photo, path = pathOrMessage }
