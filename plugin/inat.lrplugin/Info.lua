@@ -77,6 +77,13 @@ return {
       file  = "SettingsMenu.lua",
       id    = "inat_settings",
     },
+    -- TEMPORARY. Proves LrExportSession works in the host before the panel is
+    -- built on it. Goes, with RenderProbe.lua, once it has passed.
+    {
+      title = LOC "$$$/iNatLightroom/Menu/RenderProbe=Render Probe (temporary)",
+      file  = "RenderProbe.lua",
+      id    = "inat_render_probe",
+    },
   },
 
   VERSION = {
