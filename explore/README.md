@@ -169,5 +169,30 @@ before asking Lightroom to reload:
 .\.venv\Scripts\python.exe check_lua.py
 ```
 
+## Proving the tests can fail
+
+A passing test proves nothing until it has been seen to fail. Each `mutate_*.py`
+script edits the plugin's real Lua to introduce one plausible mistake at a time,
+runs the suite, restores the file, and reports any mutation that nothing
+noticed:
+
+```powershell
+.\.venv\Scripts\python.exe mutate_panel.py        # panel, metadata, tagset, location, sync, API
+.\.venv\Scripts\python.exe mutate_upload_core.py
+.\.venv\Scripts\python.exe mutate_settings.py
+.\.venv\Scripts\python.exe mutate_render_photo.py
+```
+
+Each mutation is named after the bug it would be — "the species guess is
+editable again, and edits go nowhere" — rather than the edit it makes, so a
+survivor reads as a description of what nothing is checking.
+
+A survivor is not automatically a missing test. Twice it has been a bad
+mutation: a change that looked meaningful but altered no reachable behaviour.
+Check which it is before writing anything.
+
+Restoration happens in a `finally`, but if one of these is interrupted, check
+`git status` before doing anything else.
+
 See [docs/lightroom-sdk-notes.md](../docs/lightroom-sdk-notes.md) for what
 these tests are guarding against.

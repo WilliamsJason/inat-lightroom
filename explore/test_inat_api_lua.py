@@ -375,3 +375,75 @@ def test_upload_reports_a_missing_file_clearly(api_pair):
 
     assert result is None
     assert "Cannot open file" in err
+
+
+# ---------------------------------------------------------------------------
+# The fallback taxon the vision endpoint volunteers
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def inat_api():
+    plugin = LuaPlugin()
+    return plugin, plugin.require("InatAPI")
+
+
+def test_the_common_ancestor_is_carried_out_of_the_payload(inat_api):
+    """It is what makes an honest coarser suggestion possible. Dropping it --
+    which is what the code did before -- leaves the picker with nothing to fall
+    back to but the top result's own lineage, which is the guess in doubt."""
+    plugin, api = inat_api
+    payload = plugin.runtime.eval("""
+      {
+        common_ancestor = { taxon = { id = 52054, name = "Ischnura", rank = "genus" } },
+        results = {
+          { combined_score = 40.5,
+            taxon = { id = 103486, name = "Ischnura erratica", rank = "species" } },
+        },
+      }
+    """)
+
+    rows, ancestor = api["summariseSuggestions"](payload)
+
+    assert rows[1]["name"] == "Ischnura erratica"
+    assert ancestor["name"] == "Ischnura"
+    assert ancestor["rank"] == "genus"
+
+
+def test_the_ancestor_is_unwrapped_from_its_envelope(inat_api):
+    """common_ancestor is {taxon = {...}}, not the taxon itself. Returning the
+    wrapper gives a table with no name or rank, and the fallback row renders as
+    "Unnamed taxon"."""
+    plugin, api = inat_api
+    payload = plugin.runtime.eval("""
+      { common_ancestor = { taxon = { id = 1, name = "Animalia", rank = "kingdom" } },
+        results = {} }
+    """)
+
+    _, ancestor = api["summariseSuggestions"](payload)
+
+    assert ancestor["name"] == "Animalia"
+
+
+def test_a_payload_with_no_common_ancestor_is_fine(inat_api):
+    """The candidates shared nothing, and score_observation may not send one at
+    all. Nil here has to mean "no fallback", not an error."""
+    plugin, api = inat_api
+    payload = plugin.runtime.eval("""
+      { results = { { combined_score = 98,
+          taxon = { id = 1, name = "X", rank = "species" } } } }
+    """)
+
+    rows, ancestor = api["summariseSuggestions"](payload)
+
+    assert len(rows) == 1
+    assert ancestor is None
+
+
+def test_an_empty_payload_yields_no_rows_and_no_ancestor(inat_api):
+    _, api = inat_api
+
+    rows, ancestor = api["summariseSuggestions"](None)
+
+    assert len(rows) == 0
+    assert ancestor is None
