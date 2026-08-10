@@ -372,6 +372,61 @@ stubs.LrApplication = {
   activeCatalog = function() return catalog end,
 }
 
+-- LrExportSession, the mechanism the panel uses to turn catalog photos into
+-- JPEGs now that there is no export service provider to do it.
+--
+-- The stub reproduces two behaviours that the real one has and that code gets
+-- wrong: asking for the renditions is what starts the export (there is no
+-- separate "go" call), and waitForRender returns success-plus-value, so a
+-- failure arrives as a message in the same slot as the path.
+exportSessions = {}
+renderFailing = false
+renderFailureMessage = nil
+
+stubs.LrExportSession = function(params)
+  assert(type(params) == "table",
+    "LrExportSession:init: must use named arguments syntax")
+  assert(params.exportSettings,
+    "LrExportSession:init: params table must have exportSettings")
+
+  local photos = params.photosToExport or {}
+  local session = {
+    settings = params.exportSettings,
+    photos = photos,
+    started = false,
+  }
+
+  function session:countRenditions() return #photos end
+
+  function session:renditions()
+    self.started = true
+
+    local index = 0
+    return function()
+      index = index + 1
+      local photo = photos[index]
+      if not photo then return nil end
+
+      local rendition = {
+        photo = photo,
+        waitForRender = function()
+          if renderFailing then return false, renderFailureMessage end
+          return true, "/tmp/lr-export/" .. tostring(index) .. ".jpg"
+        end,
+      }
+      -- Yields index alongside the rendition, the way an export provider's
+      -- exportContext:renditions does.
+      return index, rendition
+    end
+  end
+
+  function session:doExportOnCurrentTask() self.started = true end
+  function session:doExportOnNewTask() self.started = true end
+
+  exportSessions[#exportSessions + 1] = session
+  return session
+end
+
 -- Lightroom exposes the plugin object as a global. `path` is the plugin
 -- directory; it is in AgLrPlugin's property list in substrate.dll alongside
 -- id, enabled and type.
@@ -420,6 +475,13 @@ return {
   catalogWrites = catalogWrites,
   createdKeywords = createdKeywords,
   newPhoto = newPhoto,
+  exportSessions = exportSessions,
+  setRenderFailure = function(message)
+    -- Lightroom does not promise waitForRender supplies a message, so failing
+    -- and having something to say about it are separate.
+    renderFailing = true
+    renderFailureMessage = message
+  end,
   setTargetPhotos = function(photos) targetPhotos = photos end,
   setAllPhotos = function(photos) allPhotos = photos end,
 
@@ -635,6 +697,15 @@ class LuaPlugin:
     def set_all_photos(self, photos) -> None:
         """Set the catalog that findPhotosWithProperty searches."""
         self.env["setAllPhotos"](self.runtime.table_from(list(photos)))
+
+    def set_render_failure(self, message=None) -> None:
+        """Make every rendition fail, optionally with a message."""
+        self.env["setRenderFailure"](message)
+
+    @property
+    def export_sessions(self):
+        """Every LrExportSession built, in order."""
+        return list(self.env["exportSessions"].values())
 
     def run_pending_tasks(self, reverse: bool = False) -> None:
         """Run queued async tasks, as Lightroom would once the caller returns.

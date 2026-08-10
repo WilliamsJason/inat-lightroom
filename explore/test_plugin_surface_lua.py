@@ -368,9 +368,23 @@ def test_the_menu_only_opens_things(plugin):
     info = plugin.require("Info")
     items = lua_list(info["LrLibraryMenuItems"])
 
-    assert len(items) == 2
-    files = {item["file"] for item in items}
+    permanent = [item for item in items if not str(item["id"]).endswith("_probe")]
+    assert len(permanent) == 2
+    files = {item["file"] for item in permanent}
     assert files == {"ObservationPanelMenu.lua", "SettingsMenu.lua"}
+
+
+def test_every_probe_menu_item_says_it_is_temporary(plugin):
+    """Host probes exist because some things can only be established in the
+    running application, and they are supposed to leave once they have. The
+    thing that actually gets forgotten is not the file, it is the menu item --
+    so the title has to admit what it is while it is still there."""
+    info = plugin.require("Info")
+    items = lua_list(info["LrLibraryMenuItems"])
+
+    for item in items:
+        if str(item["id"]).endswith("_probe"):
+            assert "temporary" in str(item["title"]).lower(), item["title"]
 
 
 def test_the_panel_menu_item_comes_first(plugin):
