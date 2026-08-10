@@ -361,74 +361,34 @@ def test_info_registers_the_tagset_and_url_handler(plugin):
 
 
 def test_the_menu_only_opens_things(plugin):
-    """The menu is not where features live -- the publish service and the
-    floating panel are, because both are in front of the user while they work.
-    A menu item earns its place only by being the way to reach something that
-    is not currently on screen: credentials, which you need before anything
-    works, and the panel, which can be closed."""
+    """The menu is not where features live -- the floating panel is, because it
+    is in front of the user while they work. A menu item earns its place only by
+    being the way to reach something that is not currently on screen: settings,
+    which you need before anything works, and the panel, which can be closed."""
     info = plugin.require("Info")
     items = lua_list(info["LrLibraryMenuItems"])
 
     assert len(items) == 2
     files = {item["file"] for item in items}
-    assert files == {"ObservationPanelMenu.lua", "CredentialsMenu.lua"}
+    assert files == {"ObservationPanelMenu.lua", "SettingsMenu.lua"}
 
 
 def test_the_panel_menu_item_comes_first(plugin):
-    """It is the one people will reach for repeatedly; credentials are a
+    """It is the one people will reach for repeatedly; settings is a
     once-per-install errand."""
     info = plugin.require("Info")
     items = lua_list(info["LrLibraryMenuItems"])
     assert items[0]["file"] == "ObservationPanelMenu.lua"
 
 
-def test_the_publish_service_is_registered_as_an_export_service(plugin):
-    """There is no LrPublishService manifest key -- Adobe's own Flickr plugin
-    registers under LrExportServiceProvider and becomes a publish service by
-    setting supportsIncrementalPublish on the provider table."""
+def test_the_plugin_offers_no_export_or_publish_target(plugin):
+    """LrExportServiceProvider is one key doing two jobs: it is what puts
+    iNaturalist in the Publish Services list AND what puts it in the Export
+    dialog's target popup. The panel is the only way in now, so the key has to
+    be absent -- leaving it would quietly restore both."""
     info = plugin.require("Info")
-    provider = plugin.require("ExportServiceProvider")
 
-    assert info["LrExportServiceProvider"]["file"] == "ExportServiceProvider.lua"
-    assert provider["supportsIncrementalPublish"] == "only"
-
-
-# ---------------------------------------------------------------------------
-# The publish settings dialog
-# ---------------------------------------------------------------------------
-
-
-def walk_views(node):
-    """Yield every view table in a sections tree."""
-    if not hasattr(node, "keys"):
-        return
-    yield node
-    for key in list(node.keys()):
-        if isinstance(key, int):
-            yield from walk_views(node[key])
-
-
-def dialog_views(plugin):
-    provider = plugin.require("ExportServiceProvider")
-    factory = plugin.runtime.eval('import "LrView".osFactory()')
-    sections = provider["sectionsForTopOfDialog"](factory, plugin.runtime.table_from({}))
-
-    return [view for section in lua_list(sections) for view in walk_views(section)]
-
-
-def test_the_settings_dialog_carries_a_sync_button(plugin):
-    """Sync used to be a fake button in the Metadata panel: a url field holding
-    a lightroom:// link. Removing that machinery is only safe because the
-    settings dialog is a place that can run code on click, so the button has to
-    actually be there -- and it has to have an action, since a push_button
-    without one is a dead control the host renders happily."""
-    buttons = [
-        view for view in dialog_views(plugin)
-        if view["_viewType"] == "push_button" and "Sync" in (view["title"] or "")
-    ]
-
-    assert buttons, "no Sync button in the publish settings dialog"
-    assert buttons[0]["action"] is not None
+    assert info["LrExportServiceProvider"] is None
 
 
 def test_menu_scripts_are_never_required_by_other_modules():
