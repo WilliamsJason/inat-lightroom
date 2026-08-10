@@ -674,3 +674,78 @@ def test_unlinking_clears_the_link_but_keeps_the_keywords(plugin, core):
     assert photo["_props"]["inat_observation_id"] == ""
     assert photo["_props"]["inat_taxon_name"] == ""
     assert len(list(photo["keywords"].values())) == before
+
+
+# ---------------------------------------------------------------------------
+# Location
+# ---------------------------------------------------------------------------
+
+
+def test_a_located_photo_shows_its_coordinates(plugin, core):
+    photo = plugin.new_photo(raw={"gps": {"latitude": 47.6062, "longitude": -122.3321}})
+
+    assert core["describeLocation"](photo) == "47.60620, -122.33210"
+
+
+def test_a_photo_with_no_location_says_what_that_costs(plugin, core):
+    """"None" on its own reads like an empty field. It is not: it is the
+    difference between an observation that counts and one that does not, and the
+    panel is the only place the user will ever be told."""
+    described = core["describeLocation"](plugin.new_photo())
+
+    assert described == core["NO_LOCATION"]
+    assert "casual" in described.lower()
+
+
+def test_no_photo_shows_no_location_claim(plugin, core):
+    """With nothing selected there is no photo to be missing a location, so
+    saying one is missing would be a warning about nothing."""
+    assert core["describeLocation"](None) == ""
+
+
+def test_uploading_a_photo_with_no_location_is_questioned(plugin, core):
+    warning = core["locationWarning"](settings(plugin),
+                                      plugin.runtime.table_from({1: plugin.new_photo()}))
+
+    assert warning is not None
+    assert "casual" in warning.lower()
+    assert "map" in warning.lower(), "it must say where to go and fix it"
+
+
+def test_uploading_a_located_photo_is_not_questioned(plugin, core):
+    photo = plugin.new_photo(raw={"gps": {"latitude": 51.5, "longitude": -0.1}})
+
+    assert core["locationWarning"](settings(plugin),
+                                   plugin.runtime.table_from({1: photo})) is None
+
+
+def test_nothing_is_said_when_the_user_has_turned_location_off(plugin, core):
+    """They switched it off on purpose. A warning that fires when it should not
+    is one people learn to click through, and we would lose the times it is
+    right."""
+    warning = core["locationWarning"](
+        settings(plugin, inat_upload_location=False),
+        plugin.runtime.table_from({1: plugin.new_photo()}))
+
+    assert warning is None
+
+
+def test_nothing_is_said_when_nothing_is_selected(plugin, core):
+    assert core["locationWarning"](settings(plugin),
+                                   plugin.runtime.table_from({})) is None
+
+
+def test_the_warning_judges_the_photo_the_observation_comes_from(plugin, core):
+    """A multi-photo selection becomes one observation, and its details come off
+    the first photo. Deciding on any other photo would warn about a location
+    that is not the one being uploaded."""
+    located = plugin.new_photo(raw={"gps": {"latitude": 51.5, "longitude": -0.1}})
+    bare = plugin.new_photo()
+
+    first_located = core["locationWarning"](
+        settings(plugin), plugin.runtime.table_from({1: located, 2: bare}))
+    first_bare = core["locationWarning"](
+        settings(plugin), plugin.runtime.table_from({1: bare, 2: located}))
+
+    assert first_located is None
+    assert first_bare is not None

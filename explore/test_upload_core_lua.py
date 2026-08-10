@@ -158,6 +158,34 @@ def test_gps_is_withheld_when_the_setting_is_off(plugin, upload):
     assert params["longitude"] is None
 
 
+def test_locationof_reads_the_coordinates(plugin, upload):
+    photo = plugin.new_photo(raw={"gps": {"latitude": 51.5, "longitude": -0.1}})
+
+    latitude, longitude = upload["locationOf"](photo)
+
+    assert latitude == 51.5
+    assert longitude == -0.1
+
+
+def test_locationof_reports_nothing_when_there_is_no_gps(plugin, upload):
+    latitude, longitude = upload["locationOf"](plugin.new_photo())
+
+    assert latitude is None
+    assert longitude is None
+
+
+def test_locationof_treats_a_half_written_location_as_absent(plugin, upload):
+    """Lightroom hands back a gps table for a photo carrying only one of the
+    pair. Sending a latitude with no longitude puts the observation somewhere it
+    has never been, which is worse than sending no location at all."""
+    photo = plugin.new_photo(raw={"gps": {"latitude": 51.5}})
+
+    latitude, longitude = upload["locationOf"](photo)
+
+    assert latitude is None
+    assert longitude is None
+
+
 def test_geoprivacy_defaults_to_open_when_nothing_is_configured(plugin, upload):
     """A nil geoprivacy reaching the API is a 422 whose message says nothing."""
     params = upload["observationParamsFor"](plugin.eval("{}"), plugin.new_photo())

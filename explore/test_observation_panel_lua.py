@@ -455,3 +455,129 @@ def test_the_view_button_opens_nothing_without_an_observation(plugin, panel):
     plugin.run_pending_tasks()
 
     assert plugin.opened_urls == []
+
+
+# ---------------------------------------------------------------------------
+# Location
+# ---------------------------------------------------------------------------
+
+
+def stub_upload_path(plugin):
+    """Get uploadOrUpdate past authentication and stop it before the network.
+
+    These tests are about the gate in front of the upload, not about the upload
+    or about signing in. Returns a table whose "count" says how many times the
+    upload was actually reached.
+    """
+    return plugin.eval("""
+      (function()
+        local UploadCore = require "UploadCore"
+        local PanelCore  = require "PanelCore"
+        local reached = { count = 0 }
+
+        UploadCore.requireAPI = function() return {}, nil end
+        PanelCore.upload = function()
+          reached.count = reached.count + 1
+          return 42, nil, {}
+        end
+        PanelCore.updateSpeciesGuess = function()
+          reached.updates = (reached.updates or 0) + 1
+          return true, nil
+        end
+
+        return reached
+      end)()
+    """)
+
+
+def test_the_panel_shows_the_location(plugin, panel):
+    photo = plugin.new_photo(raw={"gps": {"latitude": 47.6062, "longitude": -122.3321}})
+    values = plugin.call(panel.valuesFor, photo, 1)[0]
+
+    assert values["location"] == "47.60620, -122.33210"
+    assert values["hasLocation"] is True
+
+
+def test_the_panel_shows_a_missing_location_as_missing(plugin, panel):
+    values = plugin.call(panel.valuesFor, plugin.new_photo(), 1)[0]
+
+    assert "casual" in values["location"].lower()
+    assert values["hasLocation"] is False
+
+
+def test_the_location_row_is_in_the_window(plugin, panel):
+    """A location the user cannot see is one they cannot notice is missing."""
+    plugin.set_target_photos([plugin.new_photo()])
+    args = show(plugin, panel)
+
+    labels = [v["title"] for v in of_type(args["contents"], "static_text")
+              if isinstance(v["title"], str)]
+
+    assert "Location:" in labels
+
+
+def test_the_map_button_switches_to_the_map_module(plugin, panel):
+    """The only way this plugin can offer a location: Lightroom's own Map
+    module, which has the map, the search and the pin we cannot draw."""
+    plugin.set_target_photos([plugin.new_photo()])
+    args = show(plugin, panel)
+    buttons = {b["title"]: b for b in of_type(args["contents"], "push_button")
+               if isinstance(b["title"], str)}
+
+    plugin.call(buttons["Set on Map"]["action"])
+    plugin.run_pending_tasks()
+
+    assert plugin.module_switches == ["map"]
+
+
+def test_uploading_without_a_location_asks_first(plugin, panel):
+    """Almost nothing without coordinates ever leaves casual grade, and once it
+    is uploaded the panel has no way to say so."""
+    reached = stub_upload_path(plugin)
+    plugin.set_target_photos([plugin.new_photo()])
+    # The harness answers Cancel unless told otherwise.
+
+    plugin.call(panel.uploadOrUpdate, plugin.runtime.table_from({}))
+    plugin.run_pending_tasks()
+
+    assert reached["count"] == 0
+    assert "casual" in plugin.dialogs[-1]["message"].lower()
+
+
+def test_uploading_without_a_location_proceeds_when_confirmed(plugin, panel):
+    """It is a warning, not a veto. Plenty of observations are worth having
+    without a location, and refusing would just send people elsewhere."""
+    reached = stub_upload_path(plugin)
+    plugin.set_target_photos([plugin.new_photo()])
+    plugin.set_confirm_answer("ok")
+
+    plugin.call(panel.uploadOrUpdate, plugin.runtime.table_from({}))
+    plugin.run_pending_tasks()
+
+    assert reached["count"] == 1
+
+
+def test_uploading_a_located_photo_asks_nothing(plugin, panel):
+    reached = stub_upload_path(plugin)
+    photo = plugin.new_photo(raw={"gps": {"latitude": 51.5, "longitude": -0.1}})
+    plugin.set_target_photos([photo])
+    # Left on Cancel: if it asked, the upload would not happen.
+
+    plugin.call(panel.uploadOrUpdate, plugin.runtime.table_from({}))
+    plugin.run_pending_tasks()
+
+    assert reached["count"] == 1
+
+
+def test_updating_an_existing_observation_asks_nothing(plugin, panel):
+    """The update sends an identification, not coordinates, so warning about a
+    location it could not set either way is a dialog with no answer behind it."""
+    reached = stub_upload_path(plugin)
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="123")])
+
+    plugin.call(panel.uploadOrUpdate, plugin.runtime.table_from({}))
+    plugin.run_pending_tasks()
+
+    assert reached["count"] == 0, "an update must not go through upload"
+    assert reached["updates"] == 1, "it should have updated the identification"
+    assert not any("casual" in d["message"].lower() for d in plugin.dialogs)

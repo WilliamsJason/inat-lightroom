@@ -485,6 +485,30 @@ stubs.LrApplication = {
   activeCatalog = function() return catalog end,
 }
 
+-- Records module switches so a test can check the panel sent people to the
+-- right one. Rejects anything outside the real module list rather than
+-- accepting any string: "map" was read out of Lightroom.exe's module table, and
+-- a stub that shrugs at "Map" or "location" would hide the one mistake worth
+-- catching here.
+local moduleSwitches = {}
+local VALID_MODULES = {
+  library = true, develop = true, map = true, book = true,
+  slideshow = true, print = true, web = true,
+}
+
+stubs.LrApplicationView = {
+  switchToModule = function(name)
+    if not VALID_MODULES[name] then
+      error("no such module: " .. tostring(name), 0)
+    end
+    moduleSwitches[#moduleSwitches + 1] = name
+  end,
+  getCurrentModuleName = function()
+    return moduleSwitches[#moduleSwitches] or "library"
+  end,
+}
+
+
 -- LrExportSession, the mechanism the panel uses to turn catalog photos into
 -- JPEGs now that there is no export service provider to do it.
 --
@@ -585,6 +609,7 @@ return {
   setExecuteExitCode = function(code) executeExitCode = code end,
   setConfirmAnswer = function(answer) confirmAnswer = answer end,
   dialogMessages = dialogMessages,
+  moduleSwitches = moduleSwitches,
   floatingDialogs = floatingDialogs,
   catalogWrites = catalogWrites,
   createdKeywords = createdKeywords,
@@ -724,6 +749,12 @@ class LuaPlugin:
         ]
 
     @property
+    def module_switches(self) -> list[str]:
+        """Module names handed to LrApplicationView.switchToModule, in order."""
+        switches = self.env["moduleSwitches"]
+        return [switches[i] for i in range(1, len(switches) + 1)]
+
+    @property
     def floating_dialogs(self) -> list:
         """Args of each presentFloatingDialog call, in order."""
         shown = self.env["floatingDialogs"]
@@ -790,14 +821,29 @@ class LuaPlugin:
         """Build a stub LrPhoto.
 
         ``properties`` become plugin custom metadata; ``raw`` and ``formatted``
-        become getRawMetadata / getFormattedMetadata, which is what the publish
+        become getRawMetadata / getFormattedMetadata, which is what the upload
         path reads a photo's capture time, GPS and caption from.
+
+        ``raw`` and ``formatted`` are converted all the way down. lupa's
+        table_from only converts the outermost level, so a nested dict would
+        arrive as a Python object -- and reading a key it does not have raises
+        KeyError instead of returning nil, which is the opposite of what Lua
+        does and would make the plugin look wrong when it is the stub that is.
         """
         return self.env["newPhoto"](
             self.runtime.table_from(properties),
-            self.runtime.table_from(raw or {}),
-            self.runtime.table_from(formatted or {}),
+            self._deep_table(raw or {}),
+            self._deep_table(formatted or {}),
         )
+
+    def _deep_table(self, value):
+        if isinstance(value, dict):
+            return self.runtime.table_from(
+                {k: self._deep_table(v) for k, v in value.items()})
+        if isinstance(value, list):
+            return self.runtime.table_from(
+                {i + 1: self._deep_table(v) for i, v in enumerate(value)})
+        return value
 
     def set_published_collection(self, local_id, entries) -> None:
         """Populate catalog:getPublishedCollectionByLocalIdentifier(local_id).

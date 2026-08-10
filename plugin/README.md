@@ -86,6 +86,8 @@ rendering first.
 The other buttons:
 
 - **Sync** — pull the current community determination for the selection.
+- **Set on Map** — switch to Lightroom's Map module to give the photo a
+  location. See below for why this is worth doing.
 - **Link to Observation…** — adopt an observation that already exists on
   iNaturalist, made in the app or on the web. Paste its ID; the plugin fetches
   it and asks you to confirm before attaching.
@@ -105,6 +107,30 @@ PowerShell helper (`fix_window_z_order.ps1`) that hands the window to Lightroom
 and clears the always-on-top flag. It touches nothing but that one window, and
 if it fails the panel simply stays always-on-top. On macOS it does not run at
 all.
+
+### Location, and why the panel nags about it
+
+The panel shows the selected photo's coordinates, and **Set on Map** hands you
+over to Lightroom's own Map module to place a photo that has none.
+
+This matters more than it looks. Measured against the live API: of 8,691,735
+observations with open geoprivacy and no coordinates, **99.975% are casual
+grade** — which keeps them out of most research use and out of the GBIF export.
+Only 1,793 of that whole set ever reached research grade. Coordinates also feed
+iNaturalist's vision model, so a located photo gets better suggestions.
+
+Most cameras still have no GPS, so this is the common case, not the unusual one.
+Uploading a photo with no location therefore asks first. It is a warning and not
+a veto — plenty of observations are worth having without one — and it stays
+quiet entirely if you have turned **Send GPS coordinates** off in settings,
+because a warning that fires when it should not is one people learn to click
+past.
+
+The plugin does not offer its own coordinate fields. The Map module already has
+place search, a draggable pin, reverse geocoding, tracklog matching and saved
+locations, and it writes the GPS to the file; two number boxes in a floating
+window would be a worse version of something Lightroom ships. Set the location
+there, come back, and upload.
 
 ### A species guess is not an identification
 
@@ -306,7 +332,7 @@ in the words of the bug it would be — runs the suite, and reports any mutation
 nothing noticed:
 
 ```powershell
-.\.venv\Scripts\python.exe mutate_panel.py        # panel, metadata, tagset
+.\.venv\Scripts\python.exe mutate_panel.py        # panel, metadata, tagset, location
 .\.venv\Scripts\python.exe mutate_upload_core.py
 .\.venv\Scripts\python.exe mutate_settings.py
 .\.venv\Scripts\python.exe mutate_render_photo.py

@@ -423,6 +423,47 @@ POST /v1/identifications
 
 ---
 
+## An observation with no coordinates is almost always casual grade
+
+**[verified, measured against the live API 2026-08-09]**
+
+Of **8,691,735** observations with open geoprivacy and no coordinates,
+**8,689,562 — 99.975% — are casual grade.** Only 1,793 ever reached research
+grade and 380 sit at needs_id. Casual grade keeps an observation out of most
+research use and out of the GBIF export, so uploading without a location
+produces a record that will almost certainly not count. That is why the plugin
+warns before creating one.
+
+Coordinates also feed the vision endpoint's geographic prior, so a located photo
+gets materially better suggestions.
+
+### The query that appears to disprove this
+
+The obvious check says the opposite and is wrong:
+
+```
+/v1/observations?geo=false&quality_grade=research&per_page=0
+-> total_results: 492818
+```
+
+Half a million research-grade observations with no location would settle it.
+But `geo=false` means **"coordinates are not visible to you"**, not "there are
+no coordinates". Adding `geoprivacy=private` accounts for 490,423 of those
+492,818: the coordinates exist, they are obscured. The honest query pins
+geoprivacy open:
+
+```
+/v1/observations?geo=false&geoprivacy=open&per_page=0
+-> total_results: 8691735
+/v1/observations?geo=false&geoprivacy=open&quality_grade=casual&per_page=0
+-> total_results: 8689562
+```
+
+Worth remembering generally: on this API, "not visible" and "not present" share
+a parameter.
+
+---
+
 ## iNaturalist image resolution tiers
 
 | Tier | Approx. size |

@@ -202,7 +202,8 @@ The panel shows the selection, what the observation currently is, its quality
 grade and last sync, a **Species guess** with a **Get Suggestions** button and a
 list of what came back, one button that is **Upload to iNaturalist** or **Update
 species guess** depending on whether the selection is already linked, and
-**Sync**, **Link to Observation…**, **View on iNaturalist** and **Unlink**.
+**Sync**, **Set on Map**, **Link to Observation…**, **View on iNaturalist** and
+**Unlink**.
 
 Everything below the heading describes the *first* selected photo and the
 heading says so. Uploading is the exception: it takes the whole selection into a
@@ -224,6 +225,53 @@ an unlinked photo needs `RenderPhoto.renderForSuggestions` and
 `suggestionItems` maps list entries to *row positions*, not taxon ids, because a
 malformed result may have no id and a list that silently drops rows is worse
 than one that shows a row it cannot act on.
+
+### Location: warn, and hand off to the Map module
+
+An observation without coordinates is, in practice, an observation that does not
+count. Measured against the live API: of 8,691,735 open-geoprivacy observations
+with no coordinates, **99.975% are casual grade**; only 1,793 ever reached
+research grade. Coordinates also improve the vision model's suggestions through
+its geographic prior. Most cameras still have no GPS, so this is the ordinary
+case rather than an edge one.
+
+The panel therefore shows the location on its own row — it is the only field
+here the user can still act on — and `PanelCore.locationWarning` gates the
+upload behind a confirmation when the first photo has none.
+
+Three deliberate limits on that warning:
+
+- **It fires only on upload, never on update.** An update posts an
+  identification; it cannot add coordinates, so warning there would be a dialog
+  with nothing behind it.
+- **It is silent when `inat_upload_location` is off.** The user switched
+  location off on purpose. A warning that fires when it should not is one people
+  learn to click through, and that costs us the times it is right.
+- **It is a warning, not a veto.** Plenty of observations are worth having
+  without a location.
+
+It judges `photos[1]`, because the observation's details come from the first
+photo. Judging any other would warn about a location that is not the one being
+uploaded.
+
+**The plugin does not offer coordinate entry of its own.** `LrView` has no
+canvas and no mouse coordinates, so the best a plugin can build is two number
+fields — against a module that already has place search, a draggable pin,
+reverse geocoding, tracklog matching and saved locations, and that writes the
+GPS itself. `ObservationPanel.openMap` calls
+`LrApplicationView.switchToModule("map")` and gets out of the way.
+
+That call is wrapped in `pcall`: it is the first use of `LrApplicationView` in
+this plugin, at least one build restricts the Map module
+(`isModuleBlockedForChineseUser` appears in `Lightroom.exe`), and a button whose
+whole job is to fix the problem the panel just raised must not fail silently.
+`"map"` is verified against Lightroom's own module table rather than guessed —
+see `docs/lightroom-sdk-notes.md`.
+
+Reading a photo's coordinates lives in one place, `UploadCore.locationOf`. Three
+callers wanted it — the observation body, the vision request, and now the
+warning — and the panel disagreeing with the uploader about whether a photo has
+a location is precisely the bug that would teach users to ignore the warning.
 
 ### A species guess is not an identification
 
