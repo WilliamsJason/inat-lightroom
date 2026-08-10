@@ -1,0 +1,330 @@
+--[[
+  SyncCore.lua
+  ------------
+  The sync itself, as a module rather than a script.
+
+  This used to live in SyncObservation.lua, which Lightroom runs top to bottom
+  the moment its menu item is clicked. That makes it impossible to require:
+  loading it *is* running it. The sync is now started from a button in the
+  publish service's settings dialog and from a lightroom:// URL, so the logic
+  has to be callable from more than one entry point and lives here.
+
+  For each photo that has an inat_observation_id stored in custom metadata:
+
+    1. Fetches the latest observation from iNaturalist (GET /observations/{id})
+    2. Reads the community-determined taxon and its ancestor list
+    3. Creates / reuses a hierarchical keyword tree under an "iNaturalist" root
+    4. Applies the leaf keyword to the photo
+    5. Updates the custom metadata fields (taxon name, common name, quality
+       grade, observation UUID, last-synced timestamp)
+--]]
+
+local LrApplication   = import "LrApplication"
+local LrDate          = import "LrDate"
+local LrDialogs       = import "LrDialogs"
+local LrProgressScope = import "LrProgressScope"
+
+local InatAPI      = require "InatAPI"
+local InatAuth     = require "InatAuth"
+local UploadCore   = require "UploadCore"
+local logger       = require "Log"
+
+local SyncCore = {}
+
+--- What happened to one photo. Anything that is not FAILED is a normal
+-- outcome, including UNIDENTIFIED: a freshly created observation has no
+-- community taxon until somebody identifies it, which is most of them.
+SyncCore.SYNCED       = "synced"
+SyncCore.UNIDENTIFIED = "unidentified"
+SyncCore.NO_ID        = "no-id"
+SyncCore.FAILED       = "failed"
+
+--------------------------------------------------------------------------------
+-- Build keyword hierarchy and return the leaf keyword object
+--------------------------------------------------------------------------------
+
+--- Create or reuse a nested keyword hierarchy.
+-- @param catalog  LrCatalog
+-- @param path     Ordered list of names, e.g. {"iNaturalist","Plantae",…,"Quercus robur"}
+-- @return         Leaf LrKeyword object
+local function ensureKeywordPath(catalog, path)
+  local parentKw = nil
+  local leafKw   = nil
+
+  for i, name in ipairs(path) do
+    local isLeaf = (i == #path)
+    -- synonyms, includeOnExport, parent, skipIfExists
+    local kw = catalog:createKeyword(name, {}, true, parentKw, true)
+    parentKw = kw
+    if isLeaf then leafKw = kw end
+  end
+
+  return leafKw
+end
+
+--- Build the keyword path from a taxon table.
+-- Delegates to InatAPI so the plugin and the Python harness agree on shape.
+local function buildKeywordPath(taxon)
+  return InatAPI.buildKeywordPath(taxon, "iNaturalist")
+end
+
+--- Fill in a taxon's ancestors if it arrived without them.
+--
+-- MUST be called from inside a task: it may make an HTTP call.
+--
+-- A taxon from an observation or a vision result carries a name and a rank but
+-- usually no lineage, and the lineage is the whole keyword hierarchy. Returns
+-- the original taxon when the fetch fails, because a leaf keyword under the
+-- wrong parent is still better than no keyword and an error the user cannot act
+-- on.
+function SyncCore.withAncestors(api, taxon)
+  if not taxon or taxon.ancestors then return taxon end
+
+  local full, err = api:getTaxon(taxon.id)
+  if full then return full end
+
+  logger:warn("Could not fetch full taxon: " .. (err or "unknown"))
+  return taxon
+end
+
+--- Write a taxon onto a photo: the keyword hierarchy and the taxon fields.
+--
+-- MUST be called from inside a write transaction. createKeyword needs write
+-- access exactly as the metadata setters do, and callers have other writes to
+-- batch with it.
+--
+-- Shared by the sync, which learns the taxon from an observation, and by the
+-- panel's local apply, which learns it from a suggestion the user picked. They
+-- disagree about where a taxon comes from and agree about everything that
+-- happens next, so only the first half is worth writing twice.
+--
+-- @return true when a taxon was written, false when there was none.
+function SyncCore.applyTaxon(catalog, photo, taxon)
+  if not taxon then return false end
+
+  local leafKw = ensureKeywordPath(catalog, buildKeywordPath(taxon))
+  if leafKw then
+    photo:addKeyword(leafKw)
+  end
+
+  photo:setPropertyForPlugin(_PLUGIN, "inat_taxon_id", tostring(taxon.id or ""))
+  photo:setPropertyForPlugin(_PLUGIN, "inat_taxon_name", taxon.name or "")
+  photo:setPropertyForPlugin(_PLUGIN, "inat_common_name",
+    taxon.preferred_common_name or "")
+
+  return true
+end
+
+--------------------------------------------------------------------------------
+-- Sync a single photo
+--------------------------------------------------------------------------------
+
+--- The coordinates an observation is willing to tell us, if any.
+--
+-- @return latitude, longitude, accuracyInMetres -- all nil when there is
+--         nothing safe to use.
+--
+-- The trap this exists for: **an obscured observation reports coordinates that
+-- are deliberately wrong.** iNaturalist randomises the public position of
+-- anything obscured -- by geoprivacy or because the taxon is threatened --
+-- within a box that measured ~30 km across on a live example, and still returns
+-- a `location` string and a `geojson` point. Nothing in the shape of the
+-- response says the numbers are fiction; only the `obscured` flag does.
+-- Trusting it would write a plausible coordinate up to 30 km from where the
+-- photo was taken, into the user's own catalog, silently.
+--
+-- The owner is told the truth through `private_location`, which the API only
+-- includes for authenticated requests on your own observations. So: use the
+-- private position when it is there, use the public one when nothing is
+-- obscured, and otherwise decline. Declining costs a user the convenience on
+-- their own obscured records; the alternative costs somebody a wrong location
+-- they will never think to check.
+function SyncCore.coordinatesFrom(obs)
+  if not obs then return nil, nil, nil end
+
+  local point = obs.private_location
+  if not point or point == "" then
+    if obs.obscured then return nil, nil, nil end
+    point = obs.location
+  end
+
+  if not point or point == "" then return nil, nil, nil end
+
+  local latitude, longitude = string.match(point, "^%s*(-?[%d%.]+)%s*,%s*(-?[%d%.]+)%s*$")
+  latitude, longitude = tonumber(latitude), tonumber(longitude)
+  if not latitude or not longitude then return nil, nil, nil end
+
+  -- positional_accuracy describes the true position, public_positional_accuracy
+  -- the obscured one. Since we only ever return a true position, only the
+  -- former belongs with it.
+  local accuracy = tonumber(obs.positional_accuracy)
+  if accuracy and accuracy <= 0 then accuracy = nil end
+
+  return latitude, longitude, accuracy
+end
+
+--- Bring one photo up to date with its observation.
+-- @return status  One of the SyncCore.* codes.
+-- @return err     A message, when status is FAILED.
+function SyncCore.syncPhoto(catalog, photo, api)
+  local obsId = photo:getPropertyForPlugin(_PLUGIN, "inat_observation_id")
+  if not obsId or obsId == "" then
+    return SyncCore.NO_ID, nil
+  end
+
+  -- Fetch observation from iNaturalist
+  local obs, err = api:getObservation(tonumber(obsId))
+  if not obs then
+    return SyncCore.FAILED,
+      "Failed to fetch observation " .. obsId .. ": " .. (err or "unknown")
+  end
+
+  -- Prefer community_taxon; fall back to taxon
+  local taxon = SyncCore.withAncestors(api, obs.community_taxon or obs.taxon)
+
+  -- Everything that is not the taxon is written either way. An observation
+  -- nobody has identified yet is the normal state of one just published, and
+  -- its UUID and URL are worth recording now: the UUID is what stops the next
+  -- publish creating a duplicate.
+  catalog:withWriteAccessDo("iNat sync", function()
+    SyncCore.applyTaxon(catalog, photo, taxon)
+
+    photo:setPropertyForPlugin(_PLUGIN, "inat_quality_grade",
+      obs.quality_grade or "")
+    photo:setPropertyForPlugin(_PLUGIN, "inat_observation_url",
+      "https://www.inaturalist.org/observations/" .. tostring(obsId))
+    photo:setPropertyForPlugin(_PLUGIN, "inat_last_synced",
+      LrDate.timeToW3CDate(LrDate.currentTime()))
+
+    -- The UUID is how a photo finds its observation again at publish time, and
+    -- a photo linked by pasting an observation ID has never had one. Storing
+    -- it here is what makes an adopted observation behave like a published one
+    -- rather than getting a duplicate on its next publish.
+    if obs.uuid and obs.uuid ~= "" then
+      photo:setPropertyForPlugin(_PLUGIN, "inat_observation_uuid", obs.uuid)
+    end
+
+    -- Bring the location home, but only into an empty space.
+    --
+    -- The common case this serves: uploaded from a camera with no GPS, placed
+    -- on the map afterwards on the iNaturalist website. Without this the
+    -- catalog never learns where the photo was taken and the Map module stays
+    -- empty forever.
+    --
+    -- Never an overwrite. If the photo already has coordinates then
+    -- iNaturalist's copy came from them in the first place, so there is nothing
+    -- to gain; and in the case where they have genuinely diverged, quietly
+    -- moving a photo the user has already placed is not a sync, it is a
+    -- correction nobody asked for and cannot see happen.
+    local latitude, longitude, accuracy = SyncCore.coordinatesFrom(obs)
+    if latitude and not UploadCore.locationOf(photo) then
+      photo:setRawMetadata("gps", { latitude = latitude, longitude = longitude })
+      logger:info("Applied location from observation " .. tostring(obsId))
+    end
+
+    -- The accuracy is recorded whether or not the coordinates were, because it
+    -- describes what iNaturalist holds and the panel shows it back. Withheld
+    -- when the position was, since an accuracy for a position we declined to
+    -- read describes nothing we know.
+    if latitude and accuracy then
+      photo:setPropertyForPlugin(_PLUGIN, "inat_positional_accuracy",
+        string.format("%d", math.floor(accuracy + 0.5)))
+    end
+  end)
+
+  if not taxon then
+    logger:info("Observation " .. obsId .. " has no taxon yet; recorded the rest")
+    return SyncCore.UNIDENTIFIED, nil
+  end
+
+  logger:info("Synced photo → obs=" .. obsId .. " taxon=" .. (taxon.name or "?"))
+  return SyncCore.SYNCED, nil
+end
+
+--------------------------------------------------------------------------------
+-- Sync a list of photos
+--------------------------------------------------------------------------------
+
+--- Sync the given photos, reporting progress and a summary.
+-- @param context  A live LrFunctionContext; the progress scope is tied to it,
+--                 so it must belong to the task actually running this.
+-- @param photos   The photos to sync.
+-- @param options  quiet = true reports only when something actually went
+--                 wrong. Used after a publish, where the run was not asked
+--                 for directly and a modal saying "nothing to report" is just
+--                 something else to dismiss.
+function SyncCore.syncPhotos(context, photos, options)
+  options = options or {}
+  local catalog = LrApplication.activeCatalog()
+
+  if not photos or #photos == 0 then
+    if not options.quiet then
+      LrDialogs.message("iNaturalist Sync", "No photos selected.", "warning")
+    end
+    return
+  end
+
+  local token, authErr = InatAuth.getToken()
+  if not token then
+    LrDialogs.message("iNaturalist Sync", authErr or "Authentication failed.", "critical")
+    return
+  end
+
+  local api = InatAPI.new(token)
+
+  local progress = LrProgressScope {
+    title           = "iNaturalist Sync",
+    caption         = "Syncing…",
+    functionContext = context,
+  }
+  progress:setCancelable(true)
+
+  local counts = {
+    [SyncCore.SYNCED]       = 0,
+    [SyncCore.UNIDENTIFIED] = 0,
+    [SyncCore.NO_ID]        = 0,
+  }
+  local errors = {}
+
+  for i, photo in ipairs(photos) do
+    if progress:isCanceled() then break end
+
+    progress:setCaption("Photo " .. i .. " of " .. #photos .. "…")
+    progress:setPortionComplete(i - 1, #photos)
+
+    local status, err = SyncCore.syncPhoto(catalog, photo, api)
+    if status == SyncCore.FAILED then
+      errors[#errors + 1] = err
+      logger:warn("Sync error for photo " .. i .. ": " .. (err or "?"))
+    else
+      counts[status] = counts[status] + 1
+    end
+  end
+
+  progress:done()
+
+  if options.quiet and #errors == 0 then
+    return
+  end
+
+  local msg = string.format(
+    "Sync complete.\n\nSynced: %d\nNot identified yet: %d\nSkipped (no ID): %d\nErrors: %d",
+    counts[SyncCore.SYNCED], counts[SyncCore.UNIDENTIFIED],
+    counts[SyncCore.NO_ID], #errors
+  )
+  if #errors > 0 then
+    msg = msg .. "\n\nFirst error:\n" .. errors[1]
+  end
+  LrDialogs.message("iNaturalist Sync", msg, #errors > 0 and "warning" or "info")
+end
+
+--------------------------------------------------------------------------------
+-- Sync whatever is selected
+--------------------------------------------------------------------------------
+
+--- Sync the current target photos.
+function SyncCore.syncTargetPhotos(context)
+  SyncCore.syncPhotos(context, LrApplication.activeCatalog():getTargetPhotos())
+end
+
+return SyncCore

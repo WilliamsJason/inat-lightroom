@@ -298,7 +298,39 @@ function InatAPI:getObservation(observationId)
   return observation, nil
 end
 
+--- GET /observations?uuid=... -- find an observation by its UUID.
+--
+-- The UUID is how this plugin knows that several Lightroom photos belong to
+-- one observation, and it is the only handle that survives a photo being
+-- published, re-rendered and published again.
+--
+-- Returns the observation, or nil with no error when there simply is not one:
+-- a photo whose observation was deleted on the website is a normal state to be
+-- in, not a failure, and the caller's job is to make a new one rather than to
+-- report a problem.
+function InatAPI:findObservationByUuid(uuid)
+  if not uuid or uuid == "" then
+    return nil, nil
+  end
+
+  local payload, err = apiGet(API_V1 .. "/observations",
+    { uuid = uuid, per_page = 1 }, self.token)
+  if not payload then return nil, err end
+
+  local results = payload.results
+  if type(results) ~= "table" or #results == 0 then
+    return nil, nil
+  end
+
+  return results[1], nil
+end
+
 --- POST /observations -- returns the created observation (with .id).
+--
+-- Pass params.uuid to create an observation the caller has already named. That
+-- is how a second Lightroom photo joins an observation whose first photo was
+-- published from another machine: the UUID travels in the catalog, the
+-- observation is found or created under it either way.
 function InatAPI:createObservation(params)
   local payload, err = apiSend("POST", API_V1 .. "/observations",
     { observation = params }, self.token)
@@ -375,6 +407,53 @@ function InatAPI:uploadPhoto(observationId, filePath)
   if not payload then return nil, err end
 
   return firstResult(payload) or {}, nil
+end
+
+--- Pull the observation_photo ID out of an upload response.
+--
+-- Lightroom wants an ID for every published photo, and it is the handle used
+-- later to detach or replace that photo. POST /observation_photos is
+-- documented to return the record itself, but the v1 API has been inconsistent
+-- enough elsewhere that guessing one shape and crashing on the other is not
+-- worth it -- so this looks in the places the ID has actually been seen and
+-- says so plainly when it finds none.
+function InatAPI.observationPhotoId(response)
+  if type(response) ~= "table" then return nil end
+
+  local candidates = {
+    response.id,
+    response.observation_photo_id,
+    type(response.observation_photo) == "table" and response.observation_photo.id or nil,
+  }
+
+  for _, candidate in ipairs(candidates) do
+    if candidate ~= nil and candidate ~= "" then
+      return tostring(candidate)
+    end
+  end
+
+  return nil
+end
+
+--- DELETE /observation_photos/{id} -- detach a photo from its observation.
+--
+-- A 404 counts as success: the only reason to call this is to reach a state
+-- where the photo is gone, and it already being gone is that state. Treating
+-- it as an error would make a retry after a half-finished delete fail forever.
+function InatAPI:deleteObservationPhoto(observationPhotoId)
+  local url = API_V1 .. "/observation_photos/" .. tostring(observationPhotoId)
+  logger:debug("DELETE " .. url)
+  local respBody, respHeaders = LrHttp.post(
+    url, "", jsonHeaders(self.token), "DELETE")
+
+  local payload, err = handleResponse("DELETE", url, respBody, respHeaders)
+  if payload then return payload, nil end
+
+  if respHeaders and tonumber(respHeaders.status) == 404 then
+    return {}, nil
+  end
+
+  return nil, err
 end
 
 --- Count the photos actually attached to an observation.
@@ -555,6 +634,18 @@ function InatAPI:scoreObservation(observationId)
 end
 
 --- Flatten a vision response into rows suitable for a picker UI.
+--- Reduce a vision payload to the rows the picker shows, plus the fallback.
+--
+-- @return rows, commonAncestor
+--
+-- `common_ancestor` is the most specific taxon the model is confident about
+-- *across all candidates*, which is a different and better-founded claim than
+-- the lineage of the top result: when the candidates disagree at species level
+-- but agree at genus, this is that genus. It is what lets the picker offer a
+-- coarser rank honestly, so it is returned rather than dropped.
+--
+-- Absent from a response whose candidates share nothing, and possibly from
+-- score_observation, so every caller must cope with nil.
 function InatAPI.summariseSuggestions(payload)
   local rows = {}
   for _, result in ipairs((payload and payload.results) or {}) do
@@ -569,7 +660,9 @@ function InatAPI.summariseSuggestions(payload)
       frequency_score = result.frequency_score,
     }
   end
-  return rows
+
+  local ancestor = payload and payload.common_ancestor
+  return rows, ancestor and ancestor.taxon or nil
 end
 
 --------------------------------------------------------------------------------

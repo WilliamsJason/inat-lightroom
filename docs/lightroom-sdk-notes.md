@@ -116,6 +116,602 @@ for _, rendition in exportSession:renditions() do ... end
 To look at the photos without disturbing the rendition queue, use
 `exportSession:photosToExport()`, which returns `LrPhoto` objects directly.
 
+Measured for `LrExportSession` too, not only for the `exportContext` an export
+provider is handed: a probe in Lightroom Classic 14 reported `first=number 1`,
+`second=table`, so both take the same shape.
+
+## `export_destinationType = "tempFolder"` needs an export service provider
+
+A plugin with no `LrExportServiceProvider` cannot render into Lightroom's temp
+folder, even though the destination type is real — it has its own preset label
+(`$$$/AgExport/DestinationFolder/TempFolder`) and its own progress scope
+(`$$$/AgExport/ToPluginTempDir/ScopeOperation…`). Asking for it produces:
+
+```
+export settings are missing the LR_export_destinationPathPrefix
+```
+
+which names the wrong field and sends you looking in the wrong place. The
+reason is in `Export.lrmodule`: the destination is resolved as
+
+```lua
+if kind == "specificFolder" or kind == "chooseLater" then
+  dir = settings.export_destinationPathPrefix
+else
+  dir = LrPathUtils.getStandardFilePath(kind)   -- "tempFolder" -> nil
+end
+assert(type(dir) == "string",
+  "export settings are missing the LR_export_destinationPathPrefix")
+```
+
+`tempFolder` *is* handled, but in `addRenditionsForPhotos`, and only when the
+export service provider declares **`exportToTemporaryLocation`** — a name that
+sits in the binary's list of provider callbacks beside `processRenderedPhotos`
+and `sectionsForTopOfDialog`. It is something a plugin's own provider declares
+about itself.
+
+Beware `canExportToTemporaryLocation`, which is a *different* name appearing
+nearby. Reading the two as one fact is what produced the failed attempt above.
+
+Without a provider, do what Lightroom does: build a directory under
+`LrPathUtils.getStandardFilePath("temp")`, pass it as
+`LR_export_destinationPathPrefix` with `LR_export_destinationType =
+"specificFolder"`, and delete it afterwards.
+
+## Omitted export settings come from the user's last export
+
+`LrExportSession` does not apply documented defaults to keys you leave out —
+`fillInDefaultSettings` fills them from the user's own preferences. So an
+omitted key does not mean "the sensible default", it means "whatever that
+person happened to do last time", which is invisible on the machine it was
+written on and a bug report from everyone else.
+
+Supply a complete preset. Four omissions that each look harmless:
+
+| Key | Lightroom's value | What it does to an upload |
+| --- | --- | --- |
+| `collisionHandling` | `"ask"` | Halts the render with a dialog. Two selected photos *do* collide: `DSC0001.ARW` and `DSC0001.JPG` both render to `DSC0001.jpg`. Use `"rename"` — `"overwrite"` silently drops one. |
+| `reimportExportedPhoto` | user's last | Adds a duplicate of every uploaded photo back into the catalog |
+| `export_postProcessing` | `"revealInFinder"` in shipped presets | Opens a file browser on a temp folder mid-upload. Use `"doNothing"`. |
+| `includeVideoFiles` | user's last | Passes a video through as an image; it fails later at upload, where the message makes no sense |
+
+The full set of valid keys and values is easiest to read from the export
+presets embedded in `Export.lrmodule` as plain Lua source — search for
+`collisionHandling = "ask"`.
+
+## A plugin cannot add a panel to the Library right side
+
+There is no Info.lua key for it, and looking for one costs an afternoon because
+plugins like Assisted Culling visibly have panels between Histogram and Quick
+Develop. They are not using the SDK. Dumping the shipped binaries settles it:
+
+| Binary | Info.lua keys it recognises |
+|---|---|
+| `substrate.dll` (plugin loader) | `LrSdkVersion`, `LrSdkMinimumVersion`, `LrToolkitIdentifier`, `LrPluginName`, `LrInitPlugin`, `LrShutdownPlugin`, `LrEnablePlugin`, `LrDisablePlugin`, `LrExportServiceProvider`, `LrMetadataProvider`, `URLHandler` |
+| `Library.lrmodule` | `LrLibraryMenuItems`, `LrExportMenuItems`, `LrHelpMenuItems`, `LrFilterPresetFactory`, `LrForceInitPlugin` |
+| `LibraryToolkit.dll` | `LrMetadataTagsetFactory`, `LrPublishService` |
+| `Export.lrmodule` | `LrExportServiceProvider`, `LrExportFilterProvider`, `URLHandler` |
+| `LightroomSDK.dll` | `LrPluginInfoProvider`, `LrPluginInfoUrl` |
+
+That is the whole list. Searched for and **not found in any binary**: `LrPanel`,
+`LrLibraryPanel`, `LrDevelopPanel`, `LrViewProvider`, `LrInspector`,
+`LrModulePanel`, `LrCustomPanel`, `LrSidePanel`.
+
+```powershell
+$txt = [System.Text.Encoding]::ASCII.GetString(
+  [System.IO.File]::ReadAllBytes("C:\Program Files\Adobe\Adobe Lightroom Classic\substrate.dll"))
+[regex]::Matches($txt, 'Lr[A-Za-z]{3,45}') | ForEach-Object { $_.Value } | Sort-Object -Unique
+```
+
+Nothing resembling `LrLibraryPanelSections` exists anywhere in the product. The
+docking machinery itself is there — `AgViewWinPanelHost::DockOrUndockPanel` and
+friends in `ui.dll` — but it is internal C++ that no manifest key reaches. A
+third-party panel is a companion application's own window, positioned over the
+panel column — not available to a pure Lua plugin.
+
+The closest legitimate surface is `LrMetadataTagsetFactory`: a preset in the
+Metadata panel's dropdown that shows a chosen set of fields. It is a preset,
+not a new panel, so selecting it replaces whatever the user had there.
+
+## Which menu a plugin's items land in, and why there are only three
+
+`Info.lua` offers a choice of exactly three parents, and the key names are
+misleading — `LrExportMenuItems` has nothing to do with exporting, it just
+means the File menu:
+
+| `Info.lua` key | Menu it appears under |
+|---|---|
+| `LrExportMenuItems` | **File** › Plug-in Extras |
+| `LrLibraryMenuItems` | **Library** › Plug-in Extras |
+| `LrHelpMenuItems` | **Help** › Plug-in Extras |
+
+`Library.lrmodule` defines one `LrSdkMenus` module exposing exactly three
+functions — `addExportMenuItems`, `addLibraryMenuItems`, `addHelpMenuItems` —
+and the submenu title `$$$/AgSdkMenus/Menu/PluginExtras=Pl&ug-in Extras`
+occurs **once in the whole application**. One submenu, three parents. The
+mapping was read off the call sites: `addExportMenuItems` is invoked directly
+after the `$$$/Application/Menu/File/PluginManager` block, `addLibraryMenuItems`
+amid the `Menu/Library/*` items.
+
+This plugin uses File. The Library menu only exists in the Library module,
+whereas File is present everywhere; both of our items open floating windows
+that work from any module, and neither is an operation on selected photos.
+
+## A plugin cannot add anything to a photo's right-click menu
+
+Right-clicking a photo is the natural place to want "send this to
+iNaturalist", and there is no way to get there. Three independent checks:
+
+- Scanning every `.lrmodule`, `.exe` and `.dll` in the install for
+  `Lr[A-Za-z]*MenuItems` returns **exactly three keys**, all listed above.
+  Nothing matching `Context`, `Photo`, `Image`, `Grid` or `Filmstrip` exists.
+- Each of the three `add*MenuItems` functions has **exactly one call site**.
+  (Each name appears twice in `Library.lrmodule`: once in the consecutive run
+  of constants that is the `LrSdkMenus` module definition, once where it is
+  called.) So the Plug-in Extras submenu is attached to three menus, full stop.
+- The image context menu is built from `$$$/AgLibrary/Menu/ImageContext/*` and
+  never reaches the plugin submenu builder.
+
+`PluginContextMenu` does turn up in `libcef.dll`, but that is Chromium's
+embedded browser, not Lightroom's UI.
+
+The only two ways a plugin has ever appeared on that menu are the
+`ImageContext/ExportSubmenu` (an export preset built on an
+`LrExportServiceProvider`) and the publish-specific entries like
+`GoToPublishedPhoto` and `MarkPhotoDirty` (an `LrPublishService`). This plugin
+deliberately declares neither — see plugin-architecture.md — so the floating
+panel plus the File menu are the whole surface, by choice.
+
+The temptation is to also ship a combined preset — plugin fields plus the
+everyday Lightroom ones — so users are not giving anything up by leaving it
+selected. This plugin tried that and dropped it. Default is one dropdown away,
+a copy of Default is a second thing to keep in step with Lightroom, and two
+near-identical entries in that menu is worse than switching.
+
+## The Metadata panel is the least capable surface in the SDK
+
+Worth knowing before designing around it, because it looks like the most
+promising one. A plugin's field becomes a panel row through
+`makeFormatterFromFieldDeclaration`, and the *only* keys that function derives
+from a field declaration are:
+
+```
+id ("%s.%s"), isSdkItem, title, data_type, rating/mixed_value,
+enum_values (from `values`), format_image, readOnly, set_image,
+and for dataType "url": a hardcoded
+action_title = "$$$/AgPhotoPropertySpec/GoURL=Go to URL" plus a fixed action
+```
+
+Consequences, all of them load-bearing:
+
+- The `→` button on a `url` row is Lightroom's own "Go to URL". A plugin cannot
+  relabel it, replace its action, or add one to a non-`url` field.
+- The row displays the field's **value**. For a `url` field that means the raw
+  URL is on screen. There is no display-text-vs-target split and no
+  `format_value` for SDK fields, so an action row always shows its URL.
+- The `→` renders even when the value is empty, and clicking it hands the OS an
+  empty target — on Windows that opens Explorer. An unwritten `url` field is an
+  actively broken button, not an inert one.
+- No `validate` and no change callback reach a plugin's metadata field, so the
+  panel cannot react to the user typing into one.
+
+Lightroom's internal formatter spec is far richer than what plugins are given —
+it has `action`, `action_title`, `action_type`, `action_icon`, `always_visible`,
+`format_value`, `hidden` — which is why built-in rows have real buttons. None of
+it is reachable through `LrMetadataProvider`.
+
+```powershell
+$txt = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes(
+  "C:\Program Files\Adobe\Adobe Lightroom Classic\LibraryToolkit.dll"))
+$i = $txt.IndexOf("makeFormatterFromFieldDeclaration")   # and "CustomMetadataFormatters"
+```
+
+Treat the Metadata panel as **read/write text fields and nothing more**.
+
+## Every UI surface a plugin can have
+
+This is the complete list, from dumping the loader binaries. It is short, and
+the shape of it is the single most important constraint on the plugin's design.
+
+| Surface | Docked? | Widgets | How |
+| --- | --- | --- | --- |
+| Metadata panel fields | **yes** | text only | `LrMetadataProvider` |
+| Publish service entry | **yes** | fixed row | `supportsIncrementalPublish` |
+| Comments panel | **yes** | fixed | publish-service comment hooks |
+| Floating window | no | anything | `LrDialogs.presentFloatingDialog` |
+| Export / publish dialog | modal | anything | `sectionsForTopOfDialog` |
+| Plug-in Manager section | modal | anything | `LrPluginInfoProvider` |
+| Modal dialog | modal | anything | `LrDialogs.presentModalDialog` |
+| Web view dialog | modal | HTML | `LrDialogs.presentWebViewDialog` |
+| Bezel | transient | text/image | `LrDialogs.showBezel` |
+| Menu items | — | none | `Lr*MenuItems` |
+
+**Nothing is both docked and arbitrary.** The three docked surfaces are all
+fixed-shape things Lightroom draws for you and lets a plugin fill with data;
+everything that accepts a `push_button` is a window that floats or blocks.
+
+The docking machinery does exist in `ui.dll` — `AgViewWinPanelHost::DockOrUndockPanel`,
+`AgViewWinPanel::SetFloating`, `IsUndocked` — but it is internal C++ with no
+plugin-facing manifest key. Searching every `.lrmodule` and `.dll` for `LrPanel`,
+`LrLibraryPanel`, `LrDevelopPanel`, `LrViewProvider`, `LrInspector`,
+`LrModulePanel`, `LrCustomPanel` and `LrSidePanel` turns up nothing. This is
+absence-of-exposure rather than a prohibition, but it is consistent across every
+binary that could plausibly host one.
+
+The one near-miss is the **Web module**, whose right-hand panels really are
+plugin-populated with arbitrary `LrView` content —
+`Resources\webengines\default_html.lrwebengine\galleryInfo.lrweb` builds them
+with `views = f:panel_content{...}`. But that is a **different plugin type**
+(`.lrwebengine`, keyed by `galleryType`, loaded by `Web.lrmodule`), it only
+exists inside the Web module, and it is gallery-export configuration rather than
+a general-purpose panel. Not a route to a Library-module panel.
+
+### Controls
+
+Complete `LrView.osFactory()` control list, from `ui.dll`:
+
+```
+row column spacer checkbox radio_button color_well edit_field edit_text
+combo_box password_field group_box catalog_photo picture popup_menu
+simple_list scrolled_view push_button square_button separator slider
+static_text tab_view tab_view_item view path_control
+```
+
+Complete `LrDialogs` export list, same binary:
+
+```
+message confirm runOpenPanel runSavePanel messageWithDoNotShow
+promptForActionWithDoNotShow resetDoNotShowFlag presentModalDialog
+presentFloatingDialog closeFloatingDialogsForPlugin presentWebViewDialog
+showBezel stopModalWithResult showModalProgressDialog showError
+attachErrorDialogToFunctionContext showStringsDialog
+```
+
+**No canvas, no drawing primitives, and no mouse coordinates anywhere.**
+`mouse_down` exists on some controls but carries no position, so draggable
+handles and hit-testing are impossible in pure Lua. Nobody in the ecosystem has
+done it.
+
+#### `f:simple_list` is real, but undocumented
+
+It sits in the constructor list above, beside `popup_menu`. The string
+`simple_list` appears **exactly once** in the whole binary — the factory entry —
+so it has no property surface to scan for. Its implementation chunk (index
+~265542 in `ui.dll`) gives it away instead: it builds a `table_view` inside a
+`scroll_view`, reading
+
+```
+bind_to_object auto_resize width autoresize_columns no_column_headers
+allows_multiple_selection fill columns title resizable truncation
+value items selected_indexes height enabled visible
+```
+
+which is enough to conclude it takes `items` and a `value`, and that the SDK's
+usual `{ title = ..., value = ... }` item shape is the one to try.
+
+**"The binary accepts these keys" is not "this displays."** This plugin uses it
+for the panel's suggestions list, isolated in `ObservationPanel.suggestionsView`
+so that falling back to `f:popup_menu` is a one-line change. **Confirmed in the
+host:** it renders, and rows highlight on click.
+
+##### Its `value` is a list, even for a single selection
+
+`value` is not the selected item. `simple_list` binds it to the inner
+`table_view`'s `selected_indexes` through a `transform`, and the reverse path
+(`propagationFromDocumentView`) runs `ipairs` over that — so what reaches the
+property is a **table**, with one entry for a single click and zero entries when
+nothing is selected.
+
+Taking it for a row number is silent: `rows[{...}]` is `nil`, so the list
+highlights the row and nothing else happens. There is no error and nothing in
+the log. This cost a host round trip to notice, because a list that visibly
+responds to clicks looks like a list that is wired up.
+
+`PanelCore.selectedIndex` normalises it and accepts every plausible shape rather
+than only the observed one, on the grounds that the failure mode is invisible.
+
+Same caution for a bound `title` on `f:push_button`: the panel's Upload/Update
+button relies on it, and the failure mode would be a blank button rather than an
+error. **Confirmed in the host:** it works.
+
+### The floating window, in detail
+
+`LrDialogs.presentFloatingDialog(_PLUGIN, { ... })` is the only non-modal,
+persistent window a plugin can create, and the only surface that can hold both
+this plugin's data and its buttons. **This plugin uses it** — see
+`ObservationPanel.lua`.
+
+The argument names are not guesswork. The `LrDialogs` wrapper's own constant
+table lists `contents`, `onShow`, `id`, `save_frame`, `blockTask`, and it
+validates two things by name:
+
+```
+$$$/LrDialogs/Error/NoPlugin=presentFloatingDialog called with invalid plugin parameter
+$$$/LrDialogs/Error/NoFloatingContents=presentFloatingDialog called with no contents parameter
+```
+
+The window it builds is a separate chunk, identifiable by
+`is_non_modal_sdk_window`. That chunk's constants give the rest of the accepted
+keys — `title`, `save_frame`, `position`, `margin`, `closable`, `maximizable`,
+`minimizable`, `borderless`, `background_color`, `canBecomeKeyWindow`,
+`windowWillClose` — and, the useful part, it reads two observer keys straight
+out of the argument table and hands them to the catalog:
+
+```
+selectionChangeObserver  ->  addSelectionContentObserver
+sourceChangeObserver     ->  addSourcesChangedObserver
+```
+
+So a floating window can follow the filmstrip selection and the chosen
+folder/collection. That is what makes it behave like a panel rather than a
+dialog. Focus Points v4 ships the same mechanism.
+
+The observers are registered on the Library module's filmstrip, not on the
+catalog: in `Library.lrmodule` `addSelectionContentObserver` sits in the same
+class as `setSelectedImageIds`, `getSelectedImageIds`, `getSelectedImageCount`
+and `addSelectionWillChangeObserver`. They fire promptly and reliably — verified
+by logging inside them in the host.
+
+**They are not called from within a task, and that matters more than it
+sounds.** Almost anything worth doing in one of these observers — reading plugin
+metadata, formatted metadata, most catalog access — yields, and yielding outside
+a task raises. Two different messages depending on how the observer was reached:
+
+```
+We can only wait from within a task
+Yielding is not allowed within a C or metamethod call
+```
+
+**Lightroom swallows both.** No dialog, no console output, nothing in the plugin
+log unless you catch it yourself. The visible symptom is simply a window that
+does not react, which sends you looking at the observer wiring — the one part
+that is working. Wrap the observer body in `LrTasks.startAsyncTask`.
+
+Expect several firings per user action, with transient states in between. The
+host log for a single folder change showed the selection observer fire three
+times, reporting 1, then 104, then 104, then 1 target photos. Anything doing
+async work per firing needs to decide which result is still wanted rather than
+assuming the last one to finish is the newest.
+
+Three things matter for it to be usable:
+
+- **`blockTask = true`.** The window is bound to a property table owned by the
+  calling task's function context. Without `blockTask` that task ends as soon
+  as the window is shown, the context dies, and every binding points at a dead
+  object.
+- **`save_frame` plus `id`.** Position and size persist across sessions. A
+  floating window that reopens centred every time is one people close once.
+- **Observers on a task**, as above.
+
+It takes focus every time it is opened — which is why the panel updates its
+bindings in place on selection change rather than rebuilding the window.
+
+#### It is system-wide always-on-top, and that is not configurable
+
+Measured on Windows with `GetWindowLongPtrW` / `GetWindow` against a live
+Lightroom process, rather than assumed:
+
+| Window | Class | Ex-style | Owner |
+|---|---|---|---|
+| Our floating panel | `AgWinFrame` | `0x108` — `WS_EX_TOPMOST` set | `0` (none) |
+| Lightroom main window | `AgWinMainFrame` | `0x100` | `0` |
+
+Two consequences, both unwanted: `WS_EX_TOPMOST` puts the panel above *every*
+application, not just Lightroom; and having no owner window means it does not
+minimise, restore or z-order with Lightroom.
+
+There is no Lua control over either. `_topmost` *is* a real property of the
+underlying window object — in `ui.dll` it sits in the same property list as
+`borderless`, `closable`, `minimizable` and `canBecomeKeyWindow`, all of which
+the SDK builder does pass — but the builder's own constant table contains no
+`_topmost` and no `level`, so it never reads the key. Passing
+`_topmost = false` through `presentFloatingDialog` was tried in the host and
+changed nothing: the window still came up `0x108`.
+
+The behaviour you would want (above Lightroom, not above everything) is an
+owned, non-topmost window. That is reachable only from outside Lua:
+
+```
+SetWindowLongPtrW(panel, GWLP_HWNDPARENT /* -8 */, mainHwnd)
+SetWindowPos(panel, HWND_NOTOPMOST /* -2 */, 0,0,0,0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE)
+```
+
+Both calls were confirmed against the live panel. Order matters: giving the
+window an owner first puts it in the owner's z-order band, and clearing topmost
+afterwards is what stops it floating over other applications.
+
+That is what the plugin now does. `WindowFix.lua` shells out through
+`LrTasks.execute` to `fix_window_z_order.ps1`, which polls for a window matching
+Lightroom's PID + class `AgWinFrame` + the exact caption, then applies both
+calls. It is started on its own task just before `presentFloatingDialog`, which
+blocks; the helper polls rather than expecting the window to exist yet.
+
+Measured after the plugin's own fix-up, opening the panel from the menu:
+
+```
+title='iNaturalist'             class='AgWinFrame'      owner=0x3064A exstyle=0x100 TOPMOST=False
+title='Lightroom Catalog - ...' class='AgWinMainFrame'  owner=0x0     exstyle=0x100 TOPMOST=False
+```
+
+Owner is Lightroom's main frame, topmost is gone. No console window flashes,
+because the helper is launched `-WindowStyle Hidden`.
+
+To re-measure: `EnumWindows` filtered by Lightroom's PID, then
+`GetWindowLongPtrW(h, -20)` for the ex-style and `GetWindow(h, GW_OWNER /* 4 */)`
+for the owner. Add `CharSet = CharSet.Unicode` to the `GetClassNameW` /
+`GetWindowTextW` P/Invokes — `StringBuilder` marshals as ANSI by default and you
+get one character back per string.
+
+Note `windowWillClose` here, **not** `window_closing`. The assert
+"windowWillClose is overriden, use window_closing instead" is in the popup /
+overlay widget code (`auto_close`, `fade_out`), not the SDK window builder.
+
+### Other odds and ends
+
+`f:catalog_photo { photo, width, height }` renders a live catalog photo with
+develop settings and Lightroom's own crop applied; it cannot show a custom crop
+region and is not interactive. Overlays are done with
+`f:view { place = "overlapping" }` plus `f:picture` positioned by `margin_left`
+/ `margin_top`. On Windows transparent PNGs over `catalog_photo` have alpha
+bugs, which is why Focus Points falls back to exporting a temp JPEG and drawing
+overlays into it with a bundled ImageMagick. **Unverified:** whether its `photo`
+property can be re-bound to follow a selection, or whether the window has to be
+rebuilt to change the picture.
+
+`presentWebViewDialog` is unexplored and possibly significant: the backing
+`AgWebView` has `runScript`, an HTML `source`, and strings for a `lua URL`
+callback and `pushNextLuaChunk()`, which imply JavaScript can call back into
+Lua. That would give real mouse events — the one route to a draggable crop
+rectangle. On Windows it is the legacy `Internet Explorer_Server` (MSHTML)
+control, and no known plugin uses it.
+
+`LrSocket` (in `net_client.dll`) is real and is the escape hatch for a companion
+process.
+
+## A publish service is an export provider with one extra key
+
+There is **no `LrPublishService` manifest key.** The string exists inside
+`LibraryToolkit.dll` but it is internal; Adobe's own `Flickr.lrplugin` registers
+under `LrExportServiceProvider` and becomes a publish service by setting
+`supportsIncrementalPublish = "only"` on the provider table. **Confirmed in the
+host**: this plugin shipped that way for a while and appeared in the Publish
+Services panel. It no longer does — the panel replaced it, for reasons in
+[plugin-architecture.md](plugin-architecture.md) — but the finding stands.
+
+Over a plain export target it adds:
+
+- A persistent entry in the Library **left** panel, visible while working
+- A **Publish** button, and per-photo *New / Modified / Published* state that
+  Lightroom tracks for free
+- `metadataThatTriggersRepublish` to mark photos dirty when chosen fields change
+- `rendition:recordPublishedPhotoId` / `recordPublishedPhotoUrl`
+- `viewForCollectionSettings` in addition to `sectionsForTopOfDialog`
+- The **Comments panel**, through `getCommentsFromPublishedCollection`,
+  `canAddCommentsToService` and `addCommentToPublishedPhoto` — plus
+  `getRatingsFromPublishedCollection` and `titleForPhotoRating`
+
+That last one is the answer to "can a plugin put something next to Comments in
+the Library panel". It cannot; a publish service **fills Comments in**.
+
+The full ordered key list, recovered from Flickr's compiled provider table:
+
+```
+small_icon, publish_fallbackNameBinding, titleForPublishedCollection,
+titleForPublishedCollection_standalone, titleForPublishedSmartCollection,
+titleForPublishedSmartCollection_standalone, getCollectionBehaviorInfo,
+titleForGoToPublishedCollection, titleForGoToPublishedPhoto,
+deletePhotosFromPublishedCollection, deleteFirstOnPublish,
+metadataThatTriggersRepublish, shouldReverseSequenceForPublishedCollection,
+supportsCustomSortOrder, imposeSortOrderOnPublishedCollection,
+renamePublishedCollection, deletePublishedCollection,
+getCommentsFromPublishedCollection, titleForPhotoRating,
+getRatingsFromPublishedCollection, canAddCommentsToService,
+addCommentToPublishedPhoto
+```
+
+Two traps worth knowing before writing one:
+
+- **`metadataThatTriggersRepublish` must set `default = false`.** Without it
+  every catalog field triggers a republish and the whole collection sits
+  permanently in Modified.
+- **Use `withPrivateWriteAccessDo`, not `withWriteAccessDo`,** for catalog
+  writes inside `processRenderedPhotos`. The ordinary write can block waiting
+  on a transaction the export itself is holding. It takes just a function, no
+  title.
+
+The panel entry's layout is fixed — arbitrary widgets go in the settings dialog,
+not the panel row. `rcloran/lr-inaturalist-publish` is the reference
+implementation and is worth reading.
+
+## `URLHandler` is a real Info.lua key
+
+Undocumented in most places you would look, but Adobe's own bundled
+`Flickr.lrplugin` uses it, and `lightroom://` is registered as a system
+protocol handler pointing at `Lightroom.exe`. The contract is confirmed by the
+constant table of Flickr's compiled `URLHandler.lua` chunk (`import`,
+`LrErrors`, `LrLogger`, `FlickrAPI`, `URLHandler`):
+
+```lua
+-- Info.lua
+URLHandler = "URLHandler.lua",
+
+-- URLHandler.lua
+return { URLHandler = function(url) ... end }
+```
+
+A bare function, or a differently named key, is never called.
+
+**Confirmed in the host.** The plugin registers `URLHandler.lua` and Lightroom
+calls it.
+
+This was originally the plugin's route to a *button* in the Metadata panel: a
+custom field of `dataType = "url"` renders as a clickable row, and a field
+holding `lightroom://com.github.inat-lightroom/sync` therefore behaves like
+one. Clicking such a row does reach the handler — that part works.
+
+**It was still the wrong idea, and the plugin no longer does it.** A url row is
+not a button:
+
+- Lightroom fixes the label from the field declaration and hardcodes
+  `"Go to URL"` for `dataType = "url"` (see `makeFormatterFromFieldDeclaration`
+  above). A plugin cannot rename the arrow or supply an action.
+- The arrow **fires on empty values** — on Windows that opens Explorer.
+- A custom metadata field has no default, so the row only exists on photos
+  something has already written to. The photo that most needed *Link to
+  Observation…* was the one photo that could not offer it.
+
+What the mechanism is genuinely for here is the OAuth callback:
+`lightroom://com.github.inat-lightroom/authorization-redirect?code=…`, which
+needs no `LrSocket` listener and no local port.
+
+## Valid tagset field IDs come from Lightroom's own tagsets
+
+A tagset naming a field ID Lightroom does not accept misbehaves without raising,
+and the list of valid `com.adobe.*` IDs is not published anywhere convenient.
+
+It is tempting to grep the binaries for `com.adobe.*` strings and use whatever
+comes back. That is wrong, and quietly so: a string being present does not make
+it a valid *tagset item*. `com.adobe.label` looks like the colour label and is
+actually a section-heading formatter, only meaningful in table form with a
+`label =` attribute; the colour label is `com.adobe.colorLabels`. Likewise
+`com.adobe.keywords` exists as a string and is not a tagset item.
+
+The authority is `AgMetadataTagsets.lua`, compiled into `LibraryToolkit.dll`,
+which defines the built-in presets. Its string constants are readable in order,
+so the Default preset's item list can be read straight out:
+
+```powershell
+$txt = [System.Text.Encoding]::ASCII.GetString(
+  [System.IO.File]::ReadAllBytes("C:\Program Files\Adobe\Adobe Lightroom Classic\LibraryToolkit.dll"))
+$i = $txt.IndexOf("com.adobe.tagsets.default")
+($txt.Substring($i, 3000) -replace '[^\x20-\x7E]','.') -replace '\.{3,}',' | '
+```
+
+Anything the built-in tagsets use is safe. `explore/test_plugin_surface_lua.py`
+holds that list and asserts this plugin's tagsets stay inside it.
+
+Plugin fields are addressed as `<LrToolkitIdentifier>.<field id>`; a bare field
+ID silently resolves to nothing.
+
+### A tagset item can be a table, not just a field ID
+
+Two formatters take that form. The formatter table in `LibraryToolkit.dll`
+(index ~28441) maps `com.adobe.separator → separator` and
+`com.adobe.label → label`, and Adobe's own shipped IPTC and IPTC Extension
+tagsets use `com.adobe.label` to draw their "Contact" and "Description"
+headings:
+
+```lua
+{ formatter = "com.adobe.label", label = LOC "$$$/…=Some heading" },
+```
+
+This plugin uses one to say where its controls are, since a panel of read-only
+fields with no explanation reads as broken.
+
+The consequence bites tests rather than the plugin: a tagset's `items` list is
+no longer all strings, so anything iterating it to check field IDs has to skip
+the tables first.
+
 ## `LrLogger` writes nothing until it is enabled
 
 `LrLogger("name")` returns a logger that silently discards everything until
@@ -124,8 +720,12 @@ across modules does not share its enablement, so a module that creates its own
 logger logs nothing.
 
 This plugin has one `Log.lua` that enables a single logger; every module
-requires it. Output lands in `~/Documents/LrClassicLogs` (Windows) or
-`~/Library/Logs/Adobe/Lightroom/LrClassicLogs/` (macOS).
+requires it. On Windows the output lands in
+`%LOCALAPPDATA%\Adobe\Lightroom\Logs\LrClassicLogs\`, observed on Lightroom
+Classic 15 — the widely repeated `~/Documents/LrClassicLogs` was wrong here, and
+`~/Documents` is redirected to OneDrive on this machine, so if you go looking be
+sure which one you are looking at. macOS is
+`~/Library/Logs/Adobe/Lightroom/LrClassicLogs/` (unverified).
 
 Note that a menu-item script only loads when the menu item is *clicked*, so
 putting logger setup there means nothing logs during an export.
@@ -138,6 +738,46 @@ LrPasswords.retrieve(key)
 ```
 
 No plugin ID argument — it is implicit. Storage is the OS credential vault.
+
+## `LrApplicationView.switchToModule` is real, and `"map"` is the Map module
+
+`LrApplicationView` is not in the SDK documentation this project was working
+from, but it is a real module: `LrApplicationView.lua` sits in `Lightroom.exe`'s
+Lua module registry (~index 1975723) alongside `LrApplication`, `LrSelection`
+and `LrUndo`. Its export table includes `switchToModule`, `getCurrentModuleName`,
+`showView`, `gridView` and `zoomIn`.
+
+The module names it accepts are a table at indices 2905266–2905279, mapping the
+public name to the internal one:
+
+| Name to pass | Internal identifier |
+|---|---|
+| `library` | |
+| `develop` | |
+| `map` | `com.adobe.ag.location` |
+| `book` | |
+| `slideshow` | |
+| `print` | |
+| `web` | `com.adobe.ag.wpg` |
+
+So it is `"map"`, not `"location"` — the internal name is what the binary calls
+it, not what the API takes.
+
+Two things this does **not** establish, and neither is relied on:
+
+- whether `switchToModule` must run inside a task. The plugin calls it directly
+  from a button action, wrapped in `pcall`, and falls back to telling the user
+  where the module picker is.
+- whether the Map module is available to every user. `Lightroom.exe` also
+  contains `isModuleBlockedForChineseUser`, so at least one build restricts it.
+  The `pcall` covers that too.
+
+### The `{4,}` string-scan regex silently drops three-letter names
+
+Every binary dump in this document was made by extracting printable runs with
+`[ -~]{4,}`. That minimum **hides `map` and `web`**, which is exactly why the
+module table first looked like it had two entries with missing names. Re-scan at
+`{3,}` whenever a table looks malformed — the data was fine, the sieve was not.
 
 ## `LrApplication.activeCatalog()`, not `LrCatalog`
 
@@ -152,9 +792,17 @@ and `LrDate.currentTime()` for "now".
 
 ## Menu-item scripts run on load
 
-Anything in `LrLibraryMenuItems` executes its file top to bottom when clicked.
-Never `require` such a file from another module — this plugin's `PluginInit.lua`
-opens the credentials dialog as a side effect of loading.
+Anything in `LrExportMenuItems` (or the Library/Help equivalents) executes its
+file top to bottom when clicked.
+Never `require` such a file from another module. This is not theoretical: the
+sync used to live in `SyncObservation.lua`, which made it unreachable from
+anywhere except its own menu item, and adding a second caller meant extracting
+the logic into `SyncCore.lua` first. `PluginInit.lua` had the same problem —
+requiring it opened the credentials dialog as a side effect.
+
+The pattern that works is a module holding the logic and a two-line script
+holding the entry point. `explore/test_plugin_surface_lua.py` asserts no module
+requires a menu script.
 
 ## `LrBinding.negativeOfKey` returns a boolean
 
@@ -190,3 +838,42 @@ new still needs one pass through Lightroom.
 When fixing a bug, check the new test actually fails against the old code —
 ideally with the same message the user saw. Two tests in this repo were caught
 being worthless that way.
+
+## `setRawMetadata` can write GPS — from its own dispatch code
+
+Not adjacency, not a guess: `Library.lrmodule` contains the constant run for
+`LrPhoto:setRawMetadata`, and immediately around the
+
+```
+LrPhoto:setRawMetadata: unknown metadata key %q
+```
+
+error message sits the handler table itself:
+
+```
+'extendedMetadata' 'GPSLatitude' 'GPSLongitude'
+'latitude' 'longitude' 'xmpLatLonCoordFromFloat' 'lat' 'lon' 'touch'
+```
+
+Reading it: the `"gps"` key takes a **table**, off which it reads `latitude` and
+`longitude` — the same shape `getRawMetadata("gps")` hands back — converts them
+with `xmpLatLonCoordFromFloat`, and writes `GPSLatitude` / `GPSLongitude` into
+the photo's extended metadata. `gpsAltitude` (→ `GPSAltitude`, via
+`numberToFraction`) and `gpsImgDirection` have handlers of their own, so they
+are separate keys rather than fields of the same table.
+
+```lua
+catalog:withWriteAccessDo("...", function()
+  photo:setRawMetadata("gps", { latitude = 51.5, longitude = -0.12 })
+end)
+```
+
+**The key list is a whitelist, and an unknown key raises.** That error message
+is not decoration — it is the else branch. So a typo in a metadata key is a
+runtime error rather than a silent no-op, which is the good outcome, but only if
+the call is reached during testing. `explore/lua_harness.py`'s stub enforces the
+same whitelist with the same message for exactly that reason.
+
+Not established by this: whether a write is rejected for a photo whose file is
+offline, and whether it round-trips to the file immediately or waits for a
+metadata save.

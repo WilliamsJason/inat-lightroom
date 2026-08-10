@@ -44,12 +44,27 @@ stubs.LrLogger = function(_name)
       logLines[#logLines + 1] = level .. ": " .. tostring(message)
     end
   end
+  -- The real LrLogger has a printf-style variant of every level. Leaving them
+  -- out did not make tests fail loudly -- it made any line that used one raise
+  -- "attempt to call method 'tracef' (a nil value)", so those paths were simply
+  -- never reached.
+  local function recordf(level)
+    return function(_self, format, ...)
+      local ok, message = pcall(string.format, tostring(format), ...)
+      logLines[#logLines + 1] = level .. ": " .. (ok and message or tostring(format))
+    end
+  end
   logger.enable = function() end
-  logger.trace = record("trace")
-  logger.debug = record("debug")
-  logger.info  = record("info")
-  logger.warn  = record("warn")
-  logger.error = record("error")
+  logger.trace  = record("trace")
+  logger.debug  = record("debug")
+  logger.info   = record("info")
+  logger.warn   = record("warn")
+  logger.error  = record("error")
+  logger.tracef = recordf("trace")
+  logger.debugf = recordf("debug")
+  logger.infof  = recordf("info")
+  logger.warnf  = recordf("warn")
+  logger.errorf = recordf("error")
   return logger
 end
 
@@ -83,6 +98,7 @@ stubs.LrStringUtils = {
 -- Network calls are not exercised; failing loudly beats returning plausible
 -- nonsense that makes a test pass for the wrong reason.
 local httpCalls = {}
+local openedUrls = {}
 stubs.LrHttp = {
   get = function(url, headers)
     httpCalls[#httpCalls + 1] = { method = "GET", url = url, headers = headers }
@@ -105,7 +121,9 @@ stubs.LrHttp = {
     end
     error("unexpected HTTP POST in test: " .. tostring(url))
   end,
-  openUrlInBrowser = function() end,
+  openUrlInBrowser = function(url)
+    openedUrls[#openedUrls + 1] = url
+  end,
 }
 
 -- Async tasks do not run inline in Lightroom: they are queued and run once the
@@ -113,9 +131,24 @@ stubs.LrHttp = {
 -- its function context visible here instead of only in the host.
 local pendingTasks = {}
 
-local function runPendingTasks()
+-- Shell-outs. LrTasks.execute is how the plugin reaches Win32 to fix the
+-- floating panel's z-order, so tests need to see the command and to be able to
+-- make it fail.
+local executedCommands = {}
+local executeExitCode  = 0
+
+-- Order matters in places where a recording alone cannot show it -- whether the
+-- z-order fix-up was started alongside the window or ran before it, for
+-- instance -- so the stubs that block in Lightroom also append here.
+local timeline = {}
+
+local function runPendingTasks(reverse)
   while #pendingTasks > 0 do
-    local fn = table.remove(pendingTasks, 1)
+    -- Lightroom makes no promise about the order tasks finish in, and a
+    -- refresh that started earlier can finish later. Draining back to front
+    -- models that without needing real concurrency.
+    local index = reverse and #pendingTasks or 1
+    local fn = table.remove(pendingTasks, index)
     fn()
   end
 end
@@ -123,6 +156,67 @@ end
 stubs.LrTasks = {
   startAsyncTask = function(fn) pendingTasks[#pendingTasks + 1] = fn end,
   sleep = function() end,
+  -- Lightroom's own pcall, which unlike Lua's can be used around code that
+  -- yields. Same contract, so the plain one is a faithful stand-in.
+  pcall = function(fn, ...) return pcall(fn, ...) end,
+
+  -- Records the command instead of running a shell, and hands back whatever
+  -- exit code the test asked for. Real one blocks until the child exits.
+  execute = function(command)
+    executedCommands[#executedCommands + 1] = command
+    timeline[#timeline + 1] = "execute"
+    return executeExitCode
+  end,
+}
+
+local createdDirectories = {}
+local deletedPaths = {}
+local deleteFails = false
+
+stubs.LrPathUtils = {
+  child = function(directory, name)
+    return tostring(directory) .. "/" .. tostring(name)
+  end,
+
+  -- The real one returns nil for a name it does not know, which is exactly how
+  -- the tempFolder destination type failed: getStandardFilePath("tempFolder")
+  -- is nil, and the assert that follows blames a missing path prefix.
+  getStandardFilePath = function(name)
+    if name == "temp" then return "/tmp" end
+    if name == "home" then return "/home/tester" end
+    return nil
+  end,
+}
+
+-- The filesystem, only as far as the plugin touches it. Nothing is written:
+-- what matters to a test is which directories were asked for and which paths
+-- were deleted, so those are recorded instead.
+stubs.LrFileUtils = {
+  createAllDirectories = function(path)
+    createdDirectories[#createdDirectories + 1] = path
+    return true
+  end,
+
+  delete = function(path)
+    -- The real one has a path to work with or it does not. Recording nil would
+    -- be a silent no-op here (Lua tables do not store nil), which would let a
+    -- missing guard in the caller pass unnoticed.
+    if path == nil then
+      error("LrFileUtils.delete: path must not be nil", 0)
+    end
+    if deleteFails then
+      error("could not delete " .. tostring(path), 0)
+    end
+    deletedPaths[#deletedPaths + 1] = path
+    return true
+  end,
+
+  exists = function(path)
+    for _, made in ipairs(createdDirectories) do
+      if made == path then return "directory" end
+    end
+    return false
+  end,
 }
 
 stubs.LrDate = {
@@ -134,12 +228,42 @@ stubs.LrDate = {
 -- UI modules. Enough shape to let the export provider load and to record what
 -- would have been shown to the user.
 local dialogMessages = {}
+local floatingDialogs = {}
+local confirmAnswer = "cancel"
 stubs.LrDialogs = {
   message = function(title, message, style)
     dialogMessages[#dialogMessages + 1] =
       { title = title, message = message, style = style }
   end,
   presentModalDialog = function() return "cancel" end,
+
+  -- Answers whatever the test told it to, defaulting to Cancel. Defaulting to
+  -- "ok" would make a missing confirmation look like a working one, and the
+  -- whole point of a confirmation is that it can say no.
+  confirm = function(title, message, actionVerb, cancelVerb)
+    dialogMessages[#dialogMessages + 1] = {
+      title = title, message = message, style = "confirm",
+      actionVerb = actionVerb, cancelVerb = cancelVerb,
+    }
+    return confirmAnswer
+  end,
+
+  -- Records the args rather than showing anything, so a test can find the
+  -- observers and call them the way Lightroom would. The real one blocks the
+  -- calling task until the window closes when blockTask is set; blocking here
+  -- would deadlock the test, so it returns instead.
+  presentFloatingDialog = function(plugin, args)
+    if not plugin then
+      error("presentFloatingDialog called with invalid plugin parameter", 0)
+    end
+    if not args or not args.contents then
+      error("presentFloatingDialog called with no contents parameter", 0)
+    end
+    floatingDialogs[#floatingDialogs + 1] = args
+    timeline[#timeline + 1] = "floatingDialog"
+    return args
+  end,
+  closeFloatingDialogsForPlugin = function() end,
 }
 
 stubs.LrErrors = {
@@ -150,9 +274,15 @@ stubs.LrErrors = {
 
 local function passthroughFactory()
   -- Every view constructor just records its arguments; nothing renders here.
+  -- The constructor's own name is recorded too, so a test can tell a
+  -- push_button from a static_text when walking a dialog's sections.
   return setmetatable({}, {
-    __index = function(_table, _key)
-      return function(_self, args) return args or {} end
+    __index = function(_table, key)
+      return function(_self, args)
+        args = args or {}
+        if type(args) == "table" then args._viewType = key end
+        return args
+      end
     end,
   })
 end
@@ -162,8 +292,50 @@ stubs.LrView = {
   bind = function(spec) return { __bind = spec } end,
 }
 
+-- A property table that notices writes.
+--
+-- The real one is not a plain table: assigning to it fires anything registered
+-- with addObserver, which is the only way a list or a slider tells a plugin
+-- that the user changed it. A plain stub table made every observer look like it
+-- worked while never firing, so the code under test could not be wrong.
+--
+-- Values live in a table behind a proxy rather than in the proxy itself,
+-- because __newindex only fires for keys the table does not already have, and
+-- every interesting write here is an update to an existing key.
 stubs.LrBinding = {
-  makePropertyTable = function() return {} end,
+  makePropertyTable = function()
+    local values    = {}
+    local observers = {}
+    local proxy     = {}
+
+    setmetatable(proxy, {
+      __index = function(_table, key)
+        if key == "addObserver" then
+          return function(_self, watched, fn)
+            observers[watched] = observers[watched] or {}
+            table.insert(observers[watched], fn)
+          end
+        end
+        return values[key]
+      end,
+
+      __newindex = function(_table, key, value)
+        local previous = values[key]
+        values[key] = value
+
+        -- Lightroom does not re-notify for a write that changed nothing, and
+        -- an observer that fires on every assignment can loop forever when it
+        -- writes back to the table it is watching.
+        if previous == value then return end
+
+        for _, fn in ipairs(observers[key] or {}) do
+          fn(proxy, key, value)
+        end
+      end,
+    })
+
+    return proxy
+  end,
   negativeOfKey = function(key) return { __negative = key } end,
 }
 
@@ -211,6 +383,8 @@ stubs.LrFunctionContext = {
 local catalogWrites = {}
 local createdKeywords = {}
 local targetPhotos = {}
+local allPhotos = {}
+local publishedCollections = {}
 local catalog
 
 -- The real catalog refuses writes outside a transaction. Letting them through
@@ -221,14 +395,41 @@ local function requireWriteAccess(what)
   end
 end
 
-local function newPhoto(props)
-  local photo = { _props = props or {}, keywords = {} }
+local function newPhoto(props, raw, formatted)
+  local photo = {
+    _props = props or {},
+    _raw = raw or {},
+    _formatted = formatted or {},
+    keywords = {},
+  }
   photo.getPropertyForPlugin = function(self, _plugin, key)
     return self._props[key]
   end
   photo.setPropertyForPlugin = function(self, _plugin, key, value)
     requireWriteAccess("LrPhoto:setPropertyForPlugin")
     self._props[key] = value
+  end
+  photo.getRawMetadata = function(self, key)
+    return self._raw[key]
+  end
+  -- Refuses keys Lightroom's own setRawMetadata refuses. Its whitelist raises
+  -- "unknown metadata key %q", so a stub that accepted anything would let a
+  -- typo pass here and fail only in the host, which is the failure this harness
+  -- exists to prevent. The list is the plugin-relevant part of the real one.
+  photo.setRawMetadata = function(self, key, value)
+    requireWriteAccess("LrPhoto:setRawMetadata")
+    local settable = {
+      gps = true, gpsAltitude = true, gpsImgDirection = true,
+      caption = true, title = true, rating = true, label = true,
+      pickStatus = true, copyrightState = true,
+    }
+    if not settable[key] then
+      error("LrPhoto:setRawMetadata: unknown metadata key '" .. tostring(key) .. "'", 0)
+    end
+    self._raw[key] = value
+  end
+  photo.getFormattedMetadata = function(self, key)
+    return self._formatted[key]
   end
   photo.addKeyword = function(self, keyword)
     requireWriteAccess("LrPhoto:addKeyword")
@@ -242,6 +443,17 @@ catalog = {
 
   withWriteAccessDo = function(self, name, fn)
     catalogWrites[#catalogWrites + 1] = name
+    self._writing = true
+    local ok, err = pcall(fn)
+    self._writing = false
+    if not ok then error(err, 0) end
+  end,
+
+  -- The variant an export task must use: the ordinary write can block on a
+  -- transaction the export itself is holding. It takes no name, which is the
+  -- easiest way for a test to tell the two apart.
+  withPrivateWriteAccessDo = function(self, fn)
+    catalogWrites[#catalogWrites + 1] = "<private>"
     self._writing = true
     local ok, err = pcall(fn)
     self._writing = false
@@ -264,14 +476,133 @@ catalog = {
   end,
 
   getTargetPhotos = function() return targetPhotos end,
+
+  -- The catalog's own index of photos carrying a value for one plugin field.
+  -- Deliberately returns photos whose value is the empty string too, because
+  -- the real one does: an unlinked photo keeps the field and empties it rather
+  -- than losing it, and code that trusts this call without filtering will sync
+  -- photos that are not linked to anything.
+  findPhotosWithProperty = function(_self, pluginId, fieldName)
+    local found = {}
+    for _, photo in ipairs(allPhotos) do
+      if pluginId == _PLUGIN.id and photo._props[fieldName] ~= nil then
+        found[#found + 1] = photo
+      end
+    end
+    return found
+  end,
+
+  getPublishedCollectionByLocalIdentifier = function(_self, localId)
+    return publishedCollections[localId]
+  end,
 }
 
 stubs.LrApplication = {
   activeCatalog = function() return catalog end,
 }
 
--- Lightroom exposes the plugin object as a global.
-_PLUGIN = { id = "com.github.inat-lightroom" }
+-- Records module switches so a test can check the panel sent people to the
+-- right one. Rejects anything outside the real module list rather than
+-- accepting any string: "map" was read out of Lightroom.exe's module table, and
+-- a stub that shrugs at "Map" or "location" would hide the one mistake worth
+-- catching here.
+local moduleSwitches = {}
+local VALID_MODULES = {
+  library = true, develop = true, map = true, book = true,
+  slideshow = true, print = true, web = true,
+}
+
+stubs.LrApplicationView = {
+  switchToModule = function(name)
+    if not VALID_MODULES[name] then
+      error("no such module: " .. tostring(name), 0)
+    end
+    moduleSwitches[#moduleSwitches + 1] = name
+  end,
+  getCurrentModuleName = function()
+    return moduleSwitches[#moduleSwitches] or "library"
+  end,
+}
+
+
+-- LrExportSession, the mechanism the panel uses to turn catalog photos into
+-- JPEGs now that there is no export service provider to do it.
+--
+-- The stub reproduces two behaviours that the real one has and that code gets
+-- wrong: asking for the renditions is what starts the export (there is no
+-- separate "go" call), and waitForRender returns success-plus-value, so a
+-- failure arrives as a message in the same slot as the path.
+exportSessions = {}
+renderFailing = false
+renderFailureMessage = nil
+
+stubs.LrExportSession = function(params)
+  assert(type(params) == "table",
+    "LrExportSession:init: must use named arguments syntax")
+  assert(params.exportSettings,
+    "LrExportSession:init: params table must have exportSettings")
+
+  local photos = params.photosToExport or {}
+  local session = {
+    settings = params.exportSettings,
+    photos = photos,
+    started = false,
+  }
+
+  function session:countRenditions() return #photos end
+
+  function session:renditions()
+    self.started = true
+
+    local index = 0
+    return function()
+      index = index + 1
+      local photo = photos[index]
+      if not photo then return nil end
+
+      local rendition = {
+        photo = photo,
+        waitForRender = function()
+          if renderFailing then return false, renderFailureMessage end
+          return true, "/tmp/lr-export/" .. tostring(index) .. ".jpg"
+        end,
+      }
+      -- Yields index alongside the rendition, the way an export provider's
+      -- exportContext:renditions does.
+      return index, rendition
+    end
+  end
+
+  function session:doExportOnCurrentTask() self.started = true end
+  function session:doExportOnNewTask() self.started = true end
+
+  exportSessions[#exportSessions + 1] = session
+  return session
+end
+
+-- Lightroom exposes the plugin object as a global. `path` is the plugin
+-- directory; it is in AgLrPlugin's property list in substrate.dll alongside
+-- id, enabled and type.
+_PLUGIN = { id = "com.github.inat-lightroom", path = "/plugins/inat.lrplugin" }
+
+-- Lightroom sets exactly one of these in every plugin's sandbox; they are in
+-- the globals list in substrate.dll next to _PLUGIN and LOC. Tests that care
+-- about the other platform flip them.
+WIN_ENV = true
+MAC_ENV = false
+
+-- LOC is a global in Lightroom, not a module, and every Info.lua / tagset /
+-- metadata definition calls it at load time. Without it those files cannot be
+-- required here at all. The real one looks up a translation and falls back to
+-- the default text after the '='; with no translations loaded that fallback is
+-- exactly what Lightroom itself returns.
+function LOC(key, ...)
+  local text = tostring(key):match("^%$%$%$/[^=]*=(.*)$") or tostring(key)
+  local args = { ... }
+  return (text:gsub("%^(%d)", function(index)
+    return tostring(args[tonumber(index)] or "")
+  end))
+end
 
 -- Lightroom exposes 'import' as a global.
 function import(name)
@@ -288,12 +619,47 @@ return {
   prefs = prefs,
   logLines = logLines,
   httpCalls = httpCalls,
+  openedUrls = openedUrls,
+  executedCommands = executedCommands,
+  timeline = timeline,
+  setExecuteExitCode = function(code) executeExitCode = code end,
+  setConfirmAnswer = function(answer) confirmAnswer = answer end,
   dialogMessages = dialogMessages,
+  moduleSwitches = moduleSwitches,
+  floatingDialogs = floatingDialogs,
   catalogWrites = catalogWrites,
   createdKeywords = createdKeywords,
   newPhoto = newPhoto,
+  exportSessions = exportSessions,
+  createdDirectories = createdDirectories,
+  deletedPaths = deletedPaths,
+  setDeleteFails = function(fails) deleteFails = fails end,
+  setRenderFailure = function(message)
+    -- Lightroom does not promise waitForRender supplies a message, so failing
+    -- and having something to say about it are separate.
+    renderFailing = true
+    renderFailureMessage = message
+  end,
   setTargetPhotos = function(photos) targetPhotos = photos end,
+  setAllPhotos = function(photos) allPhotos = photos end,
+
+  -- Build the object tree deletePhotosFromPublishedCollection walks: a
+  -- collection of published photos, each pairing a remote ID with a catalog
+  -- photo. Keyed by the local collection ID Lightroom passes back.
+  setPublishedCollection = function(localId, entries)
+    local published = {}
+    for i, entry in ipairs(entries) do
+      published[i] = {
+        getRemoteId = function() return entry.remoteId end,
+        getPhoto    = function() return entry.photo end,
+      }
+    end
+    publishedCollections[localId] = {
+      getPublishedPhotos = function() return published end,
+    }
+  end,
   runPendingTasks = runPendingTasks,
+  pendingTaskCount = function() return #pendingTasks end,
   resetHttp = function() httpCalls = {} end,
 }
 """
@@ -399,6 +765,55 @@ class LuaPlugin:
         ]
 
     @property
+    def module_switches(self) -> list[str]:
+        """Module names handed to LrApplicationView.switchToModule, in order."""
+        switches = self.env["moduleSwitches"]
+        return [switches[i] for i in range(1, len(switches) + 1)]
+
+    @property
+    def floating_dialogs(self) -> list:
+        """Args of each presentFloatingDialog call, in order."""
+        shown = self.env["floatingDialogs"]
+        return [shown[i] for i in range(1, len(shown) + 1)]
+
+    @property
+    def opened_urls(self) -> list[str]:
+        """URLs handed to LrHttp.openUrlInBrowser, in order."""
+        urls = self.env["openedUrls"]
+        return [urls[i] for i in range(1, len(urls) + 1)]
+
+    @property
+    def executed_commands(self) -> list[str]:
+        """Command lines handed to LrTasks.execute, in order."""
+        commands = self.env["executedCommands"]
+        return [commands[i] for i in range(1, len(commands) + 1)]
+
+    @property
+    def timeline(self) -> list[str]:
+        """Blocking calls in the order they happened.
+
+        Entries are "floatingDialog" and "execute". Both block the calling task
+        in Lightroom, so their relative order says whether work was handed to a
+        separate task or run inline -- which a recording on its own cannot show.
+        """
+        events = self.env["timeline"]
+        return [events[i] for i in range(1, len(events) + 1)]
+
+    def set_execute_exit_code(self, code: int) -> None:
+        """Make the next LrTasks.execute calls report this exit code."""
+        self.env["setExecuteExitCode"](code)
+
+    def set_confirm_answer(self, answer: str) -> None:
+        """Make LrDialogs.confirm return this. Defaults to "cancel"."""
+        self.env["setConfirmAnswer"](answer)
+
+    def set_platform(self, windows: bool) -> None:
+        """Flip the WIN_ENV / MAC_ENV pair Lightroom sets in the sandbox."""
+        globals_ = self.runtime.globals()
+        globals_["WIN_ENV"] = windows
+        globals_["MAC_ENV"] = not windows
+
+    @property
     def catalog_writes(self) -> list[str]:
         """Names of the write transactions opened, in order."""
         writes = self.env["catalogWrites"]
@@ -413,17 +828,111 @@ class LuaPlugin:
             for i in range(1, len(created) + 1)
         ]
 
-    def new_photo(self, **properties):
-        """Build a stub LrPhoto carrying the given plugin metadata."""
-        return self.env["newPhoto"](self.runtime.table_from(properties))
+    @property
+    def catalog(self):
+        """The stub LrCatalog, for code that takes one as an argument."""
+        return self.env["stubs"]["LrApplication"]["activeCatalog"]()
+
+    def new_photo(self, raw=None, formatted=None, **properties):
+        """Build a stub LrPhoto.
+
+        ``properties`` become plugin custom metadata; ``raw`` and ``formatted``
+        become getRawMetadata / getFormattedMetadata, which is what the upload
+        path reads a photo's capture time, GPS and caption from.
+
+        ``raw`` and ``formatted`` are converted all the way down. lupa's
+        table_from only converts the outermost level, so a nested dict would
+        arrive as a Python object -- and reading a key it does not have raises
+        KeyError instead of returning nil, which is the opposite of what Lua
+        does and would make the plugin look wrong when it is the stub that is.
+        """
+        return self.env["newPhoto"](
+            self.runtime.table_from(properties),
+            self._deep_table(raw or {}),
+            self._deep_table(formatted or {}),
+        )
+
+    def _deep_table(self, value):
+        if isinstance(value, dict):
+            return self.runtime.table_from(
+                {k: self._deep_table(v) for k, v in value.items()})
+        if isinstance(value, list):
+            return self.runtime.table_from(
+                {i + 1: self._deep_table(v) for i, v in enumerate(value)})
+        return value
+
+    def set_published_collection(self, local_id, entries) -> None:
+        """Populate catalog:getPublishedCollectionByLocalIdentifier(local_id).
+
+        ``entries`` is a list of {"remoteId": ..., "photo": ...}.
+        """
+        self.env["setPublishedCollection"](
+            local_id,
+            self.runtime.table_from(
+                [self.runtime.table_from(entry) for entry in entries]
+            ),
+        )
 
     def set_target_photos(self, photos) -> None:
         """Set what catalog:getTargetPhotos() returns."""
         self.env["setTargetPhotos"](self.runtime.table_from(list(photos)))
 
-    def run_pending_tasks(self) -> None:
-        """Run queued async tasks, as Lightroom would once the caller returns."""
-        self.env["runPendingTasks"]()
+    def set_all_photos(self, photos) -> None:
+        """Set the catalog that findPhotosWithProperty searches."""
+        self.env["setAllPhotos"](self.runtime.table_from(list(photos)))
+
+    def set_render_failure(self, message=None) -> None:
+        """Make every rendition fail, optionally with a message."""
+        self.env["setRenderFailure"](message)
+
+    @property
+    def export_sessions(self):
+        """Every LrExportSession built, in order."""
+        return list(self.env["exportSessions"].values())
+
+    @property
+    def created_directories(self):
+        """Every path passed to LrFileUtils.createAllDirectories."""
+        return list(self.env["createdDirectories"].values())
+
+    @property
+    def deleted_paths(self):
+        """Every path passed to LrFileUtils.delete."""
+        return list(self.env["deletedPaths"].values())
+
+    def set_delete_fails(self, fails: bool = True) -> None:
+        """Make LrFileUtils.delete raise, as a locked file would."""
+        self.env["setDeleteFails"](fails)
+
+    def view_factory(self):
+        """A view factory that records arguments instead of rendering.
+
+        Lets a test inspect the shape of a dialog -- what controls it has, what
+        identifiers they carry -- without opening one.
+        """
+        return self.env["stubs"]["LrView"]["osFactory"]()
+
+    def run_pending_tasks(self, reverse: bool = False) -> None:
+        """Run queued async tasks, as Lightroom would once the caller returns.
+
+        With ``reverse``, drains them back to front. Lightroom makes no promise
+        about the order tasks finish in, so this is how a test shows that a
+        refresh which started earlier but finished later cannot win.
+        """
+        self.env["runPendingTasks"](reverse)
+
+    def pending_task_count(self) -> int:
+        """How many async tasks are queued but not yet run."""
+        return int(self.env["pendingTaskCount"]())
+
+    @property
+    def pending_tasks(self) -> int:
+        """How many async tasks are queued but not yet run.
+
+        Useful for asserting that something dispatched work, when running that
+        work would need more of Lightroom than the stubs provide.
+        """
+        return self.env["pendingTaskCount"]()
 
     def set_http_handler(self, handler) -> None:
         """Swap the HTTP stub mid-test."""

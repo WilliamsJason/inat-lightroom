@@ -59,19 +59,47 @@ only way to exercise write endpoints, and it must be repeated every 24 hours.
 
 | Flow | Verdict for this project |
 |---|---|
-| Resource Owner Password | Fine for local scripts. **Unshippable** in a plugin: the client secret would have to be embedded in readable Lua. |
+| Resource Owner Password | Fine for local scripts. **Unshippable** in a plugin: the client secret would have to be embedded in readable Lua. Still enabled on iNaturalist as of Aug 2026 (`grant_flows` includes `password`), with no deprecation announced — but the wider OAuth ecosystem has moved against it and it cannot solve the secret problem anyway. |
 | Authorization Code + PKCE | **The target for the distributed plugin.** No client secret needed, so the public `client_id` can ship in the plugin. |
 | Client Credentials | Read-only public data only. |
 
 Only the *developer* registers an application. Every user of the plugin
 authenticates against that single `client_id` and receives their own token, so
-end users never touch the registration process.
+end users never touch the registration process. With `confidential = false`
+there is no secret to protect and the `client_id` is safe in readable Lua.
 
-Because the Lightroom SDK provides no HTTP server, the loopback redirect
-(`http://127.0.0.1:port`) is not usable from a plugin. Use the out-of-band
-redirect `urn:ietf:wg:oauth:2.0:oob` and have the user copy the authorization
-code from the browser into a plugin dialog — the same pattern Adobe's bundled
-Flickr plugin uses.
+**[verified]** iNaturalist runs Doorkeeper 5.6.6, and PKCE is live: the
+authorization view passes `code_challenge` and `code_challenge_method` through
+(`app/views/doorkeeper/authorizations/new.html.haml`), and Doorkeeper only wires
+those up when the migration adding the column has run. `S256` is accepted. The
+app registration form has a **Confidential** checkbox — leave it *unchecked* for
+this flow, or the token exchange will demand a secret.
+
+### The redirect: use `lightroom://`, not out-of-band
+
+The Lightroom SDK gives a plugin no HTTP server, which appears to rule out the
+loopback redirect and push you towards the out-of-band redirect
+(`urn:ietf:wg:oauth:2.0:oob`) with the user copy-pasting a code. **There is a
+better option.** Register a redirect URI on the plugin's own URL scheme:
+
+```
+lightroom://com.github.inat-lightroom/authorization-redirect
+```
+
+The browser redirects there, the OS hands it to Lightroom, and Lightroom hands
+it to `URLHandler.lua` with the `?code=` attached. No copy-paste, no listener.
+This is the same mechanism the Metadata panel action rows use, and that it
+reaches the plugin is **confirmed in the host** — see
+[lightroom-sdk-notes.md](lightroom-sdk-notes.md).
+
+**[verified]** This is not speculative: `rcloran/lr-inaturalist-publish`, a
+publicly distributed Lightroom Classic plugin, does exactly this today —
+PKCE/S256, `redirect_uri = lightroom://net.rcloran.lr-inaturalist-publish/…`,
+a hardcoded plaintext `client_id`, and **no `client_secret` anywhere in the
+source**. Worth reading before implementing.
+
+**[verified]** `force_ssl_in_redirect_uri false` in iNaturalist's Doorkeeper
+initializer, so non-HTTPS redirect URIs are accepted at all.
 
 The resulting OAuth token never expires, so the user authorizes **once** and
 the plugin silently refreshes the 24-hour JWT from it thereafter.
@@ -119,6 +147,22 @@ All paths below are relative to this base URL.
 ```
 
 Response includes the new observation's `id` – **this is the ID we store in Lightroom**.
+
+It also includes a `uuid`, which is the more useful handle: `GET
+/observations?uuid=…` looks one up, and the field is client-supplyable — the
+same UUID can be sent on a later create to reunite a photo with an observation.
+(That is how `rcloran/lr-inaturalist-publish` works; this plugin's
+recreate-under-the-same-UUID path has not yet been exercised in the host.)
+Nothing needs to generate one to create an observation: omit it and read the
+server's back.
+
+**`taxon_id` overrides `species_guess` in what people see.** Both are stored,
+but a taxon makes the observation's identification and that is what the site
+displays; the free text is then invisible. **Not verified against the live API**
+— reasoned from the data model, and worth checking. The plugin behaves as if it
+is true: a connection-wide default taxon is sent only when the photo has no
+species guess of its own, so the general fallback can never mask the specific
+thing the user typed.
 
 ---
 
@@ -379,6 +423,47 @@ POST /v1/identifications
 
 ---
 
+## An observation with no coordinates is almost always casual grade
+
+**[verified, measured against the live API 2026-08-09]**
+
+Of **8,691,735** observations with open geoprivacy and no coordinates,
+**8,689,562 — 99.975% — are casual grade.** Only 1,793 ever reached research
+grade and 380 sit at needs_id. Casual grade keeps an observation out of most
+research use and out of the GBIF export, so uploading without a location
+produces a record that will almost certainly not count. That is why the plugin
+warns before creating one.
+
+Coordinates also feed the vision endpoint's geographic prior, so a located photo
+gets materially better suggestions.
+
+### The query that appears to disprove this
+
+The obvious check says the opposite and is wrong:
+
+```
+/v1/observations?geo=false&quality_grade=research&per_page=0
+-> total_results: 492818
+```
+
+Half a million research-grade observations with no location would settle it.
+But `geo=false` means **"coordinates are not visible to you"**, not "there are
+no coordinates". Adding `geoprivacy=private` accounts for 490,423 of those
+492,818: the coordinates exist, they are obscured. The honest query pins
+geoprivacy open:
+
+```
+/v1/observations?geo=false&geoprivacy=open&per_page=0
+-> total_results: 8691735
+/v1/observations?geo=false&geoprivacy=open&quality_grade=casual&per_page=0
+-> total_results: 8689562
+```
+
+Worth remembering generally: on this API, "not visible" and "not present" share
+a parameter.
+
+---
+
 ## iNaturalist image resolution tiers
 
 | Tier | Approx. size |
@@ -432,3 +517,71 @@ pyinaturalist abstracts away would have to be rediscovered in Lua later.
 Keeping the Python prototype at the same level of abstraction as the eventual
 plugin means the request and response shapes we prove out transfer directly —
 and it is how the multipart and index-lag gotchas above were found.
+
+## Obscured coordinates look exactly like real ones
+
+The most dangerous response this plugin can receive. iNaturalist randomises the
+public position of an observation that is obscured — either because the observer
+set `geoprivacy = obscured`, or because the *taxon* is threatened and the site
+obscures it automatically — and **still returns a normal-looking `location`
+string and a normal-looking `geojson` point**. Nothing about the shape of the
+response says the numbers are fiction. Only the `obscured` flag does.
+
+A live example: `positional_accuracy` 61, `public_positional_accuracy` 30278.
+Roughly 30 km of deliberate error, presented in the same field as a GPS fix.
+
+The owner is told the truth through `private_location`, which is **absent
+entirely from unauthenticated responses** — confirmed by dumping the full field
+list of an unauthenticated fetch, not by its being empty. So:
+
+```lua
+-- SyncCore.coordinatesFrom
+private_location, if present        -- the owner's own true position
+else the public location, but only if not obscured
+else nothing at all
+```
+
+Declining is the right third branch. Writing a randomised position into a user's
+catalog would be worse than writing nothing, because it is indistinguishable
+from a real one after the fact.
+
+### `positional_accuracy` writes; `public_positional_accuracy` is derived
+
+`positional_accuracy` is the field a client sets, in **metres**. Fractional
+values are rejected. `public_positional_accuracy` is computed by the site: equal
+to the former when nothing is obscured, and inflated to cover the obscuring
+rectangle when something is. It is read-only, and it belongs to a position this
+plugin never stores, so it is never read.
+
+## `common_ancestor` is the honest way to offer a coarser rank
+
+Already recorded in the response shape above, and worth calling out separately
+because the plugin now depends on it: `common_ancestor` is the most specific
+taxon the vision model is confident about **across every candidate**. When the
+top five results disagree about the species but all sit in one genus, that genus
+is what comes back.
+
+This is a different and much better-founded claim than the top result's own
+lineage. Walking up from result #1 assumes result #1 is in the right family —
+which, at a 40% score, is exactly what is in doubt. Walking up from
+`common_ancestor` assumes only what every candidate already agrees on.
+
+So the rank ladder the plugin offers is built from `common_ancestor` and its
+`ancestors`, never from a single result, and it never descends below it.
+
+`/v1/taxa/{id}` supplies the ladder: the response carries an `ancestors` array
+from `kingdom` downwards, including intermediate ranks (`subphylum`, `suborder`,
+`superfamily`) that are real but useless as choices — the plugin keeps only
+`order`, `family` and `genus`.
+
+Two things this does **not** establish:
+
+- Whether `score_observation` includes `common_ancestor` at all. Only
+  `score_image` has been seen to. Every caller must handle its absence.
+- What score, if any, iNaturalist attaches to it. None is returned, which is why
+  the plugin shows no percentage against a fallback row rather than inventing
+  one.
+
+Both vision endpoints require authentication — an unauthenticated call returns
+`{"error":"Unauthorized","status":401}` — so neither can be probed without a
+token, and neither appears in `/v1/swagger.json`.

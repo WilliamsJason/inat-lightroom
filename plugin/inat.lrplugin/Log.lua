@@ -10,8 +10,11 @@
   Lightroom loaded first.
 
   Output lands in:
-    Windows  %USERPROFILE%\Documents\LrClassicLogs\iNatLightroom.log
+    Windows  %LOCALAPPDATA%\Adobe\Lightroom\Logs\LrClassicLogs\iNatLightroom.log
     macOS    ~/Library/Logs/Adobe/Lightroom/LrClassicLogs/iNatLightroom.log
+
+  The Windows path is observed on Lightroom Classic 15, not the
+  ~/Documents/LrClassicLogs that gets repeated everywhere.
 --]]
 
 local LrLogger = import "LrLogger"
