@@ -1,0 +1,42 @@
+# Runs on every push and pull request, so that main is always releasable.
+#
+# The release workflow runs these same checks again before it builds anything.
+# That is deliberate duplication: a tag can be pushed at any commit, including
+# one that never went through a pull request.
+
+name: Verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: explore/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r explore/requirements.txt
+
+      # Lightroom embeds Lua 5.1. Checking with anything newer accepts syntax
+      # that makes the plugin fail to load in the host with an unhelpful error,
+      # so this uses the real 5.1 that lupa bundles.
+      - name: Check the Lua parses under Lua 5.1
+        run: python explore/check_lua.py
+
+      - name: Run the tests
+        run: python -m pytest -q
+        working-directory: explore

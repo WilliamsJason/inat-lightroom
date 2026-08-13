@@ -61,6 +61,21 @@ return {
   -- same reason we will -- receiving an OAuth authorization code.
   URLHandler = "URLHandler.lua",
 
+  -- The plugin's own section in the Plug-in Manager, which is where updating
+  -- lives. That dialog is the one Lightroom surface about the plugin rather
+  -- than about photos, and it is already where people go to install one.
+  LrPluginInfoProvider = "PluginInfoProvider.lua",
+
+  -- Load and unload hooks, both of them there for the updater.
+  --
+  -- Shutdown is where a staged update is applied: it is the only moment when
+  -- every module that was going to load has loaded, so swapping the files
+  -- cannot leave a session running half of one version and half of another.
+  -- Init applies anything shutdown never got to -- after a crash or a kill --
+  -- and runs the once-a-day check. See UpdateInstall.lua.
+  LrInitPlugin     = "PluginInit.lua",
+  LrShutdownPlugin = "PluginShutdown.lua",
+
   -- File > Plug-in Extras.
   --
   -- Two items, both of which open a window, because windows are now the only
@@ -87,10 +102,21 @@ return {
     },
   },
 
+  -- The installed version, and half of what the updater compares.
+  --
+  -- The other half is the tag on GitHub. They must agree, so the release
+  -- workflow refuses to build unless the tag is exactly "v" followed by the
+  -- three numbers below; see .github/workflows/release.yml and
+  -- explore/plugin_version.py. A mismatch is not cosmetic -- the updater would
+  -- either hide a real update forever or offer the same one on every check.
+  --
+  -- `display` is what the Plug-in Manager shows. It carried "(pre-release)"
+  -- until the first tagged release, and must not again: a release built from a
+  -- plugin that calls itself pre-release ships that label to everyone.
   VERSION = {
     major  = 0,
     minor  = 1,
     revision = 0,
-    display = "0.1.0 (pre-release)",
+    display = "0.1.0",
   },
 }

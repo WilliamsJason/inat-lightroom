@@ -1,0 +1,22 @@
+--[[
+  PluginShutdown.lua
+  ------------------
+  LrShutdownPlugin: run when Lightroom unloads the plugin, which happens when
+  Lightroom quits and when the plugin is disabled or reloaded.
+
+  Lightroom runs this file top to bottom, so it must never be required.
+
+  This is where a staged update is actually applied. It is the only moment when
+  every module that was going to load has loaded, so replacing the files on disk
+  cannot produce a session running half of one version and half of another. The
+  next launch reads a folder that is entirely one release.
+
+  Nothing here is allowed to fail loudly. There is no user to show a dialog to
+  during shutdown -- Lightroom is closing and a modal would either be missed or
+  hold the process open -- so a failure goes to the log, the staged folder is
+  left where it is, and PluginInit tries again at the next launch.
+--]]
+
+local UpdateInstall = require "UpdateInstall"
+
+pcall(function() UpdateInstall.apply() end)

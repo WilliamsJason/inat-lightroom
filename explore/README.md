@@ -169,6 +169,15 @@ before asking Lightroom to reload:
 .\.venv\Scripts\python.exe check_lua.py
 ```
 
+`plugin_version.py` reports the version `Info.lua` declares, by running it
+rather than pattern-matching it, which is how the release workflow refuses a
+tag that disagrees with the manifest:
+
+```powershell
+.\.venv\Scripts\python.exe plugin_version.py            # prints 0.1.0
+.\.venv\Scripts\python.exe plugin_version.py --expect v0.1.0
+```
+
 ## Proving the tests can fail
 
 A passing test proves nothing until it has been seen to fail. Each `mutate_*.py`
@@ -181,6 +190,7 @@ noticed:
 .\.venv\Scripts\python.exe mutate_upload_core.py
 .\.venv\Scripts\python.exe mutate_settings.py
 .\.venv\Scripts\python.exe mutate_render_photo.py
+.\.venv\Scripts\python.exe mutate_update.py       # updater, install, staging, swap
 ```
 
 Each mutation is named after the bug it would be — "the species guess is

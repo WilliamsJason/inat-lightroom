@@ -64,6 +64,25 @@ deliberate no-op.
 
 ---
 
+## Installing
+
+Download `inat-lightroom-<version>.zip` from the
+[latest release](https://github.com/WilliamsJason/inat-lightroom/releases/latest),
+unzip it, and point **File → Plug-in Manager → Add** at the `inat.lrplugin`
+folder. Keep it somewhere permanent that you can write to — the plugin updates
+itself in place, and Lightroom remembers it by path.
+
+After that, **File → Plug-in Manager → iNaturalist → Updates** has a button that
+fetches the latest release, checks it against its published checksum, and
+installs it when you next quit Lightroom. It also checks once a day by itself
+and mentions each new version once; that can be switched off. Nothing installs
+without a click. See [`SECURITY.md`](SECURITY.md) for what you are trusting when
+you use it.
+
+Setup and usage are in [`plugin/README.md`](plugin/README.md).
+
+---
+
 ## Repository layout
 
 ```
@@ -80,9 +99,12 @@ inat-lightroom/
 │   ├── suggest_species.py       # Computer-vision species suggestions
 │   ├── lua_harness.py           # Runs the plugin's Lua outside Lightroom
 │   ├── check_lua.py             # Parses the plugin under Lua 5.1
+│   ├── plugin_version.py        # Reads Info.lua's version; the release gate
 │   ├── test_*_lua.py            # Tests over the plugin's actual Lua
 │   └── mutate_*.py              # Breaks the plugin on purpose to check the
 │                                #   tests would notice
+│
+├── .github/workflows/           # Verify on every push; build a release on a tag
 │
 └── plugin/                      # Adobe Lightroom Classic plugin (Lua)
     ├── README.md
@@ -100,6 +122,14 @@ inat-lightroom/
         ├── Settings.lua         # Reading, writing and validating settings
         ├── WindowFix.lua        # Keeps the panel above Lightroom, not the desktop
         ├── fix_window_z_order.ps1 # The Win32 helper it shells out to
+        ├── PluginInfoProvider.lua # The Updates section in the Plug-in Manager
+        ├── PluginInit.lua       # Load hook: finishes an interrupted update, checks for new
+        ├── PluginShutdown.lua   # Unload hook: applies a staged update
+        ├── Updater.lua          # Reads the GitHub release feed, compares versions
+        ├── UpdateCore.lua       # When to check, what to say, what to install
+        ├── UpdateInstall.lua    # Download, verify, stage, swap
+        ├── install_update.ps1   # Verifies and unpacks an update (Windows)
+        ├── install_update.sh    # Verifies and unpacks an update (macOS)
         ├── InatAuth.lua         # Token acquisition and credential storage
         ├── InatAPI.lua          # HTTP client for the iNaturalist REST API
         ├── PluginUrls.lua       # Builds and parses lightroom:// plugin URLs
@@ -138,6 +168,22 @@ See [`explore/README.md`](explore/README.md) for full details.
 ## Quick start (Lightroom plugin)
 
 See [`plugin/README.md`](plugin/README.md) for installation and development instructions.
+
+---
+
+## Releasing
+
+Releases are built by GitHub Actions from a tag, and the tag is the source of
+truth for the version:
+
+1. Bump `VERSION` in `plugin/inat.lrplugin/Info.lua`, and commit it.
+2. Tag the commit `vX.Y.Z` — matching those numbers exactly — and push the tag.
+
+The workflow then parses the Lua under 5.1, runs the tests, refuses to continue
+unless the tag and `Info.lua` agree, and publishes
+`inat-lightroom-X.Y.Z.zip` plus `SHA256SUMS`. Those two assets are what the
+plugin's own updater looks for, so a release published by hand without them is
+one the updater will report but cannot install.
 
 ---
 
