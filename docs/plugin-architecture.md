@@ -29,6 +29,14 @@ inat.lrplugin/
 ├── Settings.lua               # Reading, writing and validating settings
 ├── WindowFix.lua              # Fixes the panel's z-order (Windows only)
 ├── fix_window_z_order.ps1     # The Win32 helper WindowFix shells out to
+├── PluginInfoProvider.lua     # The plugin's section in the Plug-in Manager
+├── PluginInit.lua             # Load hook: finishes an interrupted update, checks for new ones
+├── PluginShutdown.lua         # Unload hook: applies a staged update
+├── Updater.lua                # Reads the release feed and compares versions
+├── UpdateCore.lua             # When to check, what to say, what to install
+├── UpdateInstall.lua          # Download, verify, stage, and swap the files
+├── install_update.ps1         # Verifies and unpacks an update (Windows)
+├── install_update.sh          # Verifies and unpacks an update (macOS)
 ├── InatAuth.lua               # Token acquisition and credential storage
 ├── InatAPI.lua                # HTTP helpers wrapping iNaturalist REST API (LrHttp)
 ├── PluginUrls.lua             # Builds and parses lightroom:// plugin URLs
@@ -660,6 +668,118 @@ mid-render), `reimportExportedPhoto`, `export_postProcessing` (several shipped
 presets carry `"revealInFinder"`), and `includeVideoFiles`.
 
 ---
+
+## Updating the plugin
+
+Lightroom has no updater. There is no manifest key for a version feed, no hook
+that offers one, and nothing in the Plug-in Manager that fetches anything. Every
+plugin that updates itself does the same four things by hand: read a release
+feed, compare versions, download an archive, replace its own files.
+
+The feed is GitHub's own `releases/latest` endpoint for this repository. It is
+public and unauthenticated, rate limited per IP at 60 requests an hour, and it
+excludes drafts and pre-releases — which is why `Info.lua`'s display string may
+not say "pre-release", and why the release workflow refuses to build one that
+does. It returns the newest release *by date*, not by version number, so the
+comparison in `Updater.isNewer` is numeric and one-directional; retagging an old
+commit must not offer everyone a downgrade.
+
+### The tag and Info.lua are one fact in two places
+
+The updater compares the tag published on GitHub against the version compiled
+into the installed plugin. If those disagree the failure is silent and
+permanent, in one of two directions: a plugin that never sees an update, or one
+that offers the same update every day forever. So `.github/workflows/release.yml`
+runs `explore/plugin_version.py --expect <tag>` and refuses to build unless they
+match. Nothing is generated from anything; the check just stops a release that
+would be wrong.
+
+### Why a plugin cannot replace itself while it is running
+
+Lightroom loads a module the first time something requires it. A folder swapped
+half-way through a session therefore serves old modules to code that has already
+loaded and new ones to code that has not, and the resulting failure arrives
+later, somewhere else, looking like a bug in whatever happened to require last.
+
+So the work is split, and the two halves never happen in the same moment:
+
+| | when | touches |
+|---|---|---|
+| **stage** | whenever the user clicks | nothing that is loaded |
+| **apply** | `LrShutdownPlugin` | everything, but nothing can require afterwards |
+
+Staging downloads the archive, verifies it, and unpacks it into
+`<plugin>/.update-staging`. Applying copies those files over the installed ones
+as Lightroom closes. The next launch reads a folder that is entirely one
+release, and the user restarts once.
+
+A shutdown hook is not a promise — Lightroom can crash or be killed — so
+`PluginInit` applies a leftover staged update at the next launch instead. That
+runs before any other module of this plugin is required, which is the same
+guarantee by a longer route, with one gap it cannot close: Lightroom has already
+read `Info.lua` by then. That session runs new code behind the old manifest, so
+new menu items or metadata fields appear only at the launch after. It is the
+cheaper of the two costs; the alternative is leaving the update unapplied.
+
+### Why staging lives inside the plugin folder
+
+Two alternatives were rejected. Beside the plugin needs write permission on the
+*parent* directory, which is a different permission from the one the swap needs,
+and the swap is the part that must not fail half way. Temp is cleared between
+sessions on both platforms — which is exactly the moment a staged update is
+waiting for. Lightroom only loads the files `Info.lua` names, so an extra folder
+inside the plugin is inert.
+
+The swap copies files rather than replacing the folder wholesale, because
+Lightroom has registered the plugin *by path*: moving the folder aside would
+unregister it, and the user would find it disabled with no explanation. Copies
+happen before deletions, so no moment exists where the plugin is missing files
+it has not yet been given. Files the release no longer ships are deleted — a
+stale Lua module is harmless right up until something requires it again under
+the same name — and that does mean anything a user added to the folder by hand
+is removed too.
+
+### What the checksum is and is not for
+
+Hashing a file and reading a ZIP are both beyond Lua and beyond the SDK, so
+`install_update.ps1` and `install_update.sh` do the verify and the unpack
+together in one process — checking in one process and extracting in another
+leaves a window where the file that was checked is not the file that was opened.
+
+The hash is **not** a defence against a hostile GitHub. `SHA256SUMS` ships from
+the same release as the archive, so anyone able to replace one can replace the
+other. TLS and GitHub's identity are the trust boundary, and this plugin
+downloads and runs code from there, including a PowerShell script. What the
+checksum catches is the ordinary failure: a truncated or corrupted download
+being unpacked over a working plugin. A release whose checksum cannot be read is
+refused rather than installed.
+
+Exit codes are the entire interface between those scripts and
+`UpdateInstall.lua`, which turns each into a sentence for the user. On Windows
+that meant not using `Write-Error` to report them: under
+`$ErrorActionPreference = 'Stop'` it raises a terminating error and PowerShell
+exits 1 on the spot, which collapses every distinct failure into "exit 1" —
+including the checksum mismatch, the one failure most worth describing
+accurately.
+
+### Checking is automatic; installing is not
+
+The check runs once a day from `LrInitPlugin`, after a delay, in its own task,
+and can be switched off in the Plug-in Manager. Installing stays a button.
+Replacing the code that touches someone's catalog while they are not looking is
+not a default anyone chose.
+
+A failed check resolves to "could not check", never to a silence that reads as
+"nothing new", and the timestamp is written whether or not the check succeeded —
+recording only successes turns an offline week into a request on every launch,
+which is the behaviour rate limits exist to punish. When there is something new,
+the user is told once per version rather than once per launch.
+
+The UI lives in the **Plug-in Manager** (`LrPluginInfoProvider`), which is the
+one Lightroom surface that is about the plugin rather than about photos, and
+where people already go to install and enable one. The settings window is about
+what an observation says, and the floating panel is about the photo in front of
+you; neither is about the plugin.
 
 ## What comes next
 

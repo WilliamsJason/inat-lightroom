@@ -1,0 +1,92 @@
+# Builds the ZIP that the plugin's own updater downloads.
+#
+# Triggered by pushing a tag like v0.2.0. The tag is the source of truth for
+# what the release is called; Info.lua is the source of truth for what the
+# installed plugin believes it is. The version check below refuses to build
+# unless they agree, because the updater compares one against the other -- a
+# mismatch either hides an update forever or offers the same one on every check.
+#
+# The archive holds `inat.lrplugin/` at its root, which is exactly what a user
+# drops next to their other plugins and points the Plug-in Manager at, and
+# exactly what UpdateInstall.lua expects to find after unpacking.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: explore/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r explore/requirements.txt
+
+      # Everything Verify does, again. A tag can point at any commit, including
+      # one that never went through a pull request, so a green main is not
+      # evidence that this particular tree is releasable.
+      - name: Check the Lua parses under Lua 5.1
+        run: python explore/check_lua.py
+
+      - name: Run the tests
+        run: python -m pytest -q
+        working-directory: explore
+
+      - name: Check Info.lua agrees with the tag
+        run: python explore/plugin_version.py --expect "${GITHUB_REF_NAME}"
+
+      - name: Build the archive
+        id: build
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          name="inat-lightroom-${version}.zip"
+          mkdir -p dist
+
+          # Zipped from inside plugin/ so the archive root is inat.lrplugin,
+          # with no wrapping directory to strip on the way out.
+          ( cd plugin && zip -r -q "../dist/${name}" inat.lrplugin )
+
+          # Checksums are generated from inside dist/ so the file names in
+          # SHA256SUMS have no directory part; the updater matches on the asset
+          # name exactly as GitHub serves it.
+          ( cd dist && sha256sum "${name}" > SHA256SUMS )
+
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+          cat dist/SHA256SUMS
+
+      # Guards against an archive that unpacks to the wrong shape. Getting this
+      # wrong produces a plugin folder Lightroom cannot load, and the updater
+      # would have already overwritten the working copy by the time anyone found
+      # out.
+      - name: Check the archive unpacks to a loadable plugin
+        run: |
+          set -euo pipefail
+          unzip -q "dist/${{ steps.build.outputs.name }}" -d /tmp/check
+          test -f /tmp/check/inat.lrplugin/Info.lua
+          test -f /tmp/check/inat.lrplugin/fix_window_z_order.ps1
+          test -f /tmp/check/inat.lrplugin/install_update.ps1
+          test -f /tmp/check/inat.lrplugin/install_update.sh
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            "dist/${{ steps.build.outputs.name }}" \
+            dist/SHA256SUMS
