@@ -100,80 +100,97 @@ function PluginInfoProvider.sectionsForTopOfDialog(f, props)
     {
       title = "Updates",
 
-      f:row {
-        f:static_text { title = "Installed version:", width = 110 },
-        f:static_text { title = LrView.bind("installedVersion") },
-      },
+      -- Everything lives inside one column so that `bind_to_object` can be
+      -- stated once, and so that it is stated at all.
+      --
+      -- Without it, a binding in a Plug-in Manager section does not fall back
+      -- to the property table this function is handed -- it falls back to the
+      -- plugin's preferences. That failure is close to invisible: a bound key
+      -- that happens to name a preference quietly reads and writes the wrong
+      -- table, and one that does not simply renders empty. Both happened here.
+      -- "Installed version:" was blank on the first run in Lightroom while the
+      -- checkbox below looked perfectly correct, because
+      -- `update_check_automatically` is a real preference and `installedVersion`
+      -- is not.
+      f:column {
+        bind_to_object = props,
+        spacing        = f:control_spacing(),
 
-      f:row {
-        f:static_text {
-          title           = LrView.bind("status"),
-          width           = 460,
-          height_in_lines = 3,
+        f:row {
+          f:static_text { title = "Installed version:", width = 110 },
+          f:static_text { title = LrView.bind("installedVersion") },
         },
-      },
 
-      f:row {
-        spacing = f:control_spacing(),
-
-        f:push_button {
-          title   = "Check for Updates",
-          enabled = LrView.bind {
-            key       = "busy",
-            transform = function(busy) return not busy end,
+        f:row {
+          f:static_text {
+            title           = LrView.bind("status"),
+            width           = 460,
+            height_in_lines = 3,
           },
-          action = function()
-            LrTasks.startAsyncTask(function()
-              PluginInfoProvider.runCheck(props)
-            end)
-          end,
         },
 
-        f:push_button {
-          title = "Download and Install",
-          -- Only ever live when a check has found something installable, so
-          -- the button cannot be the thing that discovers there is no release
-          -- attached.
-          enabled = LrView.bind {
-            keys = { "result", "busy", "staged" },
-            operation = function(_binder, values)
-              local result = values.result
-              return result ~= nil and result.canInstall == true
-                and not values.busy and not values.staged
+        f:row {
+          spacing = f:control_spacing(),
+
+          f:push_button {
+            title   = "Check for Updates",
+            enabled = LrView.bind {
+              key       = "busy",
+              transform = function(busy) return not busy end,
+            },
+            action = function()
+              LrTasks.startAsyncTask(function()
+                PluginInfoProvider.runCheck(props)
+              end)
             end,
           },
-          action = function()
-            LrTasks.startAsyncTask(function()
-              PluginInfoProvider.runInstall(props)
-            end)
-          end,
+
+          f:push_button {
+            title = "Download and Install",
+            -- Only ever live when a check has found something installable, so
+            -- the button cannot be the thing that discovers there is no release
+            -- attached.
+            enabled = LrView.bind {
+              keys = { "result", "busy", "staged" },
+              operation = function(_binder, values)
+                local result = values.result
+                return result ~= nil and result.canInstall == true
+                  and not values.busy and not values.staged
+              end,
+            },
+            action = function()
+              LrTasks.startAsyncTask(function()
+                PluginInfoProvider.runInstall(props)
+              end)
+            end,
+          },
+
+          f:push_button {
+            title  = "Release Notes",
+            action = function()
+              local result = props.result
+              local url = result and result.latest and result.latest.pageUrl
+                or Updater.RELEASES_PAGE_URL
+              LrHttp.openUrlInBrowser(url)
+            end,
+          },
         },
 
-        f:push_button {
-          title  = "Release Notes",
-          action = function()
-            local result = props.result
-            local url = result and result.latest and result.latest.pageUrl
-              or Updater.RELEASES_PAGE_URL
-            LrHttp.openUrlInBrowser(url)
-          end,
+        f:row {
+          f:checkbox {
+            title = "Check for updates automatically",
+            value = LrView.bind("update_check_automatically"),
+          },
         },
-      },
 
-      f:row {
-        f:checkbox {
-          title = "Check for updates automatically",
-          value = LrView.bind("update_check_automatically"),
-        },
-      },
-
-      f:row {
-        f:static_text {
-          title = "Updates are downloaded from this plugin's GitHub releases "
-            .. "and checked against the checksum published with them.\n"
-            .. "An update finishes installing when you quit Lightroom.",
-          width           = 460,
-          height_in_lines = 2,
+        f:row {
+          f:static_text {
+            title = "Updates are downloaded from this plugin's GitHub releases "
+              .. "and checked against the checksum published with them.\n"
+              .. "An update finishes installing when you quit Lightroom.",
+            width           = 460,
+            height_in_lines = 2,
+          },
         },
       },
     },
