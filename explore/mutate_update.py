@@ -19,12 +19,14 @@ TARGETS = {
     "Updater": PLUGIN / "Updater.lua",
     "UpdateInstall": PLUGIN / "UpdateInstall.lua",
     "UpdateCore": PLUGIN / "UpdateCore.lua",
+    "PluginInfoProvider": PLUGIN / "PluginInfoProvider.lua",
 }
 
 TESTS = [
     "test_updater_lua.py",
     "test_update_install_lua.py",
     "test_update_core_lua.py",
+    "test_plugin_info_provider_lua.py",
 ]
 
 MUTATIONS = [
@@ -180,6 +182,39 @@ MUTATIONS = [
         "the startup check blocks Lightroom while it loads plugins",
         "  LrTasks.startAsyncTask(function()\n    LrTasks.sleep(UpdateCore.STARTUP_DELAY_SECONDS)",
         "  do\n    LrTasks.sleep(UpdateCore.STARTUP_DELAY_SECONDS)",
+    ),
+    # -- The Plug-in Manager section ----------------------------------------
+    #
+    # This one is not hypothetical. It shipped, and it is why the section
+    # rendered with the version and the status line both blank.
+    (
+        "PluginInfoProvider",
+        "every bound field falls through to the preferences and renders blank",
+        "        bind_to_object = props,\n",
+        "",
+    ),
+    (
+        "PluginInfoProvider",
+        "the version is read once and can never update on screen",
+        "  props.installedVersion = Updater.versionString(Updater.currentVersion())",
+        "  props.installedVersion = props.installedVersion or\n"
+        "    Updater.versionString(Updater.currentVersion())",
+    ),
+    (
+        "PluginInfoProvider",
+        "turning automatic checks off is forgotten as soon as the dialog closes",
+        "  if props.update_check_automatically ~= nil then\n"
+        "    Settings.set(\"update_check_automatically\", props.update_check_automatically)\n"
+        "  end",
+        "  if props.update_check_automatically then\n"
+        "    Settings.set(\"update_check_automatically\", props.update_check_automatically)\n"
+        "  end",
+    ),
+    (
+        "PluginInfoProvider",
+        "Install runs on whatever the last check found, even nothing",
+        "  local result = props.result\n  if not result or not result.canInstall then",
+        "  local result = props.result\n  if false then",
     ),
 ]
 

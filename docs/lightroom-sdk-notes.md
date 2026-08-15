@@ -812,6 +812,55 @@ displayed string from another, which makes it the wrong tool for an export
 
 ---
 
+## A Plug-in Manager section binds to preferences unless told otherwise
+
+`sectionsForTopOfDialog(f, propertyTable)` hands you a property table, so it
+looks as though `LrView.bind("status")` inside that section resolves against
+it. It does not. Without an enclosing `bind_to_object`, a binding falls through
+to the plugin's *preferences*.
+
+The Updates section shipped without one. It rendered like this:
+
+```
+Installed version:                 <- blank
+                                   <- blank, where the status line should be
+[Check for Updates] [Download and Install] [Release Notes]
+[x] Check for updates automatically <- correctly ticked
+```
+
+Every literal `title` drew fine. `installedVersion` and `status` were blank,
+because no preference has those names. The checkbox looked *perfect*, because
+`update_check_automatically` is a real preference — so that binding silently
+read and wrote the preferences table directly, behind the property table's
+back. `endDialog` would then have written its stale copy back over whatever was
+clicked.
+
+That is the shape of the bug worth remembering: the fields bound to names the
+preferences do not have go blank, and the fields bound to names they do have
+keep working while pointing at the wrong table. A half-correct dialog is much
+harder to read than a dead one.
+
+The fix is one line, stated once, on a container wrapping the whole section:
+
+```lua
+f:column {
+  bind_to_object = props,
+  ...
+}
+```
+
+`SettingsDialog.lua` had always done this, because a modal dialog built with
+`LrBinding.makePropertyTable` has to. The Plug-in Manager path is the one that
+looks like it does not.
+
+The harness could not catch this: its view factory records arguments rather
+than resolving bindings, so a binding with no source looks the same as a good
+one. `explore/test_plugin_info_provider_lua.py` catches it structurally
+instead, by walking the returned section and asserting that every binding has
+an enclosing `bind_to_object` which is the same table the code writes to.
+
+---
+
 ## Testing without Lightroom
 
 Every bug above only appeared by running Lightroom, clicking through, and
