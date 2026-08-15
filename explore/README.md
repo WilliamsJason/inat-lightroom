@@ -178,6 +178,17 @@ tag that disagrees with the manifest:
 .\.venv\Scripts\python.exe plugin_version.py --expect v0.1.0
 ```
 
+`install_plugin.ps1` copies this working tree into the one fixed folder
+Lightroom is pointed at, so that switching branch does not mean re-adding the
+plugin in the Plug-in Manager:
+
+```powershell
+.\install_plugin.ps1        # → ~\Documents\LrPlugins\inat.lrplugin
+```
+
+See [plugin/README.md](../plugin/README.md#installing-a-working-tree) for why
+Lightroom should not be aimed at a checkout directly.
+
 ## Proving the tests can fail
 
 A passing test proves nothing until it has been seen to fail. Each `mutate_*.py`

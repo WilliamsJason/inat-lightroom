@@ -427,6 +427,31 @@ documented at their call sites and in [docs/inat-api-notes.md](../docs/inat-api-
 
 In Plug-in Manager, click **Reload Plug-in** after any Lua file change, or press **Ctrl+Alt+Shift+,** (Mac: **⌘⌥⇧,**) in Lightroom Classic.
 
+### Installing a working tree
+
+Point Lightroom at one fixed folder outside the repository, once, and copy into
+it from whichever branch or worktree you are working in:
+
+```powershell
+cd explore
+.\install_plugin.ps1        # → ~\Documents\LrPlugins\inat.lrplugin
+```
+
+The source is taken from wherever the script lives, so running it from a
+worktree installs that worktree without being told which one. Switching
+branches becomes: check out, run this, click **Reload Plug-in**.
+
+Pointing Lightroom straight at a working tree instead is tempting and worth
+avoiding. Lightroom remembers a plugin by path, so every worktree is a separate
+Add in the Plug-in Manager — and the updater, when it applies a staged version
+on shutdown, copies over the plugin folder and deletes whatever the release does
+not contain. Aimed at a checkout, that rewrites tracked files.
+
+For the same reason the script clears any staged update by default: it would
+otherwise be applied on the next quit and silently replace the copy just
+installed, which looks precisely like the install having failed. Pass
+`-KeepStaged` when deliberately testing the update path.
+
 ### Testing before reloading
 
 Lightroom embeds **Lua 5.1**, and a single 5.3-only operator anywhere stops the
