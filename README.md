@@ -100,6 +100,7 @@ inat-lightroom/
 │   ├── lua_harness.py           # Runs the plugin's Lua outside Lightroom
 │   ├── check_lua.py             # Parses the plugin under Lua 5.1
 │   ├── plugin_version.py        # Reads Info.lua's version; the release gate
+│   ├── install_plugin.ps1       # Copies a working tree into Lightroom's copy
 │   ├── test_*_lua.py            # Tests over the plugin's actual Lua
 │   └── mutate_*.py              # Breaks the plugin on purpose to check the
 │                                #   tests would notice
