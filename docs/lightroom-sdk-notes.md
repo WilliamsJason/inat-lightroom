@@ -352,6 +352,29 @@ Not established: whether `visible` works on other view types, or only fails to
 collapse layout while still hiding content. Neither was worth another probe
 once the padding removed the need for it.
 
+## A `scrolled_view` cannot be scrolled from code
+
+There is no scroll position to read or write. `f:scrolled_view` takes
+`width`, `height` and its scroller flags, and the view it returns carries
+nothing that moves it; the SDK exposes no `scrollTo`, no bindable offset, and
+no way to bring a child into view. Adobe's own forums have the question
+outstanding with no answer.
+
+This shows up the moment a scrolled list is paged. The Reverse Sync review
+list draws twenty-five rows about 100pt tall inside a 460pt viewport, so
+roughly four and a half are visible at a time. Turning to the next page
+repoints those rows at new data but leaves the scroller exactly where it was,
+so a user who read to the bottom of one page arrives at the bottom of the next
+and has to scroll back up to see the twenty rows above it.
+
+The only real fix is to stop scrolling: size the page to what the window shows
+so every page turn lands on a whole page, because there is no position to be
+away from. That trades rows per page for pages -- at the current thumbnail
+size roughly eight rows against twenty-five -- and was offered and declined, on
+the grounds that scrolling a big page beats clicking through three times as
+many small ones. Recorded so the next person reaches for the page size rather
+than for an API that is not there.
+
 ## `f:edit_text` is Mac-only
 In `ui.dll`'s factory constant list it sits directly behind a `MAC_ENV` guard:
 
