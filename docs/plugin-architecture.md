@@ -612,6 +612,22 @@ reviewed by hand: the account must be two months old with ten or more improving
 identifications for other people in the past month. Registration is in
 progress; revisit around October 2026.
 
+Until then there is no second option in the dialog, and that is deliberate.
+There used to be: an OAuth application form taking an app id, secret,
+iNaturalist username and password, using the password grant to mint a
+never-expiring access token. It was implemented and it worked. It was removed
+before the repository went public for two reasons. iNaturalist recommends
+against the password grant, and particularly against it in distributed
+applications, because it requires the user to type their account password into
+third-party software — the exact problem PKCE exists to solve. And the app id
+and secret are per-application, so with manual review every user would have
+needed their own approved application before the fields did anything.
+
+`InatAuth.clear()` still erases the keys that form wrote, including the stored
+password, so anyone who configured it has a way to remove it. A test in
+`explore/test_settings_dialog_lua.py` walks the Account tab and fails if any
+field binds to those names again.
+
 ---
 
 ## LrHttp notes
