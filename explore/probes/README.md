@@ -71,3 +71,29 @@ Nothing in the SDK reports the last one, so it includes human reaction time
 
 Run it once with thumbnails and once without: the difference is the cost of
 `catalog_photo`, which is the part most likely to make a long list unusable.
+
+## What they answered
+
+Measured against a 6,591 photo catalog on Lightroom Classic, Windows. The
+findings are written up properly in
+[../../docs/lightroom-sdk-notes.md](../../docs/lightroom-sdk-notes.md); this is
+the short version, and the reason the probes can be left alone now.
+
+| Question | Answer |
+|---|---|
+| Narrow `captureTime` window query | **1.7 ms** average — ~17 s per 10,000 lookups |
+| Does `captureTime` honour seconds? | Yes: ±2 s returned 2 where the whole day returned 5 |
+| Value format | `%Y-%m-%dT%H:%M:%S`. `timeToW3CDate` matches **nothing**, silently |
+| `batchGetRawMetadata` vs loop | 107 ms for 8 keys vs 377 ms for 2 — ~10× per key |
+| Bad metadata key | Fails the *entire* call (`Unknown key: "fileName"`) |
+| `batchGetPropertyForPlugin` | `(photos, pluginId, { keys })` — 36 ms for 500 photos |
+| Review list | `simple_list` at 5000 beats hand-built rows at 1000, twice over |
+
+Two of those cost a hang rather than an error to discover: `operation = ">="`
+and passing `_PLUGIN` where a plugin id belongs. Neither raises. If a probe
+stops producing output, read the last line of the log — it names the call that
+did not come back — and suspect the arguments rather than the catalog size.
+
+The consequence for Reverse Sync: **never walk the catalog.** A window query
+per observation costs the number of observations, which is five digits at
+worst, while indexing costs the number of photos, which is not bounded at all.

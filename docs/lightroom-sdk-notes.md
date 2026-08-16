@@ -136,6 +136,109 @@ end)
 The exception is a modal dialog, which blocks and so keeps its context alive
 for anything started underneath it.
 
+## An SDK call that never returns usually means a bad argument
+
+Not slow work. Two independent cases, both found by a probe that appeared to
+hang:
+
+```lua
+-- operation the date vocabulary does not list: never returns
+catalog:findPhotos { searchDesc = {
+  { criteria = "captureTime", operation = ">=", value = "2000-01-01" },
+  combine = "intersect" } }
+
+-- _PLUGIN where a plugin id string belongs: never returns
+catalog:batchGetPropertyForPlugin(photos, keys, _PLUGIN)
+```
+
+Neither raises, neither times out, and Lightroom stays responsive enough that
+the plugin looks busy rather than stuck. The rule that follows: build search
+descriptors and argument lists from fixed tables of known-good values, never by
+assembling strings, because a typo costs a hang rather than an error.
+
+Contrast the *good* failures, which are precise enough to reverse-engineer a
+signature from. `batchGetPropertyForPlugin` complained about a different
+argument each time it was moved:
+
+```
+(photos, {keys})      -> bad argument #1 to 'ipairs' (table expected, got nil)
+(photos, {keys}, id)  -> bad argument #1 to 'ipairs' (table expected, got string)
+```
+
+What it iterates is the *third* argument, so the keys go last:
+
+```lua
+-- 500 photos, one key, 36 ms; result keyed by photo object
+catalog:batchGetPropertyForPlugin(photos, "com.example.plugin", { "my_key" })
+```
+
+## `captureTime` searches honour seconds, but only in one date format
+
+`LrDate.timeToW3CDate` produces `2017-04-29T17:22:25.000+00:00`, and
+`findPhotos` matches **nothing** against it. No error — an empty result, which
+is indistinguishable from a window that genuinely holds no photo. Measured on
+one photo's own capture time:
+
+| value format | matches |
+| --- | --- |
+| `timeToW3CDate` | 0 |
+| `%Y-%m-%dT%H:%M:%S` | 1 |
+| `%Y-%m-%d` | 1 |
+
+So build the value with `LrDate.timeToUserFormat(when, "%Y-%m-%dT%H:%M:%S")`.
+
+The time part is really compared, rather than rounded away to the day. A
+±2 second window against the whole day containing it, on a day holding several
+photos:
+
+```
+±2 s = 2 vs whole day = 5
+```
+
+Which makes a narrow window query the cheap way to ask "what did I shoot at
+this instant":
+
+```lua
+catalog:findPhotos { searchDesc = {
+  { criteria = "captureTime", operation = "in", value = from, value2 = to },
+  combine = "intersect" } }
+```
+
+Measured at **1.7 ms** average over 25 windows on a 6,591 photo catalog, and
+the cost is Lightroom's own index rather than anything proportional to the
+result. That is what makes matching scale by the number of things being looked
+up rather than by the size of the catalog.
+
+## `batchGetRawMetadata` is worth it, and one bad key fails all of them
+
+Over a 500 photo sample:
+
+| call | keys | time |
+| --- | --- | --- |
+| `batchGetRawMetadata` | 8 | 107 ms |
+| `getRawMetadata` loop | 2 | 377 ms |
+
+Roughly ten times cheaper per key, and the result is keyed by the photo object,
+not by index:
+
+```lua
+local rows = catalog:batchGetRawMetadata(photos, { "dateTimeOriginal", "gps" })
+local when = rows[photo].dateTimeOriginal
+```
+
+But the call is all-or-nothing. Asking for one key it does not know throws away
+every other column:
+
+```
+Unknown key: "fileName"
+```
+
+`fileName` is *formatted* metadata, not raw. Keys confirmed to work:
+`dateTimeOriginal`, `dateTimeOriginalISO8601`, `captureTime`, `gps`,
+`gpsAltitude`, `path`, `uuid`, `isVirtualCopy`. Validate a key list once
+against a single photo before running it over a catalog, so an unknown key
+costs one call rather than the whole read.
+
 ## A plain `pcall` around an SDK call silently breaks it
 
 `pcall` stops the code inside it from yielding, and most of the interesting SDK
@@ -197,6 +300,37 @@ To look at the photos without disturbing the rendition queue, use
 Measured for `LrExportSession` too, not only for the `exportContext` an export
 provider is handed: a probe in Lightroom Classic 14 reported `first=number 1`,
 `second=table`, so both take the same shape.
+
+## `f:simple_list` scales; hand-built scrolled rows do not
+
+A review list of a few thousand rows can be built either way. Only one of them
+survives it. Timings are open-plus-dismiss, so roughly 2.2 s of every figure is
+human reaction time, present in all of them:
+
+| rows | `scrolled_view` of built rows | `simple_list` |
+| --- | --- | --- |
+| 250 | 4.2 s | — |
+| 500 | 5.2 s | 4.3 s |
+| 1000 | **14.9 s** | — |
+| 5000 | — | **7.1 s** |
+
+Hand-built rows degrade faster than linearly and are unusable by a thousand.
+`simple_list` takes ten times the items for less than half the cost, because it
+wraps a native `table_view` rather than instantiating a view per row.
+
+Building the list is never the slow part — 5000 items assemble in about 5 ms.
+The cost is in realising the views.
+
+With `allows_multiple_selection`, its `value` is a table of selected indexes,
+so "everything selected, deselect what you do not want" is the natural default:
+
+```lua
+f:simple_list {
+  items = labels,
+  allows_multiple_selection = true,
+  value = LrView.bind("selection"),   -- a table, not a number
+}
+```
 
 ## `export_destinationType = "tempFolder"` needs an export service provider
 
