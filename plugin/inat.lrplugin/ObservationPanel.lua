@@ -55,7 +55,7 @@ local OBSERVATION_URL = "https://www.inaturalist.org/observations/"
 
 -- Both the window's caption and the handle the z-order fix-up finds it by, so
 -- they cannot drift apart.
-local WINDOW_TITLE = "iNaturalist"
+local WINDOW_TITLE = "Pinned"
 
 -- The two captions the one action button alternates between.
 ObservationPanel.UPLOAD_TITLE = "Upload to iNaturalist"
@@ -494,7 +494,7 @@ function ObservationPanel.openMap()
 
   if not ok then
     logger:warn("could not switch to the Map module: " .. tostring(err))
-    LrDialogs.message("iNaturalist",
+    LrDialogs.message("Pinned",
       "Could not open the Map module. You can reach it from the module picker "
       .. "at the top right of the Lightroom window.", "info")
   end
@@ -508,13 +508,13 @@ function ObservationPanel.uploadOrUpdate(props)
   local photos  = catalog:getTargetPhotos() or {}
 
   if #photos == 0 then
-    LrDialogs.message("iNaturalist", "Select at least one photo first.", "warning")
+    LrDialogs.message("Pinned", "Select at least one photo first.", "warning")
     return
   end
 
   local api, authErr = UploadCore.requireAPI()
   if not api then
-    LrDialogs.message("iNaturalist", authErr, "critical")
+    LrDialogs.message("Pinned", authErr, "critical")
     return
   end
 
@@ -551,7 +551,7 @@ function ObservationPanel.uploadOrUpdate(props)
     -- status line; a silently dropped accuracy would not.
     local accOk, accErr = PanelCore.updateAccuracy(catalog, api, photos, accuracy)
     if not accOk then
-      LrDialogs.message("iNaturalist",
+      LrDialogs.message("Pinned",
         accErr or "Could not update the location accuracy.", "critical")
       props.suggestionStatus = ""
       return
@@ -559,7 +559,7 @@ function ObservationPanel.uploadOrUpdate(props)
 
     local ok, err = PanelCore.updateSpeciesGuess(catalog, api, photos, guess, taxonId)
     if not ok then
-      LrDialogs.message("iNaturalist", err or "Could not update the observation.", "critical")
+      LrDialogs.message("Pinned", err or "Could not update the observation.", "critical")
       props.suggestionStatus = ""
       return
     end
@@ -634,13 +634,13 @@ function ObservationPanel.applyLocally(props)
   local photos  = catalog:getTargetPhotos() or {}
 
   if #photos == 0 then
-    LrDialogs.message("iNaturalist", "Select at least one photo first.", "warning")
+    LrDialogs.message("Pinned", "Select at least one photo first.", "warning")
     return
   end
 
   local api, authErr = UploadCore.requireAPI()
   if not api then
-    LrDialogs.message("iNaturalist", authErr, "critical")
+    LrDialogs.message("Pinned", authErr, "critical")
     return
   end
 
@@ -649,7 +649,7 @@ function ObservationPanel.applyLocally(props)
   local ok, err = PanelCore.applyGuessLocally(catalog, api, photos,
     props.suggestionTaxonId)
   if not ok then
-    LrDialogs.message("iNaturalist", err or "Could not apply that taxon.",
+    LrDialogs.message("Pinned", err or "Could not apply that taxon.",
       "critical")
     props.suggestionStatus = ""
     return

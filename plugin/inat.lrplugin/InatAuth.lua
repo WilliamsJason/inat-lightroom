@@ -229,11 +229,11 @@ function InatAuth.getToken(forceRefresh) -- luacheck: ignore forceRefresh
     return nil, "Your iNaturalist token has expired. Tokens last 24 hours.\n\n"
       .. "Sign in at inaturalist.org, open www.inaturalist.org/users/api_token, "
       .. "and paste the new token via\n"
-      .. "File > Plug-in Extras > iNaturalist Settings…."
+      .. "File > Plug-in Extras > Pinned Settings…."
   end
 
   return nil, "iNaturalist credentials are not set up.\n\n"
-    .. "Use File > Plug-in Extras > iNaturalist Settings…."
+    .. "Use File > Plug-in Extras > Pinned Settings…."
 end
 
 --- Verify a token by fetching the authenticated user.

@@ -273,7 +273,7 @@ function SyncCore.syncPhotos(context, photos, options)
   local api = InatAPI.new(token)
 
   local progress = LrProgressScope {
-    title           = "iNaturalist Sync",
+    title           = "Pinned Sync",
     caption         = "Syncing…",
     functionContext = context,
   }

@@ -430,7 +430,7 @@ function SettingsDialog.show()
     }
 
     local result = LrDialogs.presentModalDialog {
-      title      = "iNaturalist Settings",
+      title      = "Pinned Settings",
       contents   = contents,
       actionVerb = "Save",
       otherVerb  = "Clear Stored Credentials",
@@ -438,7 +438,7 @@ function SettingsDialog.show()
 
     if result == "other" then
       InatAuth.clear()
-      LrDialogs.message("iNaturalist", "Stored credentials cleared.", "info")
+      LrDialogs.message("Pinned", "Stored credentials cleared.", "info")
       return
     end
 
@@ -456,7 +456,7 @@ function SettingsDialog.show()
       local stored, storeErr = SettingsDialog.saveCredentials(props)
 
       if storeErr then
-        LrDialogs.message("iNaturalist", storeErr, "critical")
+        LrDialogs.message("Pinned", storeErr, "critical")
         return
       end
 
@@ -471,20 +471,20 @@ function SettingsDialog.show()
       -- storing nothing, because the failure surfaces later during an upload.
       local token, tokenErr = InatAuth.getToken(true)
       if not token then
-        LrDialogs.message("iNaturalist",
+        LrDialogs.message("Pinned",
           "Saved, but authentication failed:\n\n" .. tostring(tokenErr), "critical")
         return
       end
 
       local user, userErr = InatAuth.whoami(token)
       if not user then
-        LrDialogs.message("iNaturalist",
+        LrDialogs.message("Pinned",
           "Saved, but the token was rejected:\n\n" .. tostring(userErr), "critical")
         return
       end
 
       logger:info("Credentials verified for " .. tostring(user.login))
-      LrDialogs.message("iNaturalist",
+      LrDialogs.message("Pinned",
         "Connected as " .. tostring(user.login)
           .. " (" .. tostring(user.observations_count or 0) .. " observations).",
         "info")

@@ -5,7 +5,7 @@
 
   Lightroom will not let a plugin add its own panel to the Library right panel
   stack, so the Metadata panel's preset dropdown is where a plugin's data
-  actually lives. Selecting "iNaturalist" there turns that panel into an
+  actually lives. Selecting "Pinned" there turns that panel into an
   iNaturalist panel -- the closest available equivalent of a section under
   Comments.
 
@@ -28,8 +28,16 @@
 local prefix = "com.github.inat-lightroom."
 
 return {
-  title = LOC "$$$/iNatLightroom/Tagset/Only=iNaturalist",
-  id    = "iNaturalist",
+  -- The title is what the Metadata panel's preset dropdown shows, alongside
+  -- Lightroom's own Default / EXIF / IPTC entries.
+  --
+  -- The id is not shown anywhere; it is how Lightroom remembers which preset
+  -- was selected, and it shares a namespace with every other installed
+  -- plugin's tagsets. It was "iNaturalist", which is the name another plugin
+  -- for this site would reach for first. Renaming it costs one reselect of the
+  -- preset -- do not rename it again once anyone else is installing this.
+  title = LOC "$$$/iNatLightroom/Tagset/Only=Pinned",
+  id    = "pinnedForInaturalist",
 
   items = {
     -- Enough identity to know which photo you are looking at; the panel
@@ -42,7 +50,7 @@ return {
     -- where the controls actually are.
     {
       formatter = "com.adobe.label",
-      label     = LOC "$$$/iNatLightroom/Tagset/Hint=Edit in File > Plug-in Extras > iNaturalist Panel",
+      label     = LOC "$$$/iNatLightroom/Tagset/Hint=Edit in File > Plug-in Extras > Pinned Panel",
     },
 
     prefix .. "inat_species_guess",

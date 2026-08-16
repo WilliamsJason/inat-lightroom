@@ -2,7 +2,7 @@
   CustomMetadata.lua
   ------------------
   Defines the custom metadata fields that appear in Lightroom's Metadata panel
-  under the "iNaturalist" panel set.
+  under the "Pinned" panel set.
 
   These fields store the two-way link between a Lightroom photo and its
   iNaturalist observation, as well as the latest synced taxon data.

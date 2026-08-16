@@ -1,7 +1,7 @@
 # inat-lightroom
 
-An Adobe Lightroom Classic plugin that uploads photos to
-[iNaturalist](https://www.inaturalist.org/) and syncs the community's
+**Pinned for iNaturalist** — an Adobe Lightroom Classic plugin that uploads
+photos to [iNaturalist](https://www.inaturalist.org/) and syncs the community's
 identifications back into your catalog as searchable taxonomy.
 
 ---
@@ -10,7 +10,13 @@ identifications back into your catalog as searchable taxonomy.
 
 This is **not** an official iNaturalist product. It is an independent,
 community-built plugin, not affiliated with, endorsed by, or supported by
-iNaturalist or its staff. Please don't ask them about it.
+iNaturalist or its staff. Please don't ask them about it. "iNaturalist" appears
+in the name only to say what this works with; the name and logo belong to
+iNaturalist.
+
+It is also not related to the other Lightroom plugins for the same site — most
+of which install as plain "iNaturalist". If you have one of those too, this is
+the entry called **Pinned for iNaturalist**.
 
 It is provided **as-is**, with no warranty — see [LICENSE](LICENSE). It writes to
 a real iNaturalist account through the public API, so use it with the same care
@@ -57,7 +63,7 @@ determination back as a taxonomic keyword tree. Verified end to end against the
 live API — there is no iNaturalist sandbox, so every test writes to a real
 account.
 
-Everything happens in a floating **iNaturalist panel** (Library → Plug-in
+Everything happens in a floating **Pinned panel** (Library → Plug-in
 Extras). It follows the filmstrip selection, asks iNaturalist's vision model
 what the photo is, and turns the answer into an upload or an identification on
 an observation you already have. A second window holds settings: credentials,
@@ -111,7 +117,7 @@ entirely:
 
 Create the `Modules` folder if it isn't there yet.
 
-After that, **File → Plug-in Manager → iNaturalist → Updates** has a button that
+After that, **File → Plug-in Manager → Pinned for iNaturalist → Updates** has a button that
 fetches the latest release, checks it against its published checksum, and
 installs it when you next quit Lightroom. It also checks once a day by itself
 and mentions each new version once; that can be switched off. Nothing installs
