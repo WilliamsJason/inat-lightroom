@@ -16,6 +16,8 @@ outside a transaction fails here rather than in the host.
 from __future__ import annotations
 
 import json
+import re
+import urllib.parse
 
 import pytest
 
@@ -42,8 +44,44 @@ def make_plugin(responses):
     # at storage keys the auth module owns.
     auth = plugin.require("InatAuth")
     plugin.call(auth["storeApiToken"], make_jwt(FUTURE))
+    plugin.set_http_handler(observation_handler(plugin, responses))
+    return plugin
+
+
+def observation_handler(plugin, responses, refuse=None):
+    """Answer both the single and the batched observation endpoints.
+
+    Tests declare observations one per id, the way the API used to be asked for
+    them. The sync now fetches up to 200 at a time, so the stub has to read the
+    `id=` list and answer with whichever of them it has -- including answering
+    with fewer than were asked for, which is what a deleted observation looks
+    like and is the whole reason the real code keys by id instead of zipping
+    two lists together.
+
+    `refuse` makes any URL containing that fragment come back HTTP 429.
+    """
+    by_id = {}
+    for fragment, payload in responses.items():
+        match = re.search(r"/observations/(\d+)$", fragment)
+        if match:
+            results = payload.get("results") if isinstance(payload, dict) else None
+            if results:
+                by_id[match.group(1)] = results[0]
 
     def handler(method, url, body=None, headers=None):
+        if refuse and refuse in url:
+            return "<html>Too many requests</html>", plugin.runtime.table_from(
+                {"status": 429})
+
+        # The comma separating ids comes through percent-encoded, which is
+        # correct and which the real API decodes.
+        batch = re.search(r"/observations\?(?:.*&)?id=([\d,%A-Fa-f]+)", url)
+        if batch:
+            wanted = urllib.parse.unquote(batch.group(1)).split(",")
+            found = [by_id[one] for one in wanted if one in by_id]
+            return json.dumps({"results": found}), plugin.runtime.table_from(
+                {"status": 200})
+
         for fragment, payload in responses.items():
             if fragment in url:
                 return json.dumps(payload), plugin.runtime.table_from(
@@ -51,8 +89,7 @@ def make_plugin(responses):
                 )
         raise AssertionError(f"unexpected {method} {url}")
 
-    plugin.set_http_handler(handler)
-    return plugin
+    return handler
 
 
 def run_sync(plugin):
@@ -469,18 +506,7 @@ def make_refusing_plugin(responses, refuse):
     plugin = LuaPlugin()
     auth = plugin.require("InatAuth")
     plugin.call(auth["storeApiToken"], make_jwt(FUTURE))
-
-    def handler(method, url, body=None, headers=None):
-        if refuse in url:
-            return "<html>Too many requests</html>", plugin.runtime.table_from(
-                {"status": 429})
-        for fragment, payload in responses.items():
-            if fragment in url:
-                return json.dumps(payload), plugin.runtime.table_from(
-                    {"status": 200})
-        raise AssertionError(f"unexpected {method} {url}")
-
-    plugin.set_http_handler(handler)
+    plugin.set_http_handler(observation_handler(plugin, responses, refuse=refuse))
     return plugin
 
 
@@ -535,3 +561,103 @@ def test_a_kingdom_is_not_mistaken_for_a_missing_lineage():
     run_sync(plugin)
 
     assert [k["name"] for k in plugin.keywords] == ["iNaturalist", "Animalia"]
+
+
+# ---------------------------------------------------------------------------
+# Fetching observations in batches
+#
+# One request per photo was fine until requests had to be paced a second apart
+# to stay inside the rate limit. At that point a sync of the author's 654
+# linked photos spent eleven minutes doing nothing but waiting.
+# ---------------------------------------------------------------------------
+
+
+def names_on(photo):
+    """The keywords actually applied to one photo, in order."""
+    return [photo.keywords[i]["name"] for i in range(1, len(photo.keywords) + 1)]
+
+
+def counting_plugin(responses):
+    """A plugin that also records every URL its HTTP stub is asked for."""
+    plugin = make_plugin(responses)
+    inner = observation_handler(plugin, responses)
+    seen = []
+
+    def handler(method, url, body=None, headers=None):
+        seen.append(url)
+        return inner(method, url, body, headers)
+
+    plugin.set_http_handler(handler)
+    return plugin, seen
+
+
+def test_many_photos_cost_a_handful_of_requests_not_one_each():
+    routes = {f"/observations/{i}": observation(obs_id=i, community=DAMSELFLY)
+              for i in range(1000, 1450)}
+    plugin, seen = counting_plugin(routes)
+    plugin.set_target_photos(
+        [plugin.new_photo(inat_observation_id=str(i))
+         for i in range(1000, 1450)])
+
+    run_sync(plugin)
+
+    fetches = [url for url in seen if "/observations?" in url]
+    # 450 ids at 200 to a request.
+    assert len(fetches) == 3
+
+
+def test_photos_sharing_an_observation_are_fetched_once():
+    plugin, seen = counting_plugin(
+        {"/observations/999": observation(community=DAMSELFLY)})
+    plugin.set_target_photos(
+        [plugin.new_photo(inat_observation_id="999") for _ in range(5)])
+
+    run_sync(plugin)
+
+    assert len([url for url in seen if "/observations?" in url]) == 1
+    assert "Synced: 5" in plugin.dialogs[-1]["message"]
+
+
+def test_an_observation_that_no_longer_exists_is_reported_not_skipped():
+    """A deleted id simply does not come back. That is this photo's error."""
+    plugin = make_plugin({"/observations/999": observation(community=DAMSELFLY)})
+    plugin.set_target_photos([
+        plugin.new_photo(inat_observation_id="888"),
+        plugin.new_photo(inat_observation_id="999"),
+    ])
+
+    run_sync(plugin)
+
+    summary = plugin.dialogs[-1]["message"]
+    assert "Synced: 1" in summary
+    assert "Errors: 1" in summary
+
+
+def test_each_photo_gets_its_own_observation_not_the_next_one_along():
+    """The API may answer in any order, so assignment must be by id."""
+    other = taxon("Bombus vosnesenskii", 555,
+                  ancestors=["Animalia", "Arthropoda", "Insecta",
+                             "Hymenoptera", "Bombus"],
+                  common="Yellow-faced Bumble Bee")
+    plugin = make_plugin({
+        "/observations/777": observation(obs_id=777, community=other),
+        "/observations/999": observation(obs_id=999, community=DAMSELFLY),
+    })
+    bee = plugin.new_photo(inat_observation_id="777")
+    fly = plugin.new_photo(inat_observation_id="999")
+    plugin.set_target_photos([bee, fly])
+
+    run_sync(plugin)
+
+    assert names_on(bee) == ["Bombus vosnesenskii"]
+    assert names_on(fly) == ["Ischnura cervula"]
+
+
+def test_a_photo_with_no_observation_id_costs_no_request():
+    plugin, seen = counting_plugin({})
+    plugin.set_target_photos([plugin.new_photo(), plugin.new_photo()])
+
+    run_sync(plugin)
+
+    assert [url for url in seen if "/observations" in url] == []
+    assert "Skipped (no ID): 2" in plugin.dialogs[-1]["message"]

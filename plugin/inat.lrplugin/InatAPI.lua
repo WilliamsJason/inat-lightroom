@@ -423,6 +423,53 @@ function InatAPI:getObservation(observationId)
   return observation, nil
 end
 
+--- GET /observations?id=a,b,c -- many observations in one request.
+--
+-- The endpoint takes up to 200 ids at a time, which is the difference between
+-- a sync of 654 photos costing 654 requests and costing four. That mattered
+-- little until requests were paced a second apart to stay inside the rate
+-- limit; now it is the difference between eleven minutes and a few seconds.
+--
+-- Returned as a table keyed by id, because the API is under no obligation to
+-- answer in the order asked and an observation that has been deleted on the
+-- website simply does not come back. Callers look each one up rather than
+-- zipping two lists together, which would silently shift every photo after a
+-- missing one onto the wrong observation.
+--
+-- @param ids array of observation ids
+-- @return { [id] = observation }, or nil plus an error message
+function InatAPI:getObservations(ids)
+  local found = {}
+  if type(ids) ~= "table" or #ids == 0 then return found, nil end
+
+  local BATCH = 200
+  local index = 1
+
+  while index <= #ids do
+    local last  = math.min(index + BATCH - 1, #ids)
+    local batch = {}
+    for position = index, last do
+      batch[#batch + 1] = tostring(ids[position])
+    end
+
+    local payload, err = apiGet(API_V1 .. "/observations", {
+      id       = table.concat(batch, ","),
+      per_page = BATCH,
+    }, self.token)
+    if not payload then return nil, err end
+
+    for _, observation in ipairs(payload.results or {}) do
+      if observation.id ~= nil then
+        found[tostring(observation.id)] = observation
+      end
+    end
+
+    index = last + 1
+  end
+
+  return found, nil
+end
+
 --- GET /observations?uuid=... -- find an observation by its UUID.
 --
 -- The UUID is how this plugin knows that several Lightroom photos belong to

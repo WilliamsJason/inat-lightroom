@@ -691,3 +691,26 @@ Three things came out of it:
 The cost is that pacing makes a full sync slow -- one request per photo per
 second. Fetching observations in batches by id is the way out of that, not a
 faster rate.
+
+## Ask for many observations at once
+
+`GET /v1/observations?id=1,2,3&per_page=200` returns up to 200 observations in
+one request, which is what `InatAPI:getObservations` uses. A sync of 654 linked
+photos went from 654 requests to four -- from about eleven minutes of pacing to
+a few seconds.
+
+Two things the batched form demands that the single form did not:
+
+- **Key the answers by id, never zip two lists.** The API is under no
+  obligation to answer in the order asked, and an observation deleted on the
+  website simply is not in the results. Pairing the response list against the
+  request list positionally would shift every photo after a missing one onto
+  the wrong observation -- silently, and into their catalog.
+- **Absent means gone, so say so.** `SyncCore.syncPhoto` takes the observation
+  as a third argument where `nil` means "nobody has looked" and `false` means
+  "the batch asked and it did not come back". Without that distinction the
+  fallback fetch fires once per missing id, at a paced second each, to
+  rediscover what the batch already established.
+
+The comma between ids arrives percent-encoded as `%2C`. That is correct and the
+API decodes it; test stubs matching on the URL have to decode it too.

@@ -303,15 +303,26 @@ function SyncCore.applyObservation(catalog, photo, obs, api, write)
 end
 
 --- Bring one photo up to date with its observation.
+--
+-- @param obs  Optional. The already-fetched observation, which is how the
+--             batched run avoids a request per photo. `false` means the batch
+--             asked for it and it did not come back -- a deleted or hidden
+--             observation -- so there is nothing to gain by asking again.
+--             `nil` means nobody has looked, and this call does the fetching.
 -- @return status  One of the SyncCore.* codes.
 -- @return err     A message, when status is FAILED.
-function SyncCore.syncPhoto(catalog, photo, api)
+function SyncCore.syncPhoto(catalog, photo, api, obs)
   local obsId = photo:getPropertyForPlugin(_PLUGIN, "inat_observation_id")
   if not obsId or obsId == "" then
     return SyncCore.NO_ID, nil
   end
 
-  local obs, err = api:getObservation(tonumber(obsId))
+  local err
+  if obs == nil then
+    obs, err = api:getObservation(tonumber(obsId))
+  elseif obs == false then
+    obs, err = nil, "it no longer exists or is not visible to you"
+  end
   if not obs then
     return SyncCore.FAILED,
       "Failed to fetch observation " .. obsId .. ": " .. (err or "unknown")
@@ -323,6 +334,29 @@ function SyncCore.syncPhoto(catalog, photo, api)
   obs.id = obs.id or tonumber(obsId) or obsId
 
   return SyncCore.applyObservation(catalog, photo, obs, api)
+end
+
+--- Every observation the given photos are linked to, fetched in batches.
+--
+-- MUST be called from inside a task.
+--
+-- Returns a table keyed by the id as the photo stores it -- a string -- so the
+-- loop can look up without converting. Photos with no id are skipped here and
+-- reported by syncPhoto, which is the one place that decides what NO_ID means.
+--
+-- @return { [idString] = observation }, or nil plus an error message
+function SyncCore.observationsFor(photos, api)
+  local wanted, seen = {}, {}
+
+  for _, photo in ipairs(photos) do
+    local obsId = photo:getPropertyForPlugin(_PLUGIN, "inat_observation_id")
+    if obsId and obsId ~= "" and not seen[tostring(obsId)] then
+      seen[tostring(obsId)] = true
+      wanted[#wanted + 1] = obsId
+    end
+  end
+
+  return api:getObservations(wanted)
 end
 
 --------------------------------------------------------------------------------
@@ -388,13 +422,33 @@ function SyncCore.syncPhotosNow(context, photos, options)
   }
   local errors = {}
 
+  -- Every observation up front, 200 to a request, rather than one request per
+  -- photo. With requests paced a second apart for the rate limit, per-photo
+  -- fetching put a 650-photo sync at eleven minutes of waiting.
+  progress:setCaption("Fetching observations…")
+  local observations, fetchErr = SyncCore.observationsFor(photos, api)
+  if not observations then
+    progress:done()
+    LrDialogs.message("iNaturalist Sync",
+      "Could not fetch your observations.\n\n" .. tostring(fetchErr), "critical")
+    return
+  end
+
   for i, photo in ipairs(photos) do
     if progress:isCanceled() then break end
 
     progress:setCaption("Photo " .. i .. " of " .. #photos .. "…")
     progress:setPortionComplete(i - 1, #photos)
 
-    local status, err = SyncCore.syncPhoto(catalog, photo, api)
+    local obsId = photo:getPropertyForPlugin(_PLUGIN, "inat_observation_id")
+    -- `false`, not nil: the batch already asked for this id and it did not come
+    -- back, so syncPhoto must not spend another paced request finding that out.
+    local obs = nil
+    if obsId and obsId ~= "" then
+      obs = observations[tostring(obsId)] or false
+    end
+
+    local status, err = SyncCore.syncPhoto(catalog, photo, api, obs)
     if status == SyncCore.FAILED then
       errors[#errors + 1] = err
       logger:warn("Sync error for photo " .. i .. ": " .. (err or "?"))
