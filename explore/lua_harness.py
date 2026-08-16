@@ -482,6 +482,7 @@ end
 
 local catalogWrites = {}
 local createdKeywords = {}
+local refusedKeywords = {}
 local targetPhotos = {}
 local allPhotos = {}
 local publishedCollections = {}
@@ -577,6 +578,11 @@ catalog = {
   createKeyword = function(_self, name, _synonyms, _include, parent, returnExisting)
     yieldsHere("catalog:createKeyword")
     requireWriteAccess("LrCatalog:createKeyword")
+    -- Lightroom sometimes hands back nil instead of a keyword. Tests need to
+    -- reproduce that, because the interesting question is what the caller does
+    -- next: carrying on with a nil parent silently creates the rest of the
+    -- hierarchy at the top level of the catalog.
+    if refusedKeywords[name] then return nil end
     local parentName = parent and parent.name or nil
     for _, keyword in ipairs(createdKeywords) do
       if keyword.name == name and keyword.parent == parentName then
@@ -840,6 +846,7 @@ return {
   floatingDialogs = floatingDialogs,
   catalogWrites = catalogWrites,
   createdKeywords = createdKeywords,
+  refusedKeywords = refusedKeywords,
   newPhoto = newPhoto,
   exportSessions = exportSessions,
   createdDirectories = createdDirectories,
@@ -1044,6 +1051,15 @@ class LuaPlugin:
             {"name": created[i]["name"], "parent": created[i]["parent"]}
             for i in range(1, len(created) + 1)
         ]
+
+    def refuse_keyword(self, name: str) -> None:
+        """Make catalog:createKeyword hand back nil for this name.
+
+        Lightroom does this in circumstances the SDK does not document. What
+        matters is that the plugin notices, rather than treating nil as "no
+        parent" and creating the remainder of the lineage at the catalog root.
+        """
+        self.env["refusedKeywords"][name] = True
 
     @property
     def catalog(self):

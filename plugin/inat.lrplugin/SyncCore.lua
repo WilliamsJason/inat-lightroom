@@ -45,17 +45,47 @@ SyncCore.FAILED       = "failed"
 --------------------------------------------------------------------------------
 
 --- Create or reuse a nested keyword hierarchy.
+--
+-- Gives up on the whole path the moment Lightroom declines a level, rather
+-- than carrying on with a nil parent. That distinction is not academic: a nil
+-- parent means "top of the catalog", so a path that broke at, say, Insecta
+-- carried on creating Odonata, Ischnura and the species as brand new
+-- **top-level** keywords, sitting beside the user's own vocabulary and outside
+-- the iNaturalist tree entirely. Deleting the iNaturalist keyword then does not
+-- clean them up, because they were never inside it, and there is no SDK call to
+-- delete a keyword -- so the user is left removing them by hand, one at a time.
+--
+-- Same rule as everywhere else here: nothing written costs a re-run, something
+-- wrong written costs a cleanup.
+--
 -- @param catalog  LrCatalog
 -- @param path     Ordered list of names, e.g. {"iNaturalist","Plantae",…,"Quercus robur"}
--- @return         Leaf LrKeyword object
+-- @return         Leaf LrKeyword object, or nil when any level was refused
 local function ensureKeywordPath(catalog, path)
   local parentKw = nil
   local leafKw   = nil
 
   for i, name in ipairs(path) do
     local isLeaf = (i == #path)
+
+    if type(name) ~= "string" or name == "" then
+      logger:warn(string.format(
+        "Keyword level %d of %d is not a usable name (%s); wrote no keyword",
+        i, #path, tostring(name)))
+      return nil
+    end
+
     -- synonyms, includeOnExport, parent, skipIfExists
     local kw = catalog:createKeyword(name, {}, true, parentKw, true)
+    if not kw then
+      logger:warn(string.format(
+        "Lightroom would not create keyword %q under %s (level %d of %d); "
+        .. "wrote no keyword rather than stranding the rest at the top level",
+        name, i > 1 and string.format("%q", tostring(path[i - 1]))
+          or "the catalog root", i, #path))
+      return nil
+    end
+
     parentKw = kw
     if isLeaf then leafKw = kw end
   end

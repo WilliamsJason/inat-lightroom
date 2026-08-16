@@ -661,3 +661,74 @@ def test_a_photo_with_no_observation_id_costs_no_request():
 
     assert [url for url in seen if "/observations" in url] == []
     assert "Skipped (no ID): 2" in plugin.dialogs[-1]["message"]
+
+
+# ---------------------------------------------------------------------------
+# A refused keyword must not strand the rest of the lineage at the top level
+#
+# Lightroom hands back nil from createKeyword under conditions the SDK does not
+# document. The loop used to assign that nil to parentKw, and a nil parent
+# means "top of the catalog" -- so a lineage that broke at Insecta went on to
+# create Odonata, Ischnura and the species as new top-level keywords, outside
+# the iNaturalist tree. Deleting iNaturalist does not remove them, because they
+# were never in it, and the SDK cannot delete a keyword at all.
+# ---------------------------------------------------------------------------
+
+
+def test_a_refused_keyword_leaves_nothing_at_the_top_level():
+    plugin = make_plugin({"/observations/999": observation(community=DAMSELFLY)})
+    plugin.refuse_keyword("Insecta")
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="999")])
+
+    run_sync(plugin)
+
+    stranded = [k["name"] for k in plugin.keywords
+                if k["parent"] is None and k["name"] != "iNaturalist"]
+    assert stranded == []
+
+
+def test_a_refused_keyword_stops_the_path_rather_than_finishing_it():
+    plugin = make_plugin({"/observations/999": observation(community=DAMSELFLY)})
+    plugin.refuse_keyword("Insecta")
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="999")])
+
+    run_sync(plugin)
+
+    made = [k["name"] for k in plugin.keywords]
+    assert "Arthropoda" in made          # everything above the break is fine
+    assert "Odonata" not in made         # everything below it is not written
+    assert "Ischnura cervula" not in made
+
+
+def test_a_refused_keyword_applies_no_keyword_to_the_photo():
+    plugin = make_plugin({"/observations/999": observation(community=DAMSELFLY)})
+    plugin.refuse_keyword("Insecta")
+    photo = plugin.new_photo(inat_observation_id="999")
+    plugin.set_target_photos([photo])
+
+    run_sync(plugin)
+
+    assert names_on(photo) == []
+
+
+def test_a_refused_keyword_still_writes_the_taxon_fields():
+    """The fields are right either way, and a later run reads them to repair."""
+    plugin = make_plugin({"/observations/999": observation(community=DAMSELFLY)})
+    plugin.refuse_keyword("Insecta")
+    photo = plugin.new_photo(inat_observation_id="999")
+    plugin.set_target_photos([photo])
+
+    run_sync(plugin)
+
+    assert photo._props["inat_taxon_name"] == "Ischnura cervula"
+
+
+def test_a_refused_keyword_says_which_one_in_the_log():
+    plugin = make_plugin({"/observations/999": observation(community=DAMSELFLY)})
+    plugin.refuse_keyword("Insecta")
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="999")])
+
+    run_sync(plugin)
+
+    assert any("Insecta" in line and "would not create" in line
+               for line in plugin.log_lines)

@@ -1281,3 +1281,31 @@ same whitelist with the same message for exactly that reason.
 Not established by this: whether a write is rejected for a photo whose file is
 offline, and whether it round-trips to the file immediately or waits for a
 metadata save.
+
+## A nil keyword is not "no parent"
+
+`catalog:createKeyword(name, synonyms, includeOnExport, parent, returnExisting)`
+returns nil under conditions the SDK does not spell out. The obvious loop --
+
+```lua
+for _, name in ipairs(path) do
+  parentKw = catalog:createKeyword(name, {}, true, parentKw, true)
+end
+```
+
+-- treats that nil as the parent for the next level, and a nil parent means
+*the top of the catalog*. So a lineage that broke partway through carried on
+creating the rest of itself as brand new **top-level** keywords, beside the
+user's own vocabulary and outside the plugin's root keyword entirely.
+
+Three things make that much worse than it sounds:
+
+- Deleting the root keyword does not clean it up. Lightroom's delete does
+  cascade to children -- but these were never children of anything.
+- **There is no SDK call to delete a keyword.** The plugin cannot offer to
+  repair what it created; the user has to do it by hand in the Keyword List.
+- It is silent. The keyword count looks right and the leaf gets applied.
+
+`ensureKeywordPath` now abandons the whole path on the first refusal and logs
+the level that failed. Nothing written is a re-run; something wrong written is
+a cleanup somebody else has to do.
