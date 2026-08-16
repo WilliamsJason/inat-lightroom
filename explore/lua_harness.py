@@ -591,8 +591,27 @@ catalog = {
       end
     end
     local keyword = { name = name, parent = parentName }
+    -- Real keywords answer questions about themselves. The plugin asks, when
+    -- createKeyword refuses, whether the keyword it wanted is already there.
+    keyword.getName     = function(_kw) return name end
+    keyword.getChildren = function(_kw)
+      local children = {}
+      for _, other in ipairs(createdKeywords) do
+        if other.parent == name then children[#children + 1] = other end
+      end
+      return children
+    end
     createdKeywords[#createdKeywords + 1] = keyword
     return keyword
+  end,
+
+  --- The top level of the keyword list. Children hang off getChildren.
+  getKeywords = function(_self)
+    local top = {}
+    for _, keyword in ipairs(createdKeywords) do
+      if keyword.parent == nil then top[#top + 1] = keyword end
+    end
+    return top
   end,
 
   getTargetPhotos = function() return targetPhotos end,

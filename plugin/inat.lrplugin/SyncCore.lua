@@ -44,23 +44,48 @@ SyncCore.FAILED       = "failed"
 -- Build keyword hierarchy and return the leaf keyword object
 --------------------------------------------------------------------------------
 
+--- The existing keyword of this name among a parent's children.
+--
+-- The fallback for createKeyword handing back nil. `returnExisting` is meant
+-- to make that impossible, and mostly does; when it does not, the keyword we
+-- were about to create is usually already sitting there, and finding it is the
+-- difference between the hierarchy continuing and the lineage being refused
+-- for good.
+--
+-- @param parentKw  nil to search the top level of the catalog
+local function findChild(catalog, parentKw, name)
+  local siblings
+  if parentKw then
+    siblings = parentKw:getChildren()
+  else
+    siblings = catalog:getKeywords()
+  end
+
+  for _, kw in ipairs(siblings or {}) do
+    if kw:getName() == name then return kw end
+  end
+  return nil
+end
+
 --- Create or reuse a nested keyword hierarchy.
 --
--- Gives up on the whole path the moment Lightroom declines a level, rather
+-- Gives up on the whole path the moment a level cannot be resolved, rather
 -- than carrying on with a nil parent. That distinction is not academic: a nil
--- parent means "top of the catalog", so a path that broke at, say, Insecta
--- carried on creating Odonata, Ischnura and the species as brand new
--- **top-level** keywords, sitting beside the user's own vocabulary and outside
--- the iNaturalist tree entirely. Deleting the iNaturalist keyword then does not
--- clean them up, because they were never inside it, and there is no SDK call to
--- delete a keyword -- so the user is left removing them by hand, one at a time.
+-- parent means "top of the catalog", so a path that broke at, say, Apocrita
+-- carried on creating Aculeata, Apoidea, Apidae and the species as brand new
+-- **top-level** keywords, beside the user's own vocabulary and outside the
+-- iNaturalist tree entirely.
 --
--- Same rule as everywhere else here: nothing written costs a re-run, something
--- wrong written costs a cleanup.
+-- Worse, it compounded. The stranded Aculeata is a second keyword of that
+-- name, which made the next run's createKeyword refuse one level deeper, which
+-- stranded Apoidea, and so on down. A single refusal turned into dozens of
+-- fragments. Deleting the iNaturalist keyword does not clean any of it up --
+-- they were never inside it -- and the SDK cannot delete a keyword at all, so
+-- it falls to the user by hand.
 --
 -- @param catalog  LrCatalog
 -- @param path     Ordered list of names, e.g. {"iNaturalist","Plantae",…,"Quercus robur"}
--- @return         Leaf LrKeyword object, or nil when any level was refused
+-- @return         Leaf LrKeyword object, or nil when any level could not be resolved
 local function ensureKeywordPath(catalog, path)
   local parentKw = nil
   local leafKw   = nil
@@ -78,8 +103,17 @@ local function ensureKeywordPath(catalog, path)
     -- synonyms, includeOnExport, parent, skipIfExists
     local kw = catalog:createKeyword(name, {}, true, parentKw, true)
     if not kw then
+      kw = findChild(catalog, parentKw, name)
+      if kw then
+        logger:info(string.format(
+          "Lightroom refused to create keyword %q; used the one already there",
+          name))
+      end
+    end
+
+    if not kw then
       logger:warn(string.format(
-        "Lightroom would not create keyword %q under %s (level %d of %d); "
+        "Could not create or find keyword %q under %s (level %d of %d); "
         .. "wrote no keyword rather than stranding the rest at the top level",
         name, i > 1 and string.format("%q", tostring(path[i - 1]))
           or "the catalog root", i, #path))

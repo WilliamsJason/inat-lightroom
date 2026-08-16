@@ -730,5 +730,26 @@ def test_a_refused_keyword_says_which_one_in_the_log():
 
     run_sync(plugin)
 
-    assert any("Insecta" in line and "would not create" in line
+    assert any("Insecta" in line and "Could not create or find" in line
                for line in plugin.log_lines)
+
+
+def test_a_refusal_falls_back_to_the_keyword_already_there():
+    """createKeyword refusing is not a reason to abandon an existing branch.
+
+    Aborting outright would refuse that lineage for good. The keyword the call
+    declined to create is usually already sitting under the parent.
+    """
+    plugin = make_plugin({"/observations/999": observation(community=DAMSELFLY)})
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="999")])
+    run_sync(plugin)                      # builds the tree the ordinary way
+
+    plugin.refuse_keyword("Insecta")      # now Lightroom declines mid-path
+    photo = plugin.new_photo(inat_observation_id="999")
+    plugin.set_target_photos([photo])
+    run_sync(plugin)
+
+    assert names_on(photo) == ["Ischnura cervula"]
+    stranded = [k["name"] for k in plugin.keywords
+                if k["parent"] is None and k["name"] != "iNaturalist"]
+    assert stranded == []

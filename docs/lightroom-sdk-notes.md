@@ -1309,3 +1309,21 @@ Three things make that much worse than it sounds:
 `ensureKeywordPath` now abandons the whole path on the first refusal and logs
 the level that failed. Nothing written is a re-run; something wrong written is
 a cleanup somebody else has to do.
+
+### It compounds
+
+Confirmed against a real catalog. The fragments were rooted at the level
+*after* the break -- `Aculeata` where the path broke at `Apocrita`, `Adephaga`
+where it broke at `Coleoptera` -- and those parents were themselves stranded
+roots from earlier runs.
+
+That is the nasty part: the stranded `Aculeata` is a *second* keyword of that
+name, which makes the next run's `createKeyword` refuse one level deeper, which
+strands `Apoidea`, and so on down the lineage. One refusal became dozens of
+top-level fragments across a handful of lineages.
+
+So refusing the path outright is not enough either -- that would decline the
+lineage for good. On nil, `ensureKeywordPath` now looks for the keyword among
+the parent's `getChildren()` (or `catalog:getKeywords()` at the top level) and
+carries on with it. Only when it is neither creatable nor findable is the path
+abandoned.
