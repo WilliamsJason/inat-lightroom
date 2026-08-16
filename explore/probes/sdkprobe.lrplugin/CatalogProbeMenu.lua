@@ -174,17 +174,33 @@ local function run(context)
   local windowTotal, windowRuns, windowHits = 0, 0, 0
   local shownExample = false
 
-  --- Count what a ±2 s window around `when` returns, for one value format.
-  local function windowCount(when, format, makeValue)
-    local _, found, err = Report.timed(function()
+  --- The value format findPhotos actually accepts.
+  --
+  -- Measured, not assumed. LrDate.timeToW3CDate produces
+  -- "2017-04-29T17:22:25.000+00:00" and findPhotos matches **nothing** against
+  -- it -- no error, no complaint, just an empty result, which is the same
+  -- answer it gives for a window that genuinely holds no photo. The plain
+  -- second-resolution form is what it wants.
+  local function isoValue(when)
+    return LrDate.timeToUserFormat(when, "%Y-%m-%dT%H:%M:%S")
+  end
+
+  --- Photos whose capture time falls in [from, to], both ISO strings.
+  local function inWindow(from, to)
+    return Report.timed(function()
       return catalog:findPhotos {
         searchDesc = {
           { criteria = "captureTime", operation = "in",
-            value = makeValue(when - 2), value2 = makeValue(when + 2) },
+            value = from, value2 = to },
           combine = "intersect",
         },
       }
     end)
+  end
+
+  --- Count what a ±2 s window around `when` returns, for one value format.
+  local function windowCount(when, format, makeValue)
+    local _, found, err = inWindow(makeValue(when - 2), makeValue(when + 2))
     if err then return format .. ": FAILED " .. err end
     return string.format("%s: %d", format, countOf(found) or 0)
   end
@@ -202,9 +218,21 @@ local function run(context)
       report:addf("    %s", windowCount(when, "W3C     ",
         function(t) return LrDate.timeToW3CDate(t) end))
       report:addf("    %s", windowCount(when, "ISO-ish ",
-        function(t) return LrDate.timeToUserFormat(t, "%Y-%m-%dT%H:%M:%S") end))
+        function(t) return isoValue(t) end))
       report:addf("    %s", windowCount(when, "date    ",
         function(t) return LrDate.timeToUserFormat(t, "%Y-%m-%d") end))
+
+      -- Does the comparison honour seconds, or quietly round to whole days?
+      -- One photo alone in its day answers "1" either way, so the question is
+      -- only settled by comparing the tight window against the whole day it
+      -- sits in. If those two counts match on a day holding many photos, the
+      -- time part is being ignored and matching has to filter in Lua.
+      local dayStart = LrDate.timeToUserFormat(when, "%Y-%m-%dT00:00:00")
+      local dayEnd   = LrDate.timeToUserFormat(when, "%Y-%m-%dT23:59:59")
+      local _, tight = inWindow(isoValue(when - 2), isoValue(when + 2))
+      local _, whole = inWindow(dayStart, dayEnd)
+      report:addf("    seconds honoured: ±2 s = %d vs whole day = %d",
+        countOf(tight) or 0, countOf(whole) or 0)
       report:blank()
       break
     end
@@ -218,18 +246,10 @@ local function run(context)
     end)
 
     if type(when) == "number" then
-      local from = LrDate.timeToW3CDate(when - 2)
-      local to   = LrDate.timeToW3CDate(when + 2)
+      local from = isoValue(when - 2)
+      local to   = isoValue(when + 2)
 
-      local took, found, err = Report.timed(function()
-        return catalog:findPhotos {
-          searchDesc = {
-            { criteria = "captureTime", operation = "in",
-              value = from, value2 = to },
-            combine = "intersect",
-          },
-        }
-      end)
+      local took, found, err = inWindow(from, to)
 
       if err then
         report:addf("  window query FAILED  %s", err)
@@ -275,7 +295,27 @@ local function run(context)
   report:addf("Metadata reads over a %d photo sample:", #sample)
 
   if #sample > 0 then
-    local keys = { "dateTimeOriginal", "gps", "fileName", "isVirtualCopy" }
+    -- One bad key fails the entire call: "fileName" is formatted metadata, not
+    -- raw, and asking for it alongside three valid keys threw away all four
+    -- results with `Unknown key: "fileName"`. So the keys are validated one at
+    -- a time first, and only the survivors are batched. Reverse Sync will want
+    -- the same discipline -- a key that exists on one Lightroom version and not
+    -- another would otherwise take the whole index down with it.
+    local candidates = {
+      "dateTimeOriginal", "dateTimeOriginalISO8601", "captureTime",
+      "gps", "gpsAltitude", "path", "fileName", "uuid", "isVirtualCopy",
+    }
+    local keys, oneP = {}, { sample[1] }
+
+    report:add("  raw metadata keys:")
+    for _, key in ipairs(candidates) do
+      local _, _, keyErr = Report.timed(function()
+        return catalog:batchGetRawMetadata(oneP, { key })
+      end)
+      report:addf("    %-26s %s", key, keyErr and "unknown" or "ok")
+      if not keyErr then keys[#keys + 1] = key end
+    end
+    report:blank()
 
     local batchTook, batchResult, batchErr = Report.timed(function()
       return catalog:batchGetRawMetadata(sample, keys)
@@ -284,7 +324,8 @@ local function run(context)
     if batchErr then
       report:addf("  %-28s FAILED  %s", "batchGetRawMetadata", batchErr)
     else
-      report:addf("  %-28s %8s", "batchGetRawMetadata", batchTook)
+      report:addf("  %-28s %8s  (%d keys)", "batchGetRawMetadata", batchTook,
+        #keys)
       -- Shape matters as much as speed: the result is expected to be keyed by
       -- the photo object, not by index.
       local first = sample[1]
@@ -292,9 +333,8 @@ local function run(context)
       report:addf("      result type   %s", type(batchResult))
       report:addf("      keyed by photo %s", tostring(row ~= nil))
       if type(row) == "table" then
-        report:addf("      dateTimeOriginal %s / gps %s / fileName %s",
-          tostring(row.dateTimeOriginal), tostring(row.gps ~= nil),
-          tostring(row.fileName))
+        report:addf("      dateTimeOriginal %s / gps %s",
+          tostring(row.dateTimeOriginal), tostring(row.gps ~= nil))
       end
     end
 
@@ -332,20 +372,36 @@ local function run(context)
   end
 
   if #sample > 0 then
-    -- Two plausible signatures; report which one answers.
-    local _, _, errA = Report.timed(function()
-      return catalog:batchGetPropertyForPlugin(sample,
-        "com.github.inat-lightroom", "inat_observation_id")
-    end)
-    report:addf("  %-28s %s", "batch(photos,id,key)",
-      errA and ("FAILED  " .. errA) or "ok")
+    -- The first two guesses both failed with
+    --   bad argument #1 to 'ipairs' (table expected, got string)
+    -- which is more helpful than it looks. Something inside is iterating an
+    -- argument that was handed a plugin id string, so the second argument is a
+    -- table of keys, exactly as batchGetRawMetadata takes -- and the plugin
+    -- goes somewhere else, or nowhere, because a plugin can only read its own
+    -- properties anyway.
+    local keyList  = { "inat_observation_id" }
+    local variants = {
+      { label = "(photos, {keys})",
+        call  = function() return catalog:batchGetPropertyForPlugin(sample, keyList) end },
+      { label = "(photos, {keys}, id)",
+        call  = function() return catalog:batchGetPropertyForPlugin(sample, keyList,
+                  "com.github.inat-lightroom") end },
+      { label = "(photos, {keys}, _PLUGIN)",
+        call  = function() return catalog:batchGetPropertyForPlugin(sample, keyList, _PLUGIN) end },
+      { label = "(_PLUGIN, photos, {keys})",
+        call  = function() return catalog:batchGetPropertyForPlugin(_PLUGIN, sample, keyList) end },
+    }
 
-    local _, _, errB = Report.timed(function()
-      return catalog:batchGetPropertyForPlugin(sample, _PLUGIN,
-        "inat_observation_id")
-    end)
-    report:addf("  %-28s %s", "batch(photos,_PLUGIN,key)",
-      errB and ("FAILED  " .. errB) or "ok")
+    for _, variant in ipairs(variants) do
+      local took, result, err = Report.timed(variant.call)
+      if err then
+        report:addf("  %-28s FAILED  %s", variant.label, err)
+      else
+        local row = type(result) == "table" and result[sample[1]] or nil
+        report:addf("  %-28s %8s  %s, keyed by photo %s", variant.label, took,
+          type(result), tostring(row ~= nil))
+      end
+    end
   end
 
   report:blank()
