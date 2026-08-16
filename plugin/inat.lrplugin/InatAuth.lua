@@ -245,13 +245,13 @@ end
 -- the same sentence looked like a different fault depending on which button
 -- had been pressed.
 --
--- Titled "iNaturalist" rather than after the caller for the same reason, and
--- shown as a warning rather than an error because not having set the plugin up
--- yet is a state everyone starts in, not something that went wrong.
+-- Titled "Pinned" rather than after the caller for the same reason, and shown
+-- as a warning rather than an error because not having set the plugin up yet is
+-- a state everyone starts in, not something that went wrong.
 function InatAuth.reportMissingCredentials(message)
-  LrDialogs.message("iNaturalist",
+  LrDialogs.message("Pinned",
     message or "iNaturalist credentials are not set up.\n\n"
-      .. "Use File > Plug-in Extras > iNaturalist Settings….",
+      .. "Use File > Plug-in Extras > Pinned Settings….",
     "warning")
 end
 

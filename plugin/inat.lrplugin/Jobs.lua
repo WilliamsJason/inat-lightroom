@@ -59,7 +59,7 @@ end
 
 --- Tell the user why nothing happened.
 function Jobs.reportBusy(blocking)
-  LrDialogs.message("iNaturalist",
+  LrDialogs.message("Pinned",
     "Something else is still running: " .. tostring(blocking) .. ".\n\n"
       .. "Wait for it to finish, or cancel it from the progress bar in the "
       .. "top left.",

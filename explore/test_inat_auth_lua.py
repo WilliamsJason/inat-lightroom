@@ -190,7 +190,7 @@ def test_the_dialog_is_not_named_after_whatever_asked(plugin, auth):
     which button had been pressed -- which is what this replaced."""
     auth.reportMissingCredentials(None)
 
-    assert plugin.dialogs[-1]["title"] == "iNaturalist"
+    assert plugin.dialogs[-1]["title"] == "Pinned"
 
 
 def test_the_reason_given_is_the_one_passed_in(plugin, auth):

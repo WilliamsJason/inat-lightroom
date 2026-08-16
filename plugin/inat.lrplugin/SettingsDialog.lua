@@ -395,7 +395,7 @@ function SettingsDialog.syncAll(context)
   local photos  = SettingsDialog.linkedPhotos(catalog)
 
   if #photos == 0 then
-    LrDialogs.message("iNaturalist Sync",
+    LrDialogs.message("Pinned Sync",
       "No photos in this catalog are linked to an observation yet.", "info")
     return 0
   end
@@ -430,7 +430,7 @@ function SettingsDialog.reverseSyncNow(context)
   end
 
   local progress = LrProgressScope {
-    title           = "iNaturalist Reverse Sync",
+    title           = "Pinned Reverse Sync",
     caption         = "Fetching your observations…",
     functionContext = context,
   }
@@ -459,7 +459,7 @@ function SettingsDialog.reverseSyncNow(context)
   progress:done()
 
   if not matches then
-    LrDialogs.message("iNaturalist Reverse Sync",
+    LrDialogs.message("Pinned Reverse Sync",
       "Could not fetch your observations: " .. tostring(summary), "warning")
     return
   end
@@ -472,7 +472,7 @@ function SettingsDialog.reverseSyncNow(context)
   -- as the user takes over it, and a progress bar left up behind a modal looks
   -- like work still happening.
   local linking = LrProgressScope {
-    title           = "iNaturalist Reverse Sync",
+    title           = "Pinned Reverse Sync",
     caption         = "Linking…",
     functionContext = context,
   }
@@ -506,7 +506,7 @@ function SettingsDialog.reverseSyncNow(context)
         tostring(first.observation), tostring(first.message))
     end
   end
-  LrDialogs.message("iNaturalist Reverse Sync", message, "info")
+  LrDialogs.message("Pinned Reverse Sync", message, "info")
 end
 
 --------------------------------------------------------------------------------

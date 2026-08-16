@@ -515,7 +515,7 @@ end
 -- @return the matches with `selected` set, or nil if the user cancelled
 function ReverseSyncDialog.show(context, matches, summary)
   if #matches == 0 then
-    LrDialogs.message("iNaturalist Reverse Sync",
+    LrDialogs.message("Pinned Reverse Sync",
       ReverseSyncDialog.summarise(summary), "info")
     return nil
   end
@@ -607,7 +607,7 @@ function ReverseSyncDialog.show(context, matches, summary)
   LrTasks.startAsyncTask(function() pager:loadImages() end)
 
   local result = LrDialogs.presentModalDialog {
-    title      = "iNaturalist Reverse Sync",
+    title      = "Pinned Reverse Sync",
     contents   = contents,
     actionVerb = "Link Selected",
   }

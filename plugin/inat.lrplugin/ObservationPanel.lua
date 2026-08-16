@@ -595,7 +595,7 @@ function ObservationPanel.uploadOrUpdate(props)
   })
 
   if not observationId then
-    LrDialogs.message("iNaturalist Upload",
+    LrDialogs.message("Pinned Upload",
       errors[1] or "The upload failed.", "critical")
     props.suggestionStatus = ""
     return
@@ -612,7 +612,7 @@ function ObservationPanel.uploadOrUpdate(props)
   end
 
   if #errors > 0 then
-    LrDialogs.message("iNaturalist Upload",
+    LrDialogs.message("Pinned Upload",
       "Uploaded as observation " .. tostring(observationId)
       .. ", but some things did not work:\n\n" .. table.concat(errors, "\n"),
       "warning")

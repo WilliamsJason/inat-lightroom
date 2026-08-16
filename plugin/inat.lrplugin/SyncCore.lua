@@ -484,7 +484,7 @@ function SyncCore.syncPhotosNow(context, photos, options)
 
   if not photos or #photos == 0 then
     if not options.quiet then
-      LrDialogs.message("iNaturalist Sync", "No photos selected.", "warning")
+      LrDialogs.message("Pinned Sync", "No photos selected.", "warning")
     end
     return
   end
@@ -518,7 +518,7 @@ function SyncCore.syncPhotosNow(context, photos, options)
   local observations, fetchErr = SyncCore.observationsFor(photos, api)
   if not observations then
     progress:done()
-    LrDialogs.message("iNaturalist Sync",
+    LrDialogs.message("Pinned Sync",
       "Could not fetch your observations.\n\n" .. tostring(fetchErr), "critical")
     return
   end
@@ -563,7 +563,7 @@ function SyncCore.syncPhotosNow(context, photos, options)
   if #errors > 0 then
     msg = msg .. "\n\nFirst error:\n" .. errors[1]
   end
-  LrDialogs.message("iNaturalist Sync", msg, #errors > 0 and "warning" or "info")
+  LrDialogs.message("Pinned Sync", msg, #errors > 0 and "warning" or "info")
 end
 
 --------------------------------------------------------------------------------
