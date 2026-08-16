@@ -6,6 +6,9 @@ This directory contains the **inat.lrplugin** Adobe Lightroom Classic plugin.
 
 ## Installation
 
+The plugin is an unofficial, community-built project — see the
+[disclaimer](../README.md#disclaimer) — and it is untested on macOS.
+
 1. Download `inat-lightroom-<version>.zip` from the
    [latest release](https://github.com/WilliamsJason/inat-lightroom/releases/latest)
    and unzip it. You will get a folder called `inat.lrplugin`.
@@ -17,6 +20,22 @@ Put the folder somewhere you can write to and somewhere permanent — your user
 folder rather than `Program Files`, and not a Downloads folder you empty. The
 plugin updates itself in place, so it needs to be able to write there, and
 Lightroom remembers it by path.
+
+### The standard plugin location
+
+Lightroom Classic has a standard folder for plugins, and anything in it is
+loaded automatically at start-up — so if you put `inat.lrplugin` there, steps 2
+and 3 above are unnecessary.
+
+- **Windows** — `C:\Users\<username>\AppData\Roaming\Adobe\Lightroom\Modules`
+- **macOS** — `Library/Application Support/Adobe/Lightroom/Modules` inside your
+  home folder. Finder hides `Library` by default; choose **Go → Go to Folder…**
+  and type `~/Library` to get there.
+
+Create the `Modules` folder if it doesn't exist. Both locations are inside your
+own user folder, so the updater can write to them. (Thanks to
+[lr-inaturalist-publish](https://github.com/rcloran/lr-inaturalist-publish) for
+documenting these paths clearly.)
 
 To run from a clone of this repository instead, point step 3 at
 `plugin/inat.lrplugin`.

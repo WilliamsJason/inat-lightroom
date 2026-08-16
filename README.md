@@ -6,6 +6,30 @@ identifications back into your catalog as searchable taxonomy.
 
 ---
 
+## Disclaimer
+
+This is **not** an official iNaturalist product. It is an independent,
+community-built plugin, not affiliated with, endorsed by, or supported by
+iNaturalist or its staff. Please don't ask them about it.
+
+It is provided **as-is**, with no warranty — see [LICENSE](LICENSE). It writes to
+a real iNaturalist account through the public API, so use it with the same care
+you would use posting by hand.
+
+It is also **completely untested on macOS**. Development and testing happen on
+Windows with Lightroom Classic. The Mac-specific paths and scripts are written
+to the documentation but have not been run; the panel's window handling is a
+deliberate no-op there.
+
+That said — I would love for this to be genuinely useful to other people. If
+something is broken, confusing, or risky, or if a feature would make a real
+difference to how you use iNaturalist and Lightroom together,
+[open an issue](https://github.com/WilliamsJason/inat-lightroom/issues) and tell
+me. Bug reports from macOS users are especially welcome, since I can't produce
+them myself.
+
+---
+
 ## Goals
 
 ### 1. Upload photos to iNaturalist
@@ -75,6 +99,17 @@ Download `inat-lightroom-<version>.zip` from the
 unzip it, and point **File → Plug-in Manager → Add** at the `inat.lrplugin`
 folder. Keep it somewhere permanent that you can write to — the plugin updates
 itself in place, and Lightroom remembers it by path.
+
+Better still, unzip it into Lightroom Classic's standard plugin location, where
+Lightroom loads it at start-up on its own and you can skip the **Add** step
+entirely:
+
+- **Windows** — `C:\Users\<username>\AppData\Roaming\Adobe\Lightroom\Modules`
+- **macOS** — `~/Library/Application Support/Adobe/Lightroom/Modules`
+  (`Library` is hidden in Finder; reach it with **Go → Go to Folder…** and type
+  `~/Library`)
+
+Create the `Modules` folder if it isn't there yet.
 
 After that, **File → Plug-in Manager → iNaturalist → Updates** has a button that
 fetches the latest release, checks it against its published checksum, and
