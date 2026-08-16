@@ -15,8 +15,24 @@
   during shutdown -- Lightroom is closing and a modal would either be missed or
   hold the process open -- so a failure goes to the log, the staged folder is
   left where it is, and PluginInit tries again at the next launch.
+
+  The entry line is logged unconditionally, before anything can go wrong. It is
+  the only way to tell "Lightroom never ran this hook" apart from "the hook ran
+  and the swap failed", and those two have completely different fixes. Without
+  it the two are indistinguishable, because a plugin that is being unloaded
+  cannot report anything except in passing.
 --]]
 
-local UpdateInstall = require "UpdateInstall"
+local logger = require "Log"
 
-pcall(function() UpdateInstall.apply() end)
+logger:trace("PluginShutdown: running")
+
+local ok, err = pcall(function()
+  local UpdateInstall = require "UpdateInstall"
+  return UpdateInstall.apply()
+end)
+
+if not ok then
+  logger:error("PluginShutdown: applying a staged update failed: " ..
+    tostring(err))
+end
