@@ -222,15 +222,43 @@ end
 -- duration and loses everything if it fails at the end, while one block per
 -- photo pays the transaction cost ten thousand times.
 --
+-- Each batch is resolved before it is written. Everything the observation says
+-- is already in hand -- it came down with the list -- but a taxon usually
+-- arrives without its ancestors, and the ancestors are the entire keyword
+-- hierarchy. Fetching them is an HTTP call, and an HTTP call inside a write
+-- transaction blocks the catalog on the network, which is indistinguishable
+-- from a hang.
+--
+-- @param options.api  When given, each linked photo is also brought up to date
+--                     with its observation: keywords, quality grade, location.
 -- @return linkedCount, failures
 function ReverseSync.apply(catalog, matches, options)
   options = options or {}
   local batchSize = options.batchSize or 100
   local UploadCore = require "UploadCore"
+  local SyncCore   = options.api and require "SyncCore" or nil
 
   local selected = {}
   for _, match in ipairs(matches) do
     if match.selected then selected[#selected + 1] = match end
+  end
+
+  -- Keyed by taxon id and shared across the whole run. A few thousand
+  -- observations are usually a few hundred species, and without this the same
+  -- taxon is fetched once per observation of it.
+  local taxa = {}
+
+  local function taxonFor(observation)
+    local raw = observation.community_taxon or observation.taxon
+    if not raw then return nil end
+    if raw.ancestors then return raw end
+
+    local id = raw.id
+    if id == nil then return raw end
+    if taxa[id] == nil then
+      taxa[id] = SyncCore.withAncestors(options.api, raw) or false
+    end
+    return taxa[id] or raw
   end
 
   local done, failures = 0, {}
@@ -238,6 +266,16 @@ function ReverseSync.apply(catalog, matches, options)
   local index = 1
   while index <= #selected do
     local last = math.min(index + batchSize - 1, #selected)
+
+    -- Resolved first, outside the transaction, and remembered per row so the
+    -- write block below does nothing but write.
+    local resolved = {}
+    if SyncCore then
+      for position = index, last do
+        local ok, taxon = pcall(taxonFor, selected[position].observation)
+        resolved[position] = ok and taxon or nil
+      end
+    end
 
     catalog:withWriteAccessDo("iNat reverse sync", function()
       for position = index, last do
@@ -247,13 +285,26 @@ function ReverseSync.apply(catalog, matches, options)
         local ok, err = pcall(function()
           UploadCore.writeObservationFields({ match.photo },
             observation.id, observation.uuid)
+
+          if SyncCore then
+            SyncCore.writeObservation(catalog, match.photo, observation,
+              resolved[position])
+          end
         end)
 
         if ok then
           done = done + 1
         else
+          -- Recorded and stepped over rather than raised. One observation with
+          -- something odd in it should not abandon the other ninety-nine in
+          -- this batch, let alone the rest of the run.
+          --
+          -- The id is read defensively for the same reason: if the row is
+          -- malformed enough to have failed, it is malformed enough to fail
+          -- again here, and an error raised while recording an error would
+          -- take out the batch the pcall above just saved.
           failures[#failures + 1] = {
-            observation = observation.id,
+            observation = observation and observation.id or "unknown",
             message     = tostring(err),
           }
         end

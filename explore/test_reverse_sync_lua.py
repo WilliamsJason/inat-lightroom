@@ -330,3 +330,103 @@ def test_linking_is_batched_rather_than_one_transaction_each(plugin, sync):
         plugin.runtime.table_from({"batchSize": 4}))
 
     assert len(plugin.catalog_writes) == 3
+
+
+# ----------------------------------------------------------- applying taxa
+
+def taxon_api(plugin, fetched=None):
+    """An API that answers getTaxon, recording which ids it was asked for."""
+    asked = []
+
+    def get_taxon(_self, taxon_id):
+        asked.append(taxon_id)
+        return plugin.runtime.table_from({
+            "id": taxon_id, "name": "Rana temporaria",
+            "ancestors": plugin.runtime.table_from([
+                plugin.runtime.table_from({"name": "Animalia", "rank": "kingdom"}),
+            ]),
+        })
+
+    return plugin.runtime.table_from({"getTaxon": get_taxon}), asked
+
+
+def observed_with_taxon(plugin, obs_id, when, taxon_id=42):
+    return observation(plugin, obs_id, when,
+        quality_grade="research",
+        taxon=plugin.runtime.table_from({"id": taxon_id, "name": "Rana temporaria"}))
+
+
+def test_linking_also_syncs_the_observation(plugin, sync):
+    """A photo left linked but not synced knows an observation id and nothing
+    else -- no keywords, no grade -- which looks like the feature half worked."""
+    photo = photo_at(plugin, "2024-05-01T10:00:00")
+    plugin.set_all_photos([photo])
+    matches, _ = sync["scan"](plugin.catalog, observations(plugin,
+        observed_with_taxon(plugin, 7, "2024-05-01T10:00:00+00:00")))
+    api, _ = taxon_api(plugin)
+
+    sync["apply"](plugin.catalog, matches,
+        plugin.runtime.table_from({"api": api}))
+
+    assert photo._props["inat_observation_id"] == "7"
+    assert photo._props["inat_quality_grade"] == "research"
+    assert photo._props["inat_taxon_name"] == "Rana temporaria"
+
+
+def test_the_observation_is_not_fetched_again(plugin, sync):
+    """The whole point of doing this here: the observation came down with the
+    list, and asking for it again is one round trip per photo against a limit
+    of a hundred requests a minute."""
+    plugin.set_all_photos([photo_at(plugin, "2024-05-01T10:00:00")])
+    matches, _ = sync["scan"](plugin.catalog, observations(plugin,
+        observed_with_taxon(plugin, 7, "2024-05-01T10:00:00+00:00")))
+    api, _ = taxon_api(plugin)
+    api.getObservation = lambda *a: pytest.fail(
+        "Reverse Sync re-fetched an observation it already had")
+
+    sync["apply"](plugin.catalog, matches, plugin.runtime.table_from({"api": api}))
+
+
+def test_a_repeated_species_is_only_looked_up_once(plugin, sync):
+    """A few thousand observations are usually a few hundred species."""
+    photos = [photo_at(plugin, "2024-05-01T10:00:%02d" % second)
+              for second in range(0, 4)]
+    plugin.set_all_photos(photos)
+    matches, _ = sync["scan"](plugin.catalog, observations(plugin, *[
+        observed_with_taxon(plugin, index, "2024-05-01T10:00:%02d+00:00" % index)
+        for index in range(0, 4)]))
+    api, asked = taxon_api(plugin)
+
+    sync["apply"](plugin.catalog, matches, plugin.runtime.table_from({"api": api}))
+
+    assert asked == [42]
+
+
+def test_linking_without_an_api_still_links(plugin, sync):
+    """The link is the part that must not depend on the network."""
+    photo = photo_at(plugin, "2024-05-01T10:00:00")
+    plugin.set_all_photos([photo])
+    matches, _ = sync["scan"](plugin.catalog, observations(plugin,
+        observed_with_taxon(plugin, 7, "2024-05-01T10:00:00+00:00")))
+
+    done, _ = sync["apply"](plugin.catalog, matches)
+
+    assert done == 1
+    assert photo._props["inat_observation_id"] == "7"
+    assert photo._props["inat_quality_grade"] is None
+
+
+def test_one_bad_observation_does_not_abandon_the_batch(plugin, sync):
+    """Ninety-nine good links should not be lost to the hundredth."""
+    photos = [photo_at(plugin, "2024-05-01T10:00:%02d" % second)
+              for second in range(0, 3)]
+    plugin.set_all_photos(photos)
+    matches, _ = sync["scan"](plugin.catalog, observations(plugin, *[
+        observed_with_taxon(plugin, index, "2024-05-01T10:00:%02d+00:00" % index)
+        for index in range(0, 3)]))
+    matches[2].observation = None
+
+    done, failures = sync["apply"](plugin.catalog, matches)
+
+    assert done == 2
+    assert len(failures) == 1

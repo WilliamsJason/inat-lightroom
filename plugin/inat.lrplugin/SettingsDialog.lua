@@ -450,10 +450,32 @@ function SettingsDialog.reverseSync(context)
   local reviewed = require("ReverseSyncDialog").show(context, matches, summary)
   if not reviewed then return end
 
-  local linked, failures = ReverseSync.apply(LrApplication.activeCatalog(),
-    reviewed)
+  -- A second scope: the review dialog sits between the two phases for as long
+  -- as the user takes over it, and a progress bar left up behind a modal looks
+  -- like work still happening.
+  local linking = LrProgressScope {
+    title           = "iNaturalist Reverse Sync",
+    caption         = "Linking…",
+    functionContext = context,
+  }
 
-  local message = string.format("Linked %d photo(s) to observations.", linked)
+  local linked, failures = ReverseSync.apply(LrApplication.activeCatalog(),
+    reviewed, {
+      -- Passing the API is what turns a link into a sync: keywords, quality
+      -- grade and location get written in the same transaction, so a photo is
+      -- never left linked to an observation it knows nothing else about.
+      api = api,
+      onProgress = function(done, total)
+        linking:setCaption(string.format("Linked %d of %d…", done, total))
+        linking:setPortionComplete(done, total)
+      end,
+    })
+
+  linking:done()
+
+  local message = string.format(
+    "Linked %d photo(s) to observations, with their keywords and location.",
+    linked)
   if #failures > 0 then
     message = message .. string.format("\n%d could not be linked.", #failures)
   end

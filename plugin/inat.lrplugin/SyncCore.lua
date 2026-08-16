@@ -163,6 +163,118 @@ function SyncCore.coordinatesFrom(obs)
   return latitude, longitude, accuracy
 end
 
+--- Write everything an observation says onto a photo.
+--
+-- MUST be called from inside a write transaction. Split from the fetch so that
+-- a caller holding a batch of photos can write them all in one transaction --
+-- Reverse Sync links a hundred at a time -- rather than opening a block per
+-- photo or, worse, nesting one inside another, which Lightroom refuses.
+--
+-- @param taxon  Already resolved, with ancestors. Resolving it makes an HTTP
+--               call, which cannot happen in here: a write transaction blocks
+--               the catalog, and blocking it on the network is how a sync ends
+--               up looking like a hang.
+function SyncCore.writeObservation(catalog, photo, obs, taxon)
+  local obsId = obs.id
+
+  SyncCore.applyTaxon(catalog, photo, taxon)
+
+  photo:setPropertyForPlugin(_PLUGIN, "inat_quality_grade",
+    obs.quality_grade or "")
+  photo:setPropertyForPlugin(_PLUGIN, "inat_observation_url",
+    "https://www.inaturalist.org/observations/" .. tostring(obsId))
+  photo:setPropertyForPlugin(_PLUGIN, "inat_last_synced",
+    LrDate.timeToW3CDate(LrDate.currentTime()))
+
+  -- The UUID is how a photo finds its observation again at publish time, and
+  -- a photo linked by pasting an observation ID has never had one. Storing
+  -- it here is what makes an adopted observation behave like a published one
+  -- rather than getting a duplicate on its next publish.
+  if obs.uuid and obs.uuid ~= "" then
+    photo:setPropertyForPlugin(_PLUGIN, "inat_observation_uuid", obs.uuid)
+  end
+
+  -- Bring the location home, but only into an empty space.
+  --
+  -- The common case this serves: uploaded from a camera with no GPS, placed
+  -- on the map afterwards on the iNaturalist website. Without this the
+  -- catalog never learns where the photo was taken and the Map module stays
+  -- empty forever.
+  --
+  -- Never an overwrite. If the photo already has coordinates then
+  -- iNaturalist's copy came from them in the first place, so there is nothing
+  -- to gain; and in the case where they have genuinely diverged, quietly
+  -- moving a photo the user has already placed is not a sync, it is a
+  -- correction nobody asked for and cannot see happen.
+  local latitude, longitude, accuracy = SyncCore.coordinatesFrom(obs)
+  if latitude and not UploadCore.locationOf(photo) then
+    photo:setRawMetadata("gps", { latitude = latitude, longitude = longitude })
+    logger:info("Applied location from observation " .. tostring(obsId))
+  end
+
+  -- The accuracy is recorded whether or not the coordinates were, because it
+  -- describes what iNaturalist holds and the panel shows it back. Withheld
+  -- when the position was, since an accuracy for a position we declined to
+  -- read describes nothing we know.
+  if latitude and accuracy then
+    photo:setPropertyForPlugin(_PLUGIN, "inat_positional_accuracy",
+      string.format("%d", math.floor(accuracy + 0.5)))
+  end
+end
+
+--- The taxon an observation should be filed under, with its ancestors.
+--
+-- MUST be called from inside a task, and outside a write transaction: it may
+-- make an HTTP call.
+--
+-- The community taxon wins where there is one. It is what iNaturalist itself
+-- displays, and it is the answer several people agreed on rather than the one
+-- the observer first guessed.
+function SyncCore.taxonFor(api, obs)
+  return SyncCore.withAncestors(api, obs.community_taxon or obs.taxon)
+end
+
+--- Bring one photo up to date with an observation already in hand.
+--
+-- The observation is passed in rather than fetched so that Reverse Sync, which
+-- has just downloaded every observation the user has, does not immediately ask
+-- for each one again -- a second round trip per photo, against a rate limit of
+-- 100 requests a minute.
+--
+-- @param write  Optional. Called as write(fn) to run the catalog writes; the
+--               default opens a transaction of its own. Reverse Sync passes
+--               one that does not, because it already holds one open.
+-- @return status, err
+function SyncCore.applyObservation(catalog, photo, obs, api, write)
+  if not obs then return SyncCore.FAILED, "No observation to apply." end
+
+  local taxon = SyncCore.taxonFor(api, obs)
+
+  -- Everything that is not the taxon is written either way. An observation
+  -- nobody has identified yet is the normal state of one just published, and
+  -- its UUID and URL are worth recording now: the UUID is what stops the next
+  -- publish creating a duplicate.
+  local body = function()
+    SyncCore.writeObservation(catalog, photo, obs, taxon)
+  end
+
+  if write then
+    write(body)
+  else
+    catalog:withWriteAccessDo("iNat sync", body)
+  end
+
+  if not taxon then
+    logger:info("Observation " .. tostring(obs.id)
+      .. " has no taxon yet; recorded the rest")
+    return SyncCore.UNIDENTIFIED, nil
+  end
+
+  logger:info("Synced photo → obs=" .. tostring(obs.id)
+    .. " taxon=" .. (taxon.name or "?"))
+  return SyncCore.SYNCED, nil
+end
+
 --- Bring one photo up to date with its observation.
 -- @return status  One of the SyncCore.* codes.
 -- @return err     A message, when status is FAILED.
@@ -172,73 +284,18 @@ function SyncCore.syncPhoto(catalog, photo, api)
     return SyncCore.NO_ID, nil
   end
 
-  -- Fetch observation from iNaturalist
   local obs, err = api:getObservation(tonumber(obsId))
   if not obs then
     return SyncCore.FAILED,
       "Failed to fetch observation " .. obsId .. ": " .. (err or "unknown")
   end
 
-  -- Prefer community_taxon; fall back to taxon
-  local taxon = SyncCore.withAncestors(api, obs.community_taxon or obs.taxon)
+  -- The fetched observation is trusted for everything except its own id, which
+  -- is what the photo is filed under. A response missing it would otherwise
+  -- write a url ending in "nil" over a good one.
+  obs.id = obs.id or tonumber(obsId) or obsId
 
-  -- Everything that is not the taxon is written either way. An observation
-  -- nobody has identified yet is the normal state of one just published, and
-  -- its UUID and URL are worth recording now: the UUID is what stops the next
-  -- publish creating a duplicate.
-  catalog:withWriteAccessDo("iNat sync", function()
-    SyncCore.applyTaxon(catalog, photo, taxon)
-
-    photo:setPropertyForPlugin(_PLUGIN, "inat_quality_grade",
-      obs.quality_grade or "")
-    photo:setPropertyForPlugin(_PLUGIN, "inat_observation_url",
-      "https://www.inaturalist.org/observations/" .. tostring(obsId))
-    photo:setPropertyForPlugin(_PLUGIN, "inat_last_synced",
-      LrDate.timeToW3CDate(LrDate.currentTime()))
-
-    -- The UUID is how a photo finds its observation again at publish time, and
-    -- a photo linked by pasting an observation ID has never had one. Storing
-    -- it here is what makes an adopted observation behave like a published one
-    -- rather than getting a duplicate on its next publish.
-    if obs.uuid and obs.uuid ~= "" then
-      photo:setPropertyForPlugin(_PLUGIN, "inat_observation_uuid", obs.uuid)
-    end
-
-    -- Bring the location home, but only into an empty space.
-    --
-    -- The common case this serves: uploaded from a camera with no GPS, placed
-    -- on the map afterwards on the iNaturalist website. Without this the
-    -- catalog never learns where the photo was taken and the Map module stays
-    -- empty forever.
-    --
-    -- Never an overwrite. If the photo already has coordinates then
-    -- iNaturalist's copy came from them in the first place, so there is nothing
-    -- to gain; and in the case where they have genuinely diverged, quietly
-    -- moving a photo the user has already placed is not a sync, it is a
-    -- correction nobody asked for and cannot see happen.
-    local latitude, longitude, accuracy = SyncCore.coordinatesFrom(obs)
-    if latitude and not UploadCore.locationOf(photo) then
-      photo:setRawMetadata("gps", { latitude = latitude, longitude = longitude })
-      logger:info("Applied location from observation " .. tostring(obsId))
-    end
-
-    -- The accuracy is recorded whether or not the coordinates were, because it
-    -- describes what iNaturalist holds and the panel shows it back. Withheld
-    -- when the position was, since an accuracy for a position we declined to
-    -- read describes nothing we know.
-    if latitude and accuracy then
-      photo:setPropertyForPlugin(_PLUGIN, "inat_positional_accuracy",
-        string.format("%d", math.floor(accuracy + 0.5)))
-    end
-  end)
-
-  if not taxon then
-    logger:info("Observation " .. obsId .. " has no taxon yet; recorded the rest")
-    return SyncCore.UNIDENTIFIED, nil
-  end
-
-  logger:info("Synced photo → obs=" .. obsId .. " taxon=" .. (taxon.name or "?"))
-  return SyncCore.SYNCED, nil
+  return SyncCore.applyObservation(catalog, photo, obs, api)
 end
 
 --------------------------------------------------------------------------------
