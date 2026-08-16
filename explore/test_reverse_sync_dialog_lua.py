@@ -29,11 +29,24 @@ def dialog(plugin):
     return plugin.require("ReverseSyncDialog")
 
 
+def deep(plugin, value):
+    """Convert nested dicts too.
+
+    A Python dict reaching Lua as itself raises KeyError on a missing key
+    rather than reading as nil, so `taxon.preferred_common_name` on a taxon
+    that has none takes out the test instead of exercising the fallback.
+    """
+    if isinstance(value, dict):
+        return plugin.runtime.table_from(
+            {key: deep(plugin, item) for key, item in value.items()})
+    return value
+
+
 def match(plugin, **fields):
     fields.setdefault("path", "/photos/2024 Spring/DSC_0042.NEF")
     observation = fields.pop("observation", {"species_guess": "Common Frog"})
     table = plugin.runtime.table_from(fields)
-    table.observation = plugin.runtime.table_from(observation)
+    table.observation = deep(plugin, observation)
     return table
 
 
@@ -69,6 +82,53 @@ def test_the_row_names_the_species(plugin, dialog):
 
     assert "DSC_0042.NEF" in row
     assert "Common Frog" in row
+
+
+def test_the_row_carries_both_names(plugin, dialog):
+    """A common name is what makes the row scannable; a scientific name is what
+    makes it unambiguous. Confirming a match wants both."""
+    row = dialog["describe"](match(plugin, observation={
+        "taxon": {"preferred_common_name": "Dark Fishing Spider",
+                  "name": "Dolomedes tenebrosus"}}))
+
+    assert "Dark Fishing Spider (Dolomedes tenebrosus)" in row
+
+
+def test_the_communitys_name_beats_the_observers_guess(plugin, dialog):
+    """species_guess is whatever was typed at the time; the taxon is what has
+    been agreed since."""
+    row = dialog["describe"](match(plugin, observation={
+        "species_guess": "some kind of heron",
+        "taxon": {"preferred_common_name": "Grey Heron",
+                  "name": "Ardea cinerea"}}))
+
+    assert "Grey Heron (Ardea cinerea)" in row
+    assert "some kind of heron" not in row
+
+
+def test_a_taxon_with_no_common_name_is_not_repeated(plugin, dialog):
+    """Many taxa report the scientific name in the common-name slot, and
+    "Dolomedes (Dolomedes)" reads as a bug rather than as thoroughness."""
+    row = dialog["describe"](match(plugin, observation={
+        "taxon": {"preferred_common_name": "Dolomedes", "name": "Dolomedes"}}))
+
+    assert "Dolomedes (" not in row
+    assert "Dolomedes" in row
+
+
+def test_a_scientific_name_alone_is_enough(plugin, dialog):
+    row = dialog["describe"](match(plugin, observation={
+        "taxon": {"name": "Dolomedes tenebrosus"}}))
+
+    assert "Dolomedes tenebrosus" in row
+
+
+def test_a_guess_is_used_when_there_is_no_taxon(plugin, dialog):
+    """An observation nobody has identified yet still has to say something."""
+    row = dialog["describe"](match(plugin, observation={
+        "species_guess": "small brown beetle"}))
+
+    assert "small brown beetle" in row
 
 
 def test_a_taxon_is_used_when_there_is_no_guess(plugin, dialog):
@@ -109,6 +169,61 @@ def test_the_caveat_line_is_empty_rather_than_absent(plugin, dialog):
     assert dialog["caveats"](match(plugin)) == ""
 
 
+# -------------------------------------------------------------- diagnostics
+
+def test_an_ordinary_path_is_not_reported(plugin, dialog):
+    """Reporting every row would bury the one that matters."""
+    assert dialog["oddBytes"]("AlienMuffin/20180824_200649.jpg") is None
+
+
+def test_a_non_ascii_byte_is_spelled_out(plugin, dialog):
+    """The whole point: the path prints fine and draws wrong, so the log has to
+    show the bytes rather than the string."""
+    escaped = dialog["oddBytes"]("Bj\xc3\xb6rn/DSC_0042.NEF")
+
+    assert escaped == "Bj\\xC3\\xB6rn/DSC_0042.NEF"
+
+
+def test_a_control_character_is_spelled_out(plugin, dialog):
+    """A stray newline or NUL would end the drawn text with nothing to see."""
+    assert dialog["oddBytes"]("a\nb") == "a\\x0Ab"
+    assert dialog["oddBytes"]("a\0b") == "a\\x00b"
+
+
+def test_a_non_string_is_not_reported(plugin, dialog):
+    assert dialog["oddBytes"](None) is None
+
+
+def test_the_em_dash_in_our_own_separator_is_not_reported(plugin, dialog):
+    """The separator between species and filename is an em dash, so every title
+    holds non-ASCII bytes. Escaping titles rather than paths would flag all 166
+    rows and say nothing about the one that is wrong."""
+    every = matches(plugin, match(plugin))
+
+    assert dialog["logRows"](every, 25) == 0
+
+
+def test_every_unusual_row_is_logged_however_far_down_it_is(plugin, dialog):
+    """The row that prompted this was second, but nothing says the next one
+    will be on the first page."""
+    every = matches(plugin,
+        *[match(plugin) for _ in range(30)],
+        match(plugin, path="Bj\xc3\xb6rn/DSC_0042.NEF"))
+
+    assert dialog["logRows"](every, 5) == 1
+    assert any("may not draw" in line and "row 31" in line
+               for line in plugin.log_lines)
+
+
+def test_the_first_page_is_logged_even_when_it_is_ordinary(plugin, dialog):
+    """If the odd row turns out to be plain ASCII, the truncation is somewhere
+    other than the bytes -- and knowing that needs the rows that worked."""
+    every = matches(plugin, *[match(plugin) for _ in range(8)])
+
+    assert dialog["logRows"](every, 3) == 0
+    assert sum(1 for line in plugin.log_lines if "review row" in line) == 3
+
+
 # -------------------------------------------------------------------- paging
 
 def test_a_short_run_is_one_page(plugin, dialog):
@@ -131,9 +246,18 @@ def test_a_page_covers_its_own_slice(plugin, dialog):
     assert tuple(dialog["pageRange"](2, 60, 25)) == (26, 50)
 
 
-def test_the_last_page_stops_at_the_last_match(plugin, dialog):
-    """Running to 75 would index past the end and put nil in ten rows."""
-    assert tuple(dialog["pageRange"](3, 60, 25)) == (51, 60)
+def test_the_last_page_is_padded_backwards_rather_than_left_short(
+        plugin, dialog):
+    """Hiding surplus rows does not work -- visible binds and does nothing, and
+    page 7 of 7 drew nine empty checkboxes beside placeholder tiles, which reads
+    as nine matches the feature failed to describe. So the last page ends on the
+    last match and begins a full page before it."""
+    assert tuple(dialog["pageRange"](3, 60, 25)) == (36, 60)
+
+
+def test_a_run_shorter_than_a_page_does_not_pad(plugin, dialog):
+    """There is nothing to pad with, and the rows are built to fit."""
+    assert tuple(dialog["pageRange"](1, 16, 25)) == (1, 16)
 
 
 # ---------------------------------------------------------------- selection
@@ -162,22 +286,35 @@ def test_every_row_starts_selected(plugin, dialog):
 def test_the_page_shows_only_its_own_matches(plugin, dialog):
     made, _every, props = pager(plugin, dialog, 7)
 
-    assert props["visible1"] is True
     assert props["status"].startswith("Page 1 of 3")
 
 
-def test_a_short_last_page_hides_its_spare_rows(plugin, dialog):
-    """The rows cannot be removed, so leaving them showing would repeat the
-    previous page's photos under checkboxes that link nothing."""
+def test_no_row_is_ever_left_empty(plugin, dialog):
+    """Seven matches over pages of three: the last page shows 5, 6, 7 rather
+    than 7 and two blanks. The blanks were the bug -- a checkbox beside a
+    placeholder tile with no text looks like a match that failed."""
     made, _every, props = pager(plugin, dialog, 7)
 
     made["turn"](made, 1)
     made["turn"](made, 1)
 
-    assert props["visible1"] is True
-    assert props["visible2"] is False
-    assert props["title2"] == ""
-    assert props["photo2"] is None
+    assert props["title1"] != ""
+    assert props["title2"] != ""
+    assert props["title3"] != ""
+
+
+def test_the_padded_page_repeats_rather_than_invents(plugin, dialog):
+    """The overlap has to be real matches. Selection is keyed by match index,
+    so a match seen twice is one checkbox state, not two."""
+    made, every, props = pager(plugin, dialog, 7)
+
+    made["turn"](made, 1)
+    made["turn"](made, 1)
+    props["selected1"] = False          # match 5, also shown on page 2
+
+    made["turn"](made, -1)              # page 2 is matches 4, 5, 6
+
+    assert props["selected2"] is False
 
 
 def test_unticking_survives_turning_the_page_and_back(plugin, dialog):

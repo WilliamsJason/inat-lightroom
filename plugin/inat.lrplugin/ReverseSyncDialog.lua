@@ -28,9 +28,15 @@
   cannot be added, but f:catalog_photo and f:picture both accept a binding and
   both redraw when it changes. That was probed before this was written.
 
+  Rows cannot be hidden either. `visible = LrView.bind(...)` on an f:row binds
+  and does nothing, so the last page is padded backwards -- it ends on the last
+  match and starts a full page before it -- rather than left short with empty
+  rows in it. See pageRange.
+
   Because the widgets are reused, the answer cannot live in them. Selection is
   an array keyed by match index, and the checkboxes are a view onto the page's
-  slice of it -- read when leaving a page, written when arriving.
+  slice of it -- read when leaving a page, written when arriving. Keying by
+  index is also what makes the overlap on the last page harmless.
 --]]
 
 local LrBinding = import "LrBinding"
@@ -41,6 +47,8 @@ local LrView    = import "LrView"
 
 local MatchCore  = require "MatchCore"
 local ThumbCache = require "ThumbCache"
+
+local logger = require "Log"
 
 local ReverseSyncDialog = {}
 
@@ -65,13 +73,33 @@ function ReverseSyncDialog.shortPath(path)
   return path
 end
 
---- What the observation is of.
+--- What the observation is of, common and scientific.
+--
+-- Both, because neither is sufficient on its own. A common name is what makes
+-- a row scannable -- "Dark Fishing Spider" is recognisable at a glance in a way
+-- that Dolomedes tenebrosus is not -- but common names are ambiguous, regional,
+-- and sometimes shared between unrelated species, so the scientific name is
+-- what makes the row unambiguous. Confirming a match is exactly the moment both
+-- are wanted.
+--
+-- The taxon's own common name is preferred over species_guess: the guess is
+-- whatever the observer typed at the time, and the taxon is what the community
+-- settled on since.
 function ReverseSyncDialog.speciesOf(match)
   local observation = match.observation or {}
-  return observation.species_guess
-    or (observation.taxon and (observation.taxon.preferred_common_name
-                               or observation.taxon.name))
-    or "Unknown species"
+  local taxon = observation.taxon or {}
+
+  local common     = taxon.preferred_common_name or observation.species_guess
+  local scientific = taxon.name
+
+  -- Not both when they are the same word: many taxa have no common name and
+  -- report the scientific one in its place, and "Dolomedes (Dolomedes)" reads
+  -- as a bug rather than as thoroughness.
+  if common and scientific and common ~= scientific then
+    return common .. " (" .. scientific .. ")"
+  end
+
+  return common or scientific or "Unknown species"
 end
 
 --- One row's first line.
@@ -105,18 +133,101 @@ function ReverseSyncDialog.caveats(match)
   return table.concat(notes, "; ")
 end
 
+--- Spell a string out one byte at a time, if any of them are not plain ASCII.
+--
+-- A row turned up in the field showing its species and then nothing at all
+-- where the filename should be -- not "(unknown file)", which is what a missing
+-- path draws, but an empty space. That means the string reached f:static_text
+-- and the string is not what it appears to be.
+--
+-- The likely cause is a byte the control will not draw: Lua has no idea what
+-- encoding a string is in, `#path` counts bytes rather than characters, and a
+-- path that is not valid UTF-8 -- or holds something exotic but legal, like an
+-- emoji or a combining accent -- can end the drawn text early. None of that is
+-- visible by printing the path, because printing it is how it went wrong.
+--
+-- @return the escaped form, or nil when every byte is ordinary
+function ReverseSyncDialog.oddBytes(text)
+  if type(text) ~= "string" then return nil end
+
+  local out, odd = {}, false
+
+  for index = 1, #text do
+    local byte = text:byte(index)
+    if byte >= 32 and byte <= 126 then
+      out[#out + 1] = string.char(byte)
+    else
+      out[#out + 1] = string.format("\\x%02X", byte)
+      odd = true
+    end
+  end
+
+  if not odd then return nil end
+  return table.concat(out)
+end
+
+--- Write what the rows will actually be handed.
+--
+-- The path is what gets escaped, not the whole row: the separator between
+-- species and filename is an em dash, so every title contains non-ASCII bytes
+-- and reporting on titles would report on all of them. That the em dash draws
+-- correctly is itself worth knowing -- it rules out "non-ASCII" as the whole
+-- explanation and points at this particular path.
+--
+-- Every unusual path is logged however far down it is, and the whole of the
+-- first page whether it is unusual or not -- because if the odd row turns out
+-- to be plain ASCII then the truncation is somewhere other than the bytes, and
+-- knowing that needs the rows that worked next to the one that did not.
+function ReverseSyncDialog.logRows(matches, limit)
+  limit = limit or ReverseSyncDialog.PAGE_SIZE
+  local odd = 0
+
+  for index, match in ipairs(matches) do
+    local escaped = ReverseSyncDialog.oddBytes(match.path)
+
+    if escaped then
+      odd = odd + 1
+      logger:warnf("review row %d path has bytes f:static_text may not draw:"
+        .. " %s (%d bytes, species %s)",
+        index, escaped, #match.path, ReverseSyncDialog.speciesOf(match))
+    elseif index <= limit then
+      logger:infof("review row %d: %s (%d bytes, species %s)",
+        index, tostring(match.path), #tostring(match.path),
+        ReverseSyncDialog.speciesOf(match))
+    end
+  end
+
+  return odd
+end
+
 --- How many pages a set of matches needs.
 function ReverseSyncDialog.pageCount(total, pageSize)
   pageSize = pageSize or ReverseSyncDialog.PAGE_SIZE
-  if total <= 0 then return 1 end
-  return math.ceil(total / pageSize)
+  if total <= 0 or pageSize <= 0 then return 1 end
+  return math.ceil(total / math.min(pageSize, total))
 end
 
 --- The first and last match index shown on a page.
+--
+-- The last page is padded backwards rather than left short: it ends on the last
+-- match and begins a full page before it, so every page has exactly as many
+-- matches as there are rows, and the final few rows overlap the previous page.
+--
+-- The obvious alternative is to hide the surplus rows, and it does not work.
+-- `visible = LrView.bind(...)` on an f:row is accepted, binds, and changes
+-- nothing: page 7 of 7 drew all twenty-five rows, nine of them an empty
+-- checkbox beside a placeholder tile, which reads as nine matches the feature
+-- has failed to describe. Rows cannot be added or removed after the dialog is
+-- presented, so the only thing left to control is which matches they point at.
+--
+-- Overlap is safe because selection is keyed by match index: a match shown on
+-- two pages is one checkbox state seen twice, not two.
 function ReverseSyncDialog.pageRange(page, total, pageSize)
-  pageSize = pageSize or ReverseSyncDialog.PAGE_SIZE
-  local first = (page - 1) * pageSize + 1
-  local last  = math.min(first + pageSize - 1, total)
+  pageSize = math.min(pageSize or ReverseSyncDialog.PAGE_SIZE, total)
+  if pageSize <= 0 then return 1, 0 end
+
+  local last  = math.min(page * pageSize, total)
+  local first = math.max(1, last - pageSize + 1)
   return first, last
 end
 
@@ -174,7 +285,8 @@ function Pager.new(matches, props, options)
   local selected = {}
   for index = 1, #matches do selected[index] = true end
 
-  local pageSize = options.pageSize or ReverseSyncDialog.PAGE_SIZE
+  local pageSize = math.min(options.pageSize or ReverseSyncDialog.PAGE_SIZE,
+    math.max(#matches, 1))
 
   return setmetatable({
     matches     = matches,
@@ -219,17 +331,15 @@ function Pager:render()
     local match = index <= last and self.matches[index] or nil
 
     if match then
-      props["visible" .. row]  = true
       props["selected" .. row] = self.selected[index] and true or false
       props["title" .. row]    = ReverseSyncDialog.describe(match)
       props["caveat" .. row]   = ReverseSyncDialog.caveats(match)
       props["photo" .. row]    = match.photo
       props["image" .. row]    = self.placeholder
     else
-      -- The last page is usually short. The rows still exist -- they cannot be
-      -- removed -- so they are emptied and hidden rather than left showing
-      -- whatever the previous page put in them.
-      props["visible" .. row]  = false
+      -- Padding the last page backwards means this should be unreachable. It
+      -- stays because the alternative to clearing a row is leaving the previous
+      -- page's photos under a checkbox that links something else.
       props["selected" .. row] = false
       props["title" .. row]    = ""
       props["caveat" .. row]   = ""
@@ -329,7 +439,6 @@ local function buildRow(f, props, row)
   return f:row {
     spacing        = 8,
     bind_to_object = props,
-    visible        = LrView.bind("visible" .. row),
 
     f:checkbox {
       title = "",
@@ -378,12 +487,13 @@ function ReverseSyncDialog.show(context, matches, summary)
   local pager = Pager.new(matches, props,
     { cache = cache, placeholder = placeholder })
 
+  ReverseSyncDialog.logRows(matches)
+
   -- Every bound property is given a value before any widget asks for it: a
   -- binding to a key the table has never held reads as nil, and f:picture with
   -- no file is exactly the case the placeholder exists to avoid.
   local children = { spacing = 6 }
   for row = 1, pager.pageSize do
-    props["visible" .. row]  = false
     props["selected" .. row] = false
     props["title" .. row]    = ""
     props["caveat" .. row]   = ""

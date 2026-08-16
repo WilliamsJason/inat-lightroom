@@ -296,8 +296,37 @@ stubs for `createKeyword`, `withWriteAccessDo` and `LrHttp` refuse to run while
 one is. Reverting the fix makes the test fail with the same error Lightroom
 gave, which is the only way to know the guard guards anything.
 
-## `f:edit_text` is Mac-only
+## A bound `visible` does not hide a row
 
+`visible` is documented as a view property and is accepted on an `f:row`
+without complaint:
+
+```lua
+f:row {
+  bind_to_object = props,
+  visible = LrView.bind("visible" .. row),
+  ...
+}
+```
+
+It binds, the property changes, and the row keeps drawing. Setting it false
+left nine rows on the last page of the Reverse Sync review list showing an
+empty checkbox beside a placeholder tile -- which reads as nine matches the
+feature failed to describe, rather than as nine rows that should not be there.
+
+Combined with the view tree being fixed once a dialog is presented -- rows
+cannot be added or removed -- the only thing a paged list can control is which
+data its rows point at. So the last page is padded backwards: it ends on the
+last item and begins a full page before it, overlapping the previous page,
+rather than being left short. That is only safe because selection is keyed by
+item index rather than held in the widgets, so an item shown on two pages is
+one answer seen twice.
+
+Not established: whether `visible` works on other view types, or only fails to
+collapse layout while still hiding content. Neither was worth another probe
+once the padding removed the need for it.
+
+## `f:edit_text` is Mac-only
 In `ui.dll`'s factory constant list it sits directly behind a `MAC_ENV` guard:
 
 ```
