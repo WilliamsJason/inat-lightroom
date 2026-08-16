@@ -50,7 +50,7 @@ return {
     -- where the controls actually are.
     {
       formatter = "com.adobe.label",
-      label     = LOC "$$$/iNatLightroom/Tagset/Hint=Edit in File > Plug-in Extras > Pinning Panel",
+      label     = LOC "$$$/iNatLightroom/Tagset/Hint=Edit in File > Plug-in Extras > Pinned Panel",
     },
 
     prefix .. "inat_species_guess",

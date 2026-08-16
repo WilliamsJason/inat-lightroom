@@ -430,7 +430,7 @@ function SettingsDialog.show()
     }
 
     local result = LrDialogs.presentModalDialog {
-      title      = "Pinning Settings",
+      title      = "Pinned Settings",
       contents   = contents,
       actionVerb = "Save",
       otherVerb  = "Clear Stored Credentials",

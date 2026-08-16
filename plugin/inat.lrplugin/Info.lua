@@ -108,18 +108,18 @@ return {
   -- both of these items open floating windows that work from anywhere, and
   -- neither is an operation on the selected photos.
   --
-  -- "Pinning", not "iNaturalist": Plug-in Extras is one flat shared submenu,
+  -- "Pinned", not "iNaturalist": Plug-in Extras is one flat shared submenu,
   -- so these items sit directly alongside those of every other installed
   -- plugin, and lr-inaturalist-publish puts its own unprefixed items in the
   -- same list. The item text is the only thing distinguishing them.
   LrExportMenuItems = {
     {
-      title = LOC "$$$/iNatLightroom/Menu/Panel=Pinning Panel",
+      title = LOC "$$$/iNatLightroom/Menu/Panel=Pinned Panel",
       file  = "ObservationPanelMenu.lua",
       id    = "inat_panel",
     },
     {
-      title = LOC "$$$/iNatLightroom/Menu/Settings=Pinning Settings…",
+      title = LOC "$$$/iNatLightroom/Menu/Settings=Pinned Settings…",
       file  = "SettingsMenu.lua",
       id    = "inat_settings",
     },

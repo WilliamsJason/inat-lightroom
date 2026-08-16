@@ -67,7 +67,7 @@ and replace the folder by hand.
 
 ## First-time setup
 
-Go to **File → Plug-in Extras → Pinning Settings…** and open the
+Go to **File → Plug-in Extras → Pinned Settings…** and open the
 **Account** tab.
 
 ### Option 1 — paste an API token (works today)
@@ -113,7 +113,7 @@ service](#why-there-is-no-publish-service).
 
 ### The Pinned panel
 
-**File → Plug-in Extras → Pinning Panel** opens a window that follows
+**File → Plug-in Extras → Pinned Panel** opens a window that follows
 whatever is selected in the filmstrip. It shows what the selection currently is
 on iNaturalist — observation ID, taxon, common name, quality grade, last sync —
 and carries every action.
@@ -293,7 +293,7 @@ disagreeing with itself. Posting a new identification withdraws the old one.
 
 ### The settings window
 
-**File → Plug-in Extras → Pinning Settings…**, in three tabs:
+**File → Plug-in Extras → Pinned Settings…**, in three tabs:
 
 - **Account** — credentials, as above.
 - **Observations** — what new observations say: geoprivacy, whether to send the

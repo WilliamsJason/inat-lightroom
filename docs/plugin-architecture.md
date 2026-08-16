@@ -56,7 +56,7 @@ Only the second half can be tested outside Lightroom, so the split is drawn to
 leave as little as possible on the untestable side.
 
 `File > Plug-in Extras` holds two items, and both of them only *open*
-something: **Pinning Panel** and **Pinning Settings…**. That is the test
+something: **Pinned Panel** and **Pinned Settings…**. That is the test
 for whether something belongs in the menu — features live where the user is
 already looking, and a menu is somewhere you have to go.
 

@@ -1,7 +1,7 @@
 --[[
   SettingsMenu.lua
   ----------------
-  File > Plug-in Extras > "Pinning Settings…".
+  File > Plug-in Extras > "Pinned Settings…".
 
   Was "Set Up Credentials". It covers more than credentials now -- the publish
   service's settings had nowhere else to go once it was removed -- but the
