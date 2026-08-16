@@ -315,6 +315,72 @@ def test_transport_failures_report_the_underlying_reason(api_pair):
 
 
 # ---------------------------------------------------------------------------
+# Who we are
+# ---------------------------------------------------------------------------
+
+
+def test_the_account_is_looked_up_before_searching(api_pair_with):
+    """user_id=me reads like it should work and does not: the search endpoint
+    answers HTTP 422 Unknown user_id me, because user_id is an index filter and
+    the index holds numbers. This is what shipped broken."""
+    plugin, api, pages = api_pair_with(Pages(3))
+
+    plugin.call(api.listObservations, api, plugin.eval("{}"))
+
+    assert "/users/me" in pages.requests[0]["url"]
+    assert "user_id=4242" in pages.searches[0]["url"]
+    assert not any("user_id=me" in r["url"] for r in pages.requests)
+
+
+def test_the_account_is_only_looked_up_once(api_pair_with):
+    """It cannot change while a token is in use, and asking again would put a
+    round trip in front of every search."""
+    plugin, api, pages = api_pair_with(Pages(500))
+
+    plugin.call(api.listObservations, api, plugin.eval("{ perPage = 200 }"))
+
+    identity = [r for r in pages.requests if "/users/me" in r["url"]]
+    assert len(identity) == 1
+    assert len(pages.searches) == 3
+
+
+def test_currentUser_returns_the_account(api_pair_with):
+    plugin, api, _ = api_pair_with(Pages(0))
+
+    user, err = plugin.call(api.currentUser, api)
+
+    assert err is None
+    assert user.id == 4242
+    assert user.login == "naturalist"
+
+
+def test_a_failed_lookup_stops_the_listing(api_pair):
+    """Better a plain "who are you" failure than a search filtered by nothing,
+    which would return every observation on iNaturalist."""
+    plugin, api, _ = api_pair
+    plugin.set_http_handler(
+        lambda *_args: ('{"error":"Unauthorized"}', plugin.eval("{status = 401}")))
+
+    observations, err = plugin.call(api.listObservations, api, plugin.eval("{}"))
+
+    assert observations is None
+    assert err is not None
+
+
+def test_a_response_without_an_id_is_refused(api_pair):
+    """An empty results array would otherwise become user_id=nil, which the
+    query builder drops, leaving a search across everybody's observations."""
+    plugin, api, _ = api_pair
+    plugin.set_http_handler(
+        lambda *_args: ('{"total_results":0,"results":[]}', plugin.eval("{status = 200}")))
+
+    user, err = plugin.call(api.currentUser, api)
+
+    assert user is None
+    assert "account" in err
+
+
+# ---------------------------------------------------------------------------
 # Listing every observation
 # ---------------------------------------------------------------------------
 
@@ -338,6 +404,14 @@ class Pages:
     def __call__(self, method, url, body, _headers):
         self.requests.append({"method": method, "url": url})
 
+        # The search endpoints have no notion of "me", so the client has to ask
+        # who it is before it can ask what it owns.
+        if "/users/me" in url:
+            return json.dumps({
+                "total_results": 1,
+                "results": [{"id": 4242, "login": "naturalist"}],
+            }), {"status": 200}
+
         id_above = int(re.search(r"id_above=(\d+)", url).group(1))
         per_page = int(re.search(r"per_page=(\d+)", url).group(1))
         per_page = min(per_page, self.per_page_cap)
@@ -347,6 +421,11 @@ class Pages:
             "total_results": len(self.observations),
             "results": remaining[:per_page],
         }), {"status": 200}
+
+    @property
+    def searches(self) -> list[dict]:
+        """The observation requests, without the identity lookup in front."""
+        return [r for r in self.requests if "/users/me" not in r["url"]]
 
 
 def test_lists_every_observation_across_pages(api_pair_with):
@@ -368,11 +447,11 @@ def test_pages_by_cursor_rather_than_page_number(api_pair_with):
 
     plugin.call(api.listObservations, api, plugin.eval("{ perPage = 200 }"))
 
-    assert all("id_above=" in request["url"] for request in pages.requests)
-    assert not any("&page=" in request["url"] for request in pages.requests)
+    assert all("id_above=" in request["url"] for request in pages.searches)
+    assert not any("&page=" in request["url"] for request in pages.searches)
 
     cursors = [int(re.search(r"id_above=(\d+)", r["url"]).group(1))
-               for r in pages.requests]
+               for r in pages.searches]
     assert cursors == [0, 200, 400]
 
 
@@ -383,8 +462,8 @@ def test_asks_for_ascending_id_order(api_pair_with):
 
     plugin.call(api.listObservations, api, plugin.eval("{ perPage = 200 }"))
 
-    assert "order_by=id" in pages.requests[0]["url"]
-    assert "order=asc" in pages.requests[0]["url"]
+    assert "order_by=id" in pages.searches[0]["url"]
+    assert "order=asc" in pages.searches[0]["url"]
 
 
 def test_a_short_page_ends_it(api_pair_with):
@@ -394,7 +473,7 @@ def test_a_short_page_ends_it(api_pair_with):
 
     plugin.call(api.listObservations, api, plugin.eval("{ perPage = 200 }"))
 
-    assert len(pages.requests) == 1
+    assert len(pages.searches) == 1
 
 
 def test_an_exact_multiple_takes_one_extra_page(api_pair_with):
@@ -406,7 +485,7 @@ def test_an_exact_multiple_takes_one_extra_page(api_pair_with):
                                   plugin.eval("{ perPage = 200 }"))
 
     assert len(observations) == 400
-    assert len(pages.requests) == 3
+    assert len(pages.searches) == 3
 
 
 def test_no_observations_is_not_an_error(api_pair_with):
@@ -451,7 +530,7 @@ def test_can_be_stopped_between_pages(api_pair_with):
     observations, _ = plugin.call(api.listObservations, api, options)
 
     assert len(observations) == 200
-    assert len(pages.requests) == 1
+    assert len(pages.searches) == 1
 
 
 def test_a_failed_page_fails_the_whole_call(api_pair):

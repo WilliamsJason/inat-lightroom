@@ -279,6 +279,34 @@ function InatAPI.buildKeywordPath(taxon, root)
 end
 
 --------------------------------------------------------------------------------
+-- Who we are
+--------------------------------------------------------------------------------
+
+--- GET /users/me -- the account the stored token belongs to.
+--
+-- Needed because the search endpoints have no notion of "me". `user_id=me`
+-- looks like it ought to work, and every other API this plugin talks to would
+-- accept it; iNaturalist answers HTTP 422 `Unknown user_id me`, because
+-- user_id there is an index filter and the index holds numbers, not pronouns.
+--
+-- Cached on the client. The answer cannot change while a token is in use, and
+-- the alternative is an extra round trip in front of every search.
+function InatAPI:currentUser()
+  if self._currentUser then return self._currentUser, nil end
+
+  local payload, err = apiGet(API_V1 .. "/users/me", nil, self.token)
+  if not payload then return nil, err end
+
+  local user = firstResult(payload)
+  if not user or not user.id then
+    return nil, "iNaturalist did not say which account this token belongs to."
+  end
+
+  self._currentUser = user
+  return user, nil
+end
+
+--------------------------------------------------------------------------------
 -- Observations
 --------------------------------------------------------------------------------
 
@@ -325,7 +353,10 @@ function InatAPI:findObservationByUuid(uuid)
   return results[1], nil
 end
 
---- GET /observations?user_id=me -- every observation, in id order.
+--- GET /observations?user_id=... -- every observation of yours, in id order.
+--
+-- The id is looked up rather than assumed: see currentUser, which exists
+-- because "me" is not a user id.
 --
 -- Cursor pagination, not page numbers. `page` × `per_page` is capped at 10,000
 -- by the API, so a user with more observations than that simply cannot reach
@@ -345,6 +376,9 @@ end
 function InatAPI:listObservations(options)
   options = options or {}
 
+  local user, userErr = self:currentUser()
+  if not user then return nil, userErr end
+
   local perPage    = options.perPage or 200
   local observations = {}
   local idAbove   = 0
@@ -352,7 +386,7 @@ function InatAPI:listObservations(options)
 
   while true do
     local params = {
-      user_id  = "me",
+      user_id  = user.id,
       order_by = "id",
       order    = "asc",
       per_page = perPage,

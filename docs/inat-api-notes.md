@@ -585,3 +585,24 @@ Two things this does **not** establish:
 Both vision endpoints require authentication — an unauthenticated call returns
 `{"error":"Unauthorized","status":401}` — so neither can be probed without a
 token, and neither appears in `/v1/swagger.json`.
+
+## `user_id=me` is not a thing
+
+The search endpoints take `user_id` as an index filter, and the index holds
+numbers. Passing `me` is not ignored and does not fall back to the token's
+owner -- it fails the whole request:
+
+    GET /v1/observations?user_id=me&id_above=0
+    HTTP 422 {"error":"Unknown user_id me","status":422}
+
+Which is the good outcome. The bad one is the near miss: a query built with an
+absent user id drops the parameter and searches *everybody's* observations,
+returning a plausible first page of results belonging to strangers.
+
+So the id has to be looked up: `GET /v1/users/me` returns the account in the
+usual `results` array, and `InatAPI:currentUser` caches it on the client. It
+cannot change while a token is in use, and without the cache every search pays
+an extra round trip against a limit of 100 requests a minute.
+
+Note this is only true of the *search* endpoints. Elsewhere in the API `me`
+does work -- which is what makes it look safe.

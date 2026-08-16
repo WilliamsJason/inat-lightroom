@@ -227,12 +227,12 @@ local function observationsTab(f, props, actions)
       f:separator { fill_horizontal = 1 },
       f:spacer { height = 6 },
 
-      f:static_text { title = "Observations without a photo", font = "<system/bold>" },
+      f:static_text { title = "Observations not linked", font = "<system/bold>" },
       f:static_text {
-        title = "Looks through your iNaturalist observations for ones whose\n"
-          .. "photo is in this catalog but not yet linked — the ones recorded\n"
-          .. "on a phone, or uploaded from somewhere else. You choose what\n"
-          .. "gets linked before anything is written.",
+        title = "Looks through your iNaturalist observations for ones where the\n"
+          .. "matching photo in your catalog does not have the linked\n"
+          .. "iNaturalist metadata. You choose what gets linked before\n"
+          .. "anything is written.",
         width           = 500,
         height_in_lines = 4,
       },
