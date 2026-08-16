@@ -303,10 +303,16 @@ function ReverseSync.apply(catalog, matches, options)
           -- malformed enough to have failed, it is malformed enough to fail
           -- again here, and an error raised while recording an error would
           -- take out the batch the pcall above just saved.
+          local id = observation and observation.id or "unknown"
           failures[#failures + 1] = {
-            observation = observation and observation.id or "unknown",
+            observation = id,
             message     = tostring(err),
           }
+          -- Logged as well as counted. Told only that "1 could not be linked",
+          -- with nothing in the log and no way to ask again, there is nothing
+          -- the user or anyone helping them can do next.
+          logger:warn("Reverse sync could not link observation "
+            .. tostring(id) .. ": " .. tostring(err))
         end
       end
     end)

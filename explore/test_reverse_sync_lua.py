@@ -430,3 +430,31 @@ def test_one_bad_observation_does_not_abandon_the_batch(plugin, sync):
 
     assert done == 2
     assert len(failures) == 1
+
+
+def test_a_failure_is_logged_not_only_counted(plugin, sync):
+    """Told "1 could not be linked" with nothing in the log, neither the user
+    nor anyone helping them has anywhere to go next."""
+    photo = plugin.new_photo(path="C:/photos/one.jpg")
+    match = plugin.eval("""
+      function(photo)
+        return {
+          selected = true,
+          photo    = photo,
+          observation = { id = 4242, uuid = "u-4242" },
+        }
+      end
+    """)(photo)
+
+    upload = plugin.require("UploadCore")
+    upload.writeObservationFields = plugin.eval(
+        'function() error("catalog said no", 0) end')
+
+    linked, failures = sync.apply(
+        plugin.catalog, plugin.eval("function(m) return { m } end")(match))
+
+    assert linked == 0
+    assert len(list(failures.values())) == 1
+    logged = " ".join(plugin.log_lines)
+    assert "4242" in logged
+    assert "catalog said no" in logged

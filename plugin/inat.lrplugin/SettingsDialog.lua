@@ -496,6 +496,15 @@ function SettingsDialog.reverseSyncNow(context)
     linked)
   if #failures > 0 then
     message = message .. string.format("\n%d could not be linked.", #failures)
+    -- One reason, verbatim. A count on its own tells the user that something
+    -- went wrong and gives them nowhere to go with it; the message at least
+    -- names the observation and what the catalog objected to. The rest are in
+    -- the log, which is where a list of them belongs.
+    local first = failures[1]
+    if first and first.message then
+      message = message .. string.format("\n\nFirst failure (observation %s):\n%s",
+        tostring(first.observation), tostring(first.message))
+    end
   end
   LrDialogs.message("iNaturalist Reverse Sync", message, "info")
 end
