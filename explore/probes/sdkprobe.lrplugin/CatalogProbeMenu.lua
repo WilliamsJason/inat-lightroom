@@ -23,6 +23,7 @@
 local LrApplication     = import "LrApplication"
 local LrDialogs         = import "LrDialogs"
 local LrFunctionContext = import "LrFunctionContext"
+local LrProgressScope   = import "LrProgressScope"
 local LrTasks           = import "LrTasks"
 
 local Report = require "Report"
@@ -61,15 +62,26 @@ local function trySearch(report, catalog, label, argument)
   return photos
 end
 
-local function run(_context)
+local function run(context)
   local catalog = LrApplication.activeCatalog()
   local report  = Report.new("iNat SDK Probe - Catalog APIs")
+
+  -- Several of the calls below are slow by nature on a large catalog, and this
+  -- probe exists precisely because nobody knows how slow. Without a scope the
+  -- wait is indistinguishable from a hang -- which is how the first run of this
+  -- probe was read, correctly enough, as "no UI appeared".
+  local scope = LrProgressScope {
+    title            = "iNat SDK probe: catalog APIs",
+    functionContext  = context,
+  }
+  report:track(scope)
 
   report:add("=== Catalog API probe ===")
   report:addf("catalog path: %s", tostring(catalog:getPath()))
   report:blank()
 
   -- ---------------------------------------------------------------- exists
+  report:step("Method availability")
   report:add("Method availability (LrCatalog):")
   local methods = {
     "findPhotos", "findPhotosWithProperty", "getAllPhotos",
@@ -82,6 +94,7 @@ local function run(_context)
   report:blank()
 
   -- ------------------------------------------------------------ everything
+  report:step("getAllPhotos")
   report:add("Baseline:")
   local took, allPhotos = Report.timed(function()
     return catalog:getAllPhotos()
@@ -96,6 +109,7 @@ local function run(_context)
   --   == != > < inLast notInLast in today yesterday thisWeek thisMonth ...
   -- so "in" is a real operation. What is not visible in the strings is which
   -- table shape findPhotos wants it wrapped in.
+  report:step("findPhotos shapes")
   report:add("findPhotos searchDesc shapes (capture time 2000-01-01 .. 2035-01-01):")
 
   local rangeFlat = {
@@ -139,6 +153,7 @@ local function run(_context)
     sample[i] = allPhotos[i]
   end
 
+  report:step("batchGetRawMetadata vs loop")
   report:addf("Metadata reads over a %d photo sample:", #sample)
 
   if #sample > 0 then
@@ -184,6 +199,7 @@ local function run(_context)
   -- findPhotosWithProperty answers that today, one photo at a time after the
   -- fact; batchGetPropertyForPlugin would answer it in one call, if its
   -- signature is what the string table suggests.
+  report:step("Plugin property reads")
   report:add("Plugin property reads:")
 
   local linkedTook, linked, linkedErr = Report.timed(function()
@@ -216,13 +232,17 @@ local function run(_context)
 
   report:blank()
   report:add("=== end ===")
+  scope:done()
   report:show()
 end
 
 LrFunctionContext.postAsyncTaskWithContext("inat_probe_catalog", function(context)
   local ok, err = LrTasks.pcall(run, context)
   if not ok then
-    LrDialogs.message("iNat SDK Probe", "Probe failed:\n\n" .. tostring(err),
+    -- The log has already been flushed line by line, so it holds everything up
+    -- to the call that failed even though this dialog holds only the error.
+    LrDialogs.message("iNat SDK Probe", "Probe failed:\n\n" .. tostring(err) ..
+      "\n\nPartial results were written to inat-sdk-probe.txt on the Desktop.",
       "critical")
   end
 end)

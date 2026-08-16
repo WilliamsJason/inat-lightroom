@@ -4,7 +4,7 @@
   Collects probe output, shows it, and writes it beside the catalog so a result
   can be pasted into an issue rather than transcribed off a screenshot.
 
-  A modal with a read-only edit_text rather than LrDialogs.message: message
+  A modal with a read-only edit_field rather than LrDialogs.message: message
   truncates, cannot be scrolled, and cannot be selected to copy.
 --]]
 
@@ -17,12 +17,44 @@ local LrView      = import "LrView"
 local Report = {}
 Report.__index = Report
 
+--- Where the running log goes. Desktop is redirected into OneDrive on some
+-- machines; getStandardFilePath follows the redirect, $HOME\Desktop does not.
+local function logPath()
+  local folder = LrPathUtils.getStandardFilePath("desktop")
+  return LrPathUtils.child(folder, "inat-sdk-probe.txt")
+end
+
 function Report.new(title)
-  return setmetatable({ title = title, lines = {} }, Report)
+  local self = setmetatable({ title = title, lines = {} }, Report)
+
+  -- The log is opened now and every line is flushed as it is produced, rather
+  -- than written in one go at the end. A probe measures calls that may be slow
+  -- enough to look like a hang, and a probe that dies or is given up on part
+  -- way through is exactly the run whose output is most worth having: the last
+  -- line in the file names the call that did not come back.
+  local ok, handle = pcall(function()
+    self.path = logPath()
+    return io.open(self.path, "a")
+  end)
+  self.handle = ok and handle or nil
+
+  self:add(string.format("### %s  %s", tostring(title),
+    LrDate.timeToUserFormat(LrDate.currentTime(), "%Y-%m-%d %H:%M:%S")))
+  return self
 end
 
 function Report:add(line)
-  self.lines[#self.lines + 1] = tostring(line)
+  line = tostring(line)
+  self.lines[#self.lines + 1] = line
+
+  if self.handle then
+    -- Flushed per line on purpose: an unflushed buffer is empty at precisely
+    -- the moment the file is being read to find out what went wrong.
+    pcall(function()
+      self.handle:write(line, "\n")
+      self.handle:flush()
+    end)
+  end
 end
 
 function Report:addf(format, ...)
@@ -36,6 +68,21 @@ end
 
 function Report:text()
   return table.concat(self.lines, "\n")
+end
+
+--- Attach a progress scope, so a slow phase is visible in Lightroom rather than
+-- looking like a hang. Optional: the log alone tells the story after the fact,
+-- but not while waiting.
+function Report:track(scope)
+  self.scope = scope
+end
+
+--- Announce the phase about to start, in the progress bar and in the log.
+function Report:step(caption)
+  if self.scope then
+    pcall(function() self.scope:setCaption(caption) end)
+  end
+  self:add("[" .. caption .. "]")
 end
 
 --- Seconds since some fixed point, as a float. LrDate.currentTime is the only
@@ -72,25 +119,20 @@ function Report.timed(f, ...)
   return took, results[2], nil
 end
 
---- Write the report next to the catalog and show it.
+--- Close the running log and show what was collected.
 function Report:show()
   local body = self:text()
-  local path = nil
 
-  -- io.open in append mode rather than LrFileUtils.readFile and a rewrite:
-  -- plain io does not yield, so it works from anywhere, and appending is what
-  -- was wanted anyway. A probe run is usually one of several, and losing the
-  -- previous answer to run the next one is a poor trade.
-  local ok = pcall(function()
-    local folder = LrPathUtils.getStandardFilePath("desktop")
-    path = LrPathUtils.child(folder, "inat-sdk-probe.txt")
-    local handle = io.open(path, "a")
-    handle:write(body .. "\n\n")
-    handle:close()
-  end)
+  if self.handle then
+    pcall(function()
+      self.handle:write("\n")
+      self.handle:close()
+    end)
+    self.handle = nil
+  end
 
-  if ok and path then
-    body = body .. "\n\nWritten to " .. path
+  if self.path then
+    body = body .. "\n\nWritten to " .. self.path
   end
 
   -- edit_field, not edit_text. **edit_text is Mac-only**: in ui.dll's factory
