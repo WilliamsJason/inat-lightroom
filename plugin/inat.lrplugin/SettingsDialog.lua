@@ -32,7 +32,6 @@ local Settings = require "Settings"
 local logger   = require "Log"
 
 local TOKEN_URL = "https://www.inaturalist.org/users/api_token"
-local APP_URL   = "https://www.inaturalist.org/oauth/applications/new"
 
 local SettingsDialog = {}
 
@@ -65,10 +64,6 @@ SettingsDialog.METADATA_ITEMS = {
 
 --- Describe the freshness of the stored token in plain language.
 local function tokenStatusText()
-  if InatAuth.hasOAuthApp() then
-    return "An OAuth application is configured. Tokens refresh automatically."
-  end
-
   local remaining = InatAuth.tokenSecondsRemaining()
   if not remaining then
     return "No token stored yet."
@@ -128,33 +123,21 @@ local function accountTab(f, props)
       f:separator { fill_horizontal = 1 },
       f:spacer { height = 6 },
 
-      f:static_text { title = "Option 2: OAuth application", font = "<system/bold>" },
+      -- No fields here on purpose. This offered an OAuth application using the
+      -- password grant: app id, app secret, iNaturalist username and password.
+      -- It worked, which is what made it worth removing rather than leaving --
+      -- iNaturalist recommends against the password grant, and against it
+      -- particularly in distributed applications, because it means typing an
+      -- account password into someone else's software. Sign-in in the browser
+      -- is the replacement, and a field that cannot be filled in wrongly is
+      -- better than one that can.
+      f:static_text { title = "Option 2: Sign in with iNaturalist", font = "<system/bold>" },
       f:static_text {
-        title = "Refreshes tokens automatically, so you are never prompted "
-          .. "again.\niNaturalist requires manual approval before you can "
-          .. "create an application.",
+        title = "Coming soon. This will hand you to iNaturalist to sign in, "
+          .. "then keep\nitself topped up so you are never asked again. Your "
+          .. "password stays with\niNaturalist -- the plugin never sees it.",
         width           = 500,
-        height_in_lines = 2,
-      },
-      f:push_button {
-        title  = "Apply for an Application",
-        action = function() LrHttp.openUrlInBrowser(APP_URL) end,
-      },
-      f:row {
-        f:static_text { title = "App ID:", width = LABEL, alignment = "right" },
-        f:edit_field { value = LrView.bind("app_id"), width = 380, immediate = true },
-      },
-      f:row {
-        f:static_text { title = "App Secret:", width = LABEL, alignment = "right" },
-        f:password_field { value = LrView.bind("app_secret"), width = 380, immediate = true },
-      },
-      f:row {
-        f:static_text { title = "Username:", width = LABEL, alignment = "right" },
-        f:edit_field { value = LrView.bind("username"), width = 380, immediate = true },
-      },
-      f:row {
-        f:static_text { title = "Password:", width = LABEL, alignment = "right" },
-        f:password_field { value = LrView.bind("user_pass"), width = 380, immediate = true },
+        height_in_lines = 3,
       },
     },
   }
@@ -335,16 +318,9 @@ function SettingsDialog.savePreferences(props)
   end
 end
 
---- Store whichever set of credentials was filled in.
--- @return "oauth", "token", or nil plus a message when nothing usable was given
+--- Store the pasted token, if one was given.
+-- @return "token", or nil plus a message when nothing usable was given
 function SettingsDialog.saveCredentials(props)
-  if props.app_id ~= "" and props.app_secret ~= ""
-     and props.username ~= "" and props.user_pass ~= "" then
-    InatAuth.storeOAuthApp(props.app_id, props.app_secret,
-      props.username, props.user_pass)
-    return "oauth", nil
-  end
-
   if props.api_token ~= "" then
     local ok, err = InatAuth.storeApiToken(props.api_token)
     if not ok then
@@ -426,10 +402,6 @@ function SettingsDialog.show()
     local props = LrBinding.makePropertyTable(context)
 
     props.api_token  = ""
-    props.app_id     = ""
-    props.app_secret = ""
-    props.username   = InatAuth.getStoredUsername() or ""
-    props.user_pass  = ""
     props.status     = tokenStatusText()
 
     for key, value in pairs(Settings.all()) do

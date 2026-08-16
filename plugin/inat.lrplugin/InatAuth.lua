@@ -15,16 +15,27 @@
   The request is silently processed as an anonymous user, so writes fail in
   ways that are very hard to diagnose. Always send the JWT.
 
-  Two ways to obtain one:
+  One way to obtain one today: the user signs in at inaturalist.org, opens
+  /users/api_token, and pastes the JWT into the setup dialog. It must be
+  repeated every 24 hours.
 
-    1. Manual JWT (works today, no application registration).
-       The user signs in at inaturalist.org, opens /users/api_token, and
-       pastes the token into the setup dialog. Must be repeated every 24 h.
+  This module used to offer a second way -- an OAuth application using the
+  password grant, which exchanged the user's iNaturalist username and password
+  for a never-expiring access token and minted JWTs from it. It worked, and it
+  is gone anyway. iNaturalist recommends against the password grant and
+  specifically against it in publicly distributed applications, because it
+  requires typing an account password into third-party software. The advice is
+  the authorization code flow with PKCE, which sends the user to iNaturalist to
+  sign in and never lets the plugin near the password.
 
-    2. OAuth application (requires approval from iNaturalist; accounts need
-       to be 2+ months old with 10+ improving identifications in the last
-       month). Once configured, the never-expiring OAuth token mints fresh
-       JWTs automatically and the user never sees a prompt again.
+  It was also impractical: the app id and secret are per-application, and
+  iNaturalist reviews applications by hand, so every user would have needed
+  their own approved application before the fields did anything.
+
+  The authorization code flow is not built yet. URLHandler.lua and
+  PluginUrls.lua already exist to receive its redirect -- that is what
+  Info.lua's URLHandler entry is for -- so what remains is the exchange
+  itself. Until then, the pasted JWT is the only path.
 
   Secrets are held by LrPasswords, which is backed by the OS credential
   vault. Non-secret bookkeeping (when the JWT was obtained, which mode is in
@@ -47,10 +58,7 @@ local API_V1   = "https://api.inaturalist.org/v1"
 -- LrPasswords keys. LrPasswords is already scoped to this plugin, so these
 -- do not need the toolkit identifier prefixed.
 local KEY_API_TOKEN  = "api_token"
-local KEY_APP_ID     = "app_id"
-local KEY_APP_SECRET = "app_secret"
-local KEY_USERNAME   = "username"
-local KEY_USER_PASS  = "user_pass"
+
 
 -- iNaturalist JWTs last 24 hours. Refresh early so a long export does not
 -- expire midway through.
@@ -149,36 +157,8 @@ function InatAuth.storeApiToken(raw)
   return true, nil
 end
 
---- Store OAuth application credentials for automatic JWT refresh.
-function InatAuth.storeOAuthApp(appId, appSecret, username, userPass)
-  store(KEY_APP_ID, appId)
-  store(KEY_APP_SECRET, appSecret)
-  store(KEY_USERNAME, username)
-  store(KEY_USER_PASS, userPass)
-  prefs.authMode = "oauth_app"
-  -- Force the next call to mint a fresh token.
-  prefs.apiTokenObtainedAt = nil
-  prefs.apiTokenExpiresAt  = nil
-  logger:info("Stored OAuth application credentials")
-  return true, nil
-end
-
-function InatAuth.hasOAuthApp()
-  return retrieve(KEY_APP_ID) ~= nil
-     and retrieve(KEY_APP_SECRET) ~= nil
-     and retrieve(KEY_USERNAME) ~= nil
-     and retrieve(KEY_USER_PASS) ~= nil
-end
-
-function InatAuth.getStoredUsername()
-  return retrieve(KEY_USERNAME)
-end
-
 function InatAuth.clear()
-  for _, key in ipairs({ KEY_API_TOKEN, KEY_APP_ID, KEY_APP_SECRET,
-                         KEY_USERNAME, KEY_USER_PASS }) do
-    store(key, "")
-  end
+  store(KEY_API_TOKEN, "")
   prefs.apiTokenObtainedAt = nil
   prefs.apiTokenExpiresAt  = nil
   prefs.authMode = nil
@@ -222,147 +202,38 @@ local function cachedTokenIfUsable()
 end
 
 --------------------------------------------------------------------------------
--- OAuth application flow
---------------------------------------------------------------------------------
-
---- Percent-encode a value for an application/x-www-form-urlencoded body.
-local function formEncode(value)
-  return (tostring(value):gsub("[^%w%-%._~]", function(c)
-    return string.format("%%%02X", string.byte(c))
-  end))
-end
-
---- Exchange username/password for a long-lived OAuth access token.
-local function passwordGrant(creds)
-  -- The OAuth field name is assembled so static analysis does not flag this
-  -- as a hardcoded credential.
-  local passField = "pass" .. "word"
-
-  local body = table.concat({
-    "grant_type=" .. passField,
-    "client_id=" .. formEncode(creds.appId),
-    "client_secret=" .. formEncode(creds.appSecret),
-    "username=" .. formEncode(creds.username),
-    passField .. "=" .. formEncode(creds.userPass),
-  }, "&")
-
-  local headers = {
-    { field = "Content-Type", value = "application/x-www-form-urlencoded" },
-  }
-
-  local respBody, respHeaders = LrHttp.post(
-    WWW_BASE .. "/oauth/token", body, headers, "POST")
-
-  if not respBody then
-    return nil, "No response from the OAuth token endpoint"
-  end
-
-  local status = respHeaders and tonumber(respHeaders.status)
-  local ok, data = pcall(json.decode, respBody)
-  if not ok or type(data) ~= "table" then
-    return nil, "Could not parse the OAuth response"
-  end
-
-  if data.error then
-    return nil, "OAuth error: " .. tostring(data.error)
-      .. " " .. tostring(data.error_description or "")
-  end
-  if status and status >= 400 then
-    return nil, "OAuth token request failed with HTTP " .. tostring(status)
-  end
-  if not data.access_token then
-    return nil, "No access_token in the OAuth response"
-  end
-
-  return data.access_token, nil
-end
-
---- Trade an OAuth access token for the 24-hour JWT the API actually wants.
-local function exchangeForJwt(oauthToken)
-  local headers = {
-    { field = "Authorization", value = "Bearer " .. oauthToken },
-  }
-
-  local respBody, respHeaders = LrHttp.get(WWW_BASE .. "/users/api_token", headers)
-  if not respBody then
-    return nil, "No response from the JWT endpoint"
-  end
-
-  local status = respHeaders and tonumber(respHeaders.status)
-  if status and status >= 400 then
-    return nil, "JWT exchange failed with HTTP " .. tostring(status)
-  end
-
-  local ok, data = pcall(json.decode, respBody)
-  if not ok or type(data) ~= "table" or not data.api_token then
-    return nil, "No api_token in the JWT response"
-  end
-
-  return data.api_token, nil
-end
-
---------------------------------------------------------------------------------
 -- Public token accessor
 --------------------------------------------------------------------------------
 
 --- Return a JWT suitable for the v1 API.
 --
--- Resolution order: the stored JWT while it remains valid, then a refresh via
--- stored OAuth application credentials.
+-- The stored JWT while it remains valid, and nothing else: a pasted token
+-- cannot be regenerated from inside the plugin. Once the authorization code
+-- flow exists this grows a refresh branch again.
 --
 -- Must be called from inside an async task, because LrHttp yields.
 --
--- @param forceRefresh  Mint a new token rather than reusing the stored one.
---                      Only meaningful with OAuth credentials configured; a
---                      pasted token cannot be regenerated from within the
---                      plugin, so this is ignored in that case. Honouring it
---                      regardless is what previously made a token that had
---                      just been pasted report itself as expired.
+-- @param forceRefresh  Accepted and deliberately ignored. There is nothing to
+--                      refresh from, and honouring it is what previously made
+--                      a token that had just been pasted report itself as
+--                      expired. Callers pass it after saving credentials, so
+--                      it has to be harmless rather than an error.
 -- @return token string, or nil plus an error message
-function InatAuth.getToken(forceRefresh)
-  local canRefresh = InatAuth.hasOAuthApp()
-
-  if not (forceRefresh and canRefresh) then
-    local cached = cachedTokenIfUsable()
-    if cached then
-      return cached, nil
-    end
+function InatAuth.getToken(forceRefresh) -- luacheck: ignore forceRefresh
+  local cached = cachedTokenIfUsable()
+  if cached then
+    return cached, nil
   end
 
-  if not canRefresh then
-    if retrieve(KEY_API_TOKEN) then
-      return nil, "Your iNaturalist token has expired. Tokens last 24 hours.\n\n"
-        .. "Sign in at inaturalist.org, open www.inaturalist.org/users/api_token, "
-        .. "and paste the new token via\n"
-        .. "File > Plug-in Extras > iNaturalist Settings…."
-    end
-    return nil, "iNaturalist credentials are not set up.\n\n"
-      .. "Use File > Plug-in Extras > iNaturalist Settings…."
+  if retrieve(KEY_API_TOKEN) then
+    return nil, "Your iNaturalist token has expired. Tokens last 24 hours.\n\n"
+      .. "Sign in at inaturalist.org, open www.inaturalist.org/users/api_token, "
+      .. "and paste the new token via\n"
+      .. "File > Plug-in Extras > iNaturalist Settings…."
   end
 
-  local creds = {
-    appId     = retrieve(KEY_APP_ID),
-    appSecret = retrieve(KEY_APP_SECRET),
-    username  = retrieve(KEY_USERNAME),
-    userPass  = retrieve(KEY_USER_PASS),
-  }
-
-  local oauthToken, err = passwordGrant(creds)
-  if not oauthToken then
-    return nil, err
-  end
-
-  local jwt, jwtErr = exchangeForJwt(oauthToken)
-  if not jwt then
-    return nil, jwtErr
-  end
-
-  store(KEY_API_TOKEN, jwt)
-  prefs.apiTokenObtainedAt = os.time()
-  prefs.apiTokenExpiresAt  = decodeExpiry(jwt)
-  logger:info("Refreshed JWT from stored OAuth application credentials")
-
-  return jwt, nil
+  return nil, "iNaturalist credentials are not set up.\n\n"
+    .. "Use File > Plug-in Extras > iNaturalist Settings…."
 end
 
 --- Verify a token by fetching the authenticated user.

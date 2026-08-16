@@ -12,11 +12,13 @@ This is a spare-time project, so please do not expect a same-day reply.
 
 ## What the plugin handles
 
-**Your iNaturalist credentials.** API tokens, and OAuth application details if
-you use them, are stored with `LrPasswords`, which is Lightroom's wrapper around
-the OS credential vault — Windows Credential Manager or the macOS Keychain. They
-are not written to disk by the plugin and they are not written to its log. Use
-**Clear Stored Credentials** in the settings window to remove them.
+**Your iNaturalist credentials.** The API token you paste is stored with
+`LrPasswords`, which is Lightroom's wrapper around the OS credential vault —
+Windows Credential Manager or the macOS Keychain. It is not written to disk by
+the plugin and it is not written to its log. Use **Clear Stored Credentials**
+in the settings window to remove it.
+
+The plugin never asks for your iNaturalist password.
 
 **Your photos and their locations.** Uploads go to iNaturalist over HTTPS. What
 travels with them is yours to decide in the settings window: an observation's

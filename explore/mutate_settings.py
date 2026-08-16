@@ -51,9 +51,9 @@ MUTATIONS = [
     ),
     (
         "SettingsDialog",
-        "a pasted token wins over full application details",
-        "  if props.app_id ~= \"\" and props.app_secret ~= \"\"\n     and props.username ~= \"\" and props.user_pass ~= \"\" then",
-        "  if false then",
+        "the OAuth password-grant form comes back into the Account tab",
+        "      f:static_text { title = \"Option 2: Sign in with iNaturalist\", font = \"<system/bold>\" },",
+        "      f:static_text { title = \"Option 2\", font = \"<system/bold>\" },\n      f:password_field { value = LrView.bind(\"app_secret\"), width = 380 },",
     ),
     (
         "SettingsDialog",

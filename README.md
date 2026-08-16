@@ -1,6 +1,8 @@
 # inat-lightroom
 
-Exploratory work around [iNaturalist](https://www.inaturalist.org/) APIs, with the long-term goal of producing an Adobe Lightroom Classic plugin.
+An Adobe Lightroom Classic plugin that uploads photos to
+[iNaturalist](https://www.inaturalist.org/) and syncs the community's
+identifications back into your catalog as searchable taxonomy.
 
 ---
 
@@ -53,9 +55,11 @@ to ask what the photo is. See [`docs/plugin-architecture.md`](docs/plugin-archit
 for what that costs and why it was still worth it — and for what to do if you
 have an existing published collection.
 
-Authentication is currently a pasted API token, which expires daily. The
-frictionless path needs an approved iNaturalist application, and since 2022
-those are reviewed manually. See [`plugin/README.md`](plugin/README.md).
+Authentication is a pasted API token, which expires daily. The frictionless
+path is browser sign-in via the OAuth authorization code flow, which is not
+built yet; the `lightroom://` plumbing it needs already exists. An earlier
+form that took your iNaturalist password directly has been removed — see
+[`plugin/README.md`](plugin/README.md).
 
 Rough edges worth knowing: an upload takes the whole selection into one
 observation, but there is no way yet to group photos across separate uploads;

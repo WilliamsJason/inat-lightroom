@@ -78,10 +78,6 @@ def test_all_returns_every_known_preference(settings):
 def props(plugin, **overrides):
     values = {
         "api_token": "",
-        "app_id": "",
-        "app_secret": "",
-        "username": "",
-        "user_pass": "",
     }
     values.update(overrides)
     return plugin.runtime.table_from(values)
@@ -125,22 +121,22 @@ def test_a_pasted_token_is_stored(plugin, dialog):
     assert stored == "token"
 
 
-def test_full_application_details_beat_a_pasted_token(plugin, dialog):
-    """Both filled in means the user has just set up an application; the token
-    is whatever was left in the field from last time. The application refreshes
-    itself and the token expires in 24 hours, so the application has to win."""
-    stored, _ = dialog["saveCredentials"](
+def test_leftover_application_fields_do_not_stop_a_token_being_stored(plugin, dialog):
+    """The OAuth password-grant fields are gone, but a property table is just a
+    table and callers can put anything in one. Reading only what it needs means
+    a stray key cannot divert the token away from being stored."""
+    stored, err = dialog["saveCredentials"](
         props(
             plugin,
             api_token=_jwt(),
             app_id="id",
             app_secret="secret",
-            username="me",
             user_pass="pw",
         )
     )
 
-    assert stored == "oauth"
+    assert err is None
+    assert stored == "token"
 
 
 # ---------------------------------------------------------------------------
@@ -247,3 +243,42 @@ def test_every_tab_is_labelled(plugin, dialog):
 def test_the_account_tab_comes_first(plugin, dialog):
     """Nothing else in the dialog does anything until credentials exist."""
     assert tabs(plugin, dialog)[0]["identifier"] == "account"
+
+
+# ---------------------------------------------------------------------------
+# The account tab asks for a token and nothing else
+#
+# iNaturalist recommends against the OAuth password grant, and specifically
+# against it in distributed applications, because it means the user types their
+# iNaturalist password into third-party software. The plugin used to offer
+# exactly that -- app id, app secret, username, password -- and it worked,
+# which is what makes this worth a guard rather than a note: the code to bring
+# it back is in the history, and nothing else here would notice if it returned.
+# ---------------------------------------------------------------------------
+
+
+def account_tab_bindings(plugin, dialog):
+    """Every property name the Account tab binds to."""
+    from test_plugin_info_provider_lua import bound_keys, walk
+
+    account = tabs(plugin, dialog)[0]
+    return [key for binding, _ in walk(account) for key in bound_keys(binding)]
+
+
+def test_the_account_tab_never_asks_for_an_inaturalist_password(plugin, dialog):
+    """The whole reason the password grant was removed. A field bound to any of
+    these means the plugin is collecting an account password again."""
+    bound = account_tab_bindings(plugin, dialog)
+
+    for key in ("app_id", "app_secret", "user_pass", "username"):
+        assert key not in bound, (
+            f"the Account tab binds to {key!r}. That was the OAuth "
+            "password-grant form, which iNaturalist recommends against for "
+            "distributed applications. Use the authorization code flow."
+        )
+
+
+def test_the_account_tab_still_takes_a_pasted_token(plugin, dialog):
+    """The other half of the test above: proving those fields are gone is only
+    reassuring if the one remaining way in still exists."""
+    assert "api_token" in account_tab_bindings(plugin, dialog)
