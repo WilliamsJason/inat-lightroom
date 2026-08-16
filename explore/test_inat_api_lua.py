@@ -455,6 +455,47 @@ def test_pages_by_cursor_rather_than_page_number(api_pair_with):
     assert cursors == [0, 200, 400]
 
 
+def test_lists_observations_from_v2_asking_for_named_fields(api_pair_with):
+    """v1 cannot return less than everything, and everything is about 15 MB per
+    page of 200: identifications, comments, six photo URLs apiece and the
+    observer's profile repeated 200 times. The same page from v2, restricted to
+    the fields below, is about 95 KB.
+
+    That is not a nicety. Decoding one 15 MB page in Lua took minutes, during
+    which Lightroom stopped redrawing and looked like it had crashed."""
+    plugin, api, pages = api_pair_with(Pages(10))
+
+    plugin.call(api.listObservations, api, plugin.eval("{ perPage = 200 }"))
+
+    url = pages.searches[0]["url"]
+    assert "/v2/observations" in url
+    assert "fields=" in url
+
+
+@pytest.mark.parametrize("field", [
+    # Everything MatchCore reads to decide which photo an observation belongs
+    # to. v2 returns exactly what was asked for, so one missing name here does
+    # not error -- it arrives nil, and every observation quietly becomes
+    # unmatchable.
+    "time_observed_at",
+    "observed_on_string",
+    "location",
+    "private_location",
+    "obscured",
+    # And what linking then writes to the photo.
+    "id",
+    "uuid",
+    "taxon.name",
+    "quality_grade",
+    "positional_accuracy",
+    "community_taxon.name",
+])
+def test_the_field_list_covers_what_the_plugin_reads(inat_api, field):
+    _plugin, api = inat_api
+
+    assert api.LIST_FIELDS.split(",").count(field) == 1
+
+
 def test_asks_for_ascending_id_order(api_pair_with):
     """The cursor is the last id of the previous page, so any other ordering
     silently repeats or skips observations."""

@@ -35,6 +35,12 @@ local json   = require "json"
 local logger = require "Log"
 
 local API_V1   = "https://api.inaturalist.org/v1"
+
+-- v2 is used for exactly one call: listing observations. It is the only
+-- endpoint here that returns thousands of rows, and the only one where v2's
+-- `fields` parameter is worth the difference in response shape. See
+-- LIST_FIELDS.
+local API_V2   = "https://api.inaturalist.org/v2"
 local WWW_BASE = "https://www.inaturalist.org"
 
 local USER_AGENT = "inat-lightroom/0.1 (+https://github.com/WilliamsJason/inat-lightroom)"
@@ -353,6 +359,32 @@ function InatAPI:findObservationByUuid(uuid)
   return results[1], nil
 end
 
+--- What a listed observation needs to carry.
+--
+-- v1 has no way to ask for less than everything, and everything is enormous:
+-- one page of 200 observations is about 15 MB, nearly all of it identifications,
+-- comments, photo URLs in six sizes, and the observer's profile repeated 200
+-- times. Asking v2 for these fields instead brings the same page back in about
+-- 95 KB -- a hundred and sixty times smaller, on every page, for an account
+-- that may have tens of them.
+--
+-- Anything the matching or linking code reads has to be listed here, because v2
+-- returns precisely what was asked for and nothing else. A field left out does
+-- not error; it simply arrives nil, which is how a missing time_observed_at
+-- would quietly become "this observation cannot be matched".
+local LIST_FIELDS = table.concat({
+  "id", "uuid",
+  "observed_on", "observed_on_string", "time_observed_at", "observed_time_zone",
+  "location", "private_location", "obscured", "geoprivacy",
+  "positional_accuracy", "public_positional_accuracy",
+  "quality_grade",
+  "taxon.id", "taxon.name", "taxon.rank", "taxon.preferred_common_name",
+  "community_taxon.id", "community_taxon.name", "community_taxon.rank",
+  "community_taxon.preferred_common_name",
+}, ",")
+
+InatAPI.LIST_FIELDS = LIST_FIELDS
+
 --- GET /observations?user_id=... -- every observation of yours, in id order.
 --
 -- The id is looked up rather than assumed: see currentUser, which exists
@@ -391,10 +423,10 @@ function InatAPI:listObservations(options)
       order    = "asc",
       per_page = perPage,
       id_above = idAbove,
+      fields   = options.fields or LIST_FIELDS,
     }
-    if options.fields then params.fields = options.fields end
 
-    local payload, err = apiGet(API_V1 .. "/observations", params, self.token)
+    local payload, err = apiGet(API_V2 .. "/observations", params, self.token)
     if not payload then return nil, err end
 
     local results = payload.results

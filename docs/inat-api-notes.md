@@ -606,3 +606,49 @@ an extra round trip against a limit of 100 requests a minute.
 
 Note this is only true of the *search* endpoints. Elsewhere in the API `me`
 does work -- which is what makes it look safe.
+
+## One page of v1 observations is fifteen megabytes
+
+`GET /v1/observations?user_id=N&per_page=200` returns 15.3 MB. Measured, not
+estimated: 200 observations, 76 KB each. Almost none of it is the observation.
+Each row carries every identification with the full taxon record and the
+identifier's profile, every comment, six URLs per photo, the project
+memberships, the annotations, and the observer's own profile -- repeated in all
+200 rows.
+
+v1 has no way to ask for less. v2 does:
+
+    GET /v2/observations?user_id=N&per_page=200&fields=id,uuid,observed_on,...
+
+Same 200 observations, **95 KB** -- 160x smaller. Same query parameters, same
+`total_results`/`results` envelope, and `id_above` cursor pagination works
+identically, so only the URL and the `fields` parameter change.
+
+The catch is that v2 returns *precisely* what was asked for. A field left off
+the list does not error; it arrives `nil`. Leaving out `time_observed_at` would
+not fail -- every observation would simply become unmatchable, which looks like
+"the feature found nothing" rather than like a bug. `InatAPI.LIST_FIELDS` is
+therefore checked field by field in the tests against what the matching and
+linking code actually reads.
+
+`private_location` is in the list and only comes back when the request is
+authenticated and the observation is yours, which is exactly when the plugin
+needs it: an obscured observation's public `location` is randomised within a
+0.2-degree cell, and matching a photo against it would be matching against
+noise.
+
+## Fifteen megabytes is also too much for a Lua JSON parser
+
+Worth recording next to the above, because the two together are what made the
+first reverse sync look like a Lightroom crash rather than slow code.
+
+`json.lua`'s `parse_number` did `str:sub(i):match(...)` -- copying the entire
+remaining document to read one number. On a 15 MB page with a few hundred
+thousand numbers that is quadratic, and it does not finish. `parse_string`
+separately walked one character at a time, allocating a Lua string per
+character.
+
+Neither shows up on the small payloads every other endpoint returns, and
+nothing is logged while it happens: Lightroom stops redrawing while a task is
+inside a single Lua call, so the window greys out and Windows offers to close
+it. Decoding the same 15 MB page after both were fixed: 1.3 seconds.

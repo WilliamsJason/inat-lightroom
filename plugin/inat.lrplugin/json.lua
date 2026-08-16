@@ -103,9 +103,22 @@ end
 -- Decode
 -------------------------------------------------------------------------------
 
+--- A character set that can also be searched for with string.find.
+--
+-- The membership table is kept for the callers that ask about a single
+-- character; the patterns are what makes scanning a large document viable.
 local function create_set(...)
   local res = {}
-  for _, v in ipairs({...}) do res[v] = true end
+  local class = {}
+  for _, v in ipairs({...}) do
+    res[v] = true
+    -- Escape everything: inside a set only ^, ], % and - are special, but %%c
+    -- is a valid escape for any non-alphanumeric, and all of these are.
+    class[#class + 1] = "%" .. v
+  end
+  local body = table.concat(class)
+  res.pattern     = "[" .. body .. "]"
+  res.pattern_not = "[^" .. body .. "]"
   return res
 end
 
@@ -113,11 +126,14 @@ local space_chars  = create_set(" ", "\t", "\r", "\n")
 local delim_chars  = create_set(" ", "\t", "\r", "\n", "]", "}", ",")
 local escape_chars = create_set("\\", "/", '"', "b", "f", "n", "r", "t", "u")
 
+--- Index of the next character in (or not in) `set`, from `idx`.
+--
+-- find with an init index rather than a loop of one-character subs: the loop
+-- allocated a Lua string per character, which on a fifteen-megabyte response
+-- is fifteen million allocations spent finding a comma.
 local function next_char(str, idx, set, negate)
-  for i = idx, #str do
-    if set[str:sub(i,i)] ~= negate then return i end
-  end
-  return #str + 1
+  local found = string.find(str, negate and set.pattern_not or set.pattern, idx)
+  return found or #str + 1
 end
 
 local function decode_error(str, idx, msg)
@@ -178,11 +194,31 @@ local function parse_unicode_escape(str, i)
   return codepoint_to_utf8(cp), i
 end
 
+--- Characters that end a run of ordinary string content.
+local string_stops = "[\"\\%z\1-\31]"
+
 local function parse_string(str, i)
   local res = {}
+  local n = 0
   local j = i + 1
-  while j <= #str do
-    local c = str:sub(j, j)
+
+  -- Scanned in runs rather than character by character. The old loop did a
+  -- string.sub per character, so decoding a fifteen-megabyte observations page
+  -- meant fifteen million one-character allocations -- slow enough that
+  -- Lightroom looked like it had hung, because nothing on screen updates while
+  -- a task is inside a single Lua call.
+  while true do
+    local stop = string.find(str, string_stops, j)
+    if not stop then decode_error(str, #str + 1, "unterminated string") end
+
+    if stop > j then
+      n = n + 1
+      res[n] = string.sub(str, j, stop - 1)
+    end
+
+    local c = string.sub(str, stop, stop)
+    j = stop
+
     if c == '"' then
       return table.concat(res), j + 1
     elseif c == "\\" then
@@ -190,29 +226,29 @@ local function parse_string(str, i)
       local esc = str:sub(j, j)
       if esc == "u" then
         local ch; ch, j = parse_unicode_escape(str, j + 1)
-        res[#res+1] = ch
-      elseif esc == "b" then res[#res+1] = "\b"; j = j + 1
-      elseif esc == "f" then res[#res+1] = "\f"; j = j + 1
-      elseif esc == "n" then res[#res+1] = "\n"; j = j + 1
-      elseif esc == "r" then res[#res+1] = "\r"; j = j + 1
-      elseif esc == "t" then res[#res+1] = "\t"; j = j + 1
+        n = n + 1; res[n] = ch
+      elseif esc == "b" then n = n + 1; res[n] = "\b"; j = j + 1
+      elseif esc == "f" then n = n + 1; res[n] = "\f"; j = j + 1
+      elseif esc == "n" then n = n + 1; res[n] = "\n"; j = j + 1
+      elseif esc == "r" then n = n + 1; res[n] = "\r"; j = j + 1
+      elseif esc == "t" then n = n + 1; res[n] = "\t"; j = j + 1
       elseif esc == "\\" or esc == "/" or esc == '"' then
-        res[#res+1] = esc; j = j + 1
+        n = n + 1; res[n] = esc; j = j + 1
       else
         decode_error(str, j, "invalid escape char " .. esc)
       end
-    elseif c:byte() < 32 then
-      decode_error(str, j, "control character in string")
     else
-      res[#res+1] = c
-      j = j + 1
+      decode_error(str, j, "control character in string")
     end
   end
-  decode_error(str, j, "unterminated string")
 end
 
 local function parse_number(str, i)
-  local s = str:sub(i):match("^-?%d+%.?%d*[eE]?[+%-]?%d*")
+  -- Matched from an offset. str:sub(i) copied the whole remaining document
+  -- for every number in it, which on a large response is quadratic: the
+  -- single worst thing this parser did, and the reason a reverse sync never
+  -- came back.
+  local s = string.match(str, "^-?%d+%.?%d*[eE]?[+%-]?%d*", i)
   if not s then decode_error(str, i, "invalid number") end
   local n = tonumber(s)
   if not n then decode_error(str, i, "invalid number") end

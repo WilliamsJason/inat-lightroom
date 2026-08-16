@@ -124,3 +124,92 @@ def test_ordinary_objects_still_decode(plugin, json_lua):
 
 def test_an_empty_object_still_decodes(plugin, json_lua):
     assert dict(decode(json_lua, "{}")) == {}
+
+
+# ------------------------------------------------------------------- escapes
+#
+# parse_string now scans in runs between interesting characters rather than one
+# character at a time, so the escape handling is worth re-checking at the seams:
+# an escape at the very start of a string, at the very end, and back to back.
+
+
+def test_escapes_survive_the_chunked_scan(plugin, json_lua):
+    assert decode(json_lua, r'"\"lead"') == '"lead'
+    assert decode(json_lua, r'"trail\""') == 'trail"'
+    assert decode(json_lua, r'"a\n\t\\b"') == "a\n\t\\b"
+    # json.lua returns UTF-8 bytes, which arrive here as one Python character
+    # per byte, so the expectation is written the same way.
+    assert decode(json_lua, r'"\u00e9t\u00e9"') == "\xc3\xa9t\xc3\xa9"
+
+
+def test_an_unterminated_string_is_still_an_error(plugin, json_lua):
+    with pytest.raises(Exception):
+        decode(json_lua, '{"a":"no end')
+
+
+def test_a_raw_control_character_is_still_an_error(plugin, json_lua):
+    with pytest.raises(Exception):
+        decode(json_lua, '"tab\there"')
+
+
+def test_an_empty_string_still_decodes(plugin, json_lua):
+    assert decode(json_lua, '{"a":""}')["a"] == ""
+
+
+# --------------------------------------------------------------------- size
+#
+# The reverse sync fetches observations 200 at a time, and one such page really
+# is megabytes. Decoding it took so long that Lightroom appeared to have
+# crashed: parse_number did str:sub(i) -- copying the entire remaining document
+# -- once per number, and parse_string walked a character at a time.
+#
+# Timed rather than counted because the failure was quadratic, and no assertion
+# about behaviour catches that. The margin is large enough that an ordinary slow
+# machine passes; the bug this guards was six minutes and still going.
+
+
+def _big_document(observations=2000):
+    import json as pyjson
+
+    rows = [
+        {
+            "id": 15845541 + i,
+            "uuid": "5cf6f775-b0a2-4ff8-b5e4-41633f8117%02d" % (i % 100),
+            "observed_on": "2018-08-21",
+            "time_observed_at": "2018-08-21T22:00:22-07:00",
+            "location": "47.665249362,-122.124891804",
+            "positional_accuracy": None,
+            "public_positional_accuracy": 26807,
+            "obscured": True,
+            "taxon": {"id": 60053, "name": "Agulla", "rank": "genus"},
+        }
+        for i in range(observations)
+    ]
+    return pyjson.dumps({"total_results": observations, "results": rows})
+
+
+def test_a_page_sized_document_decodes_promptly(plugin, json_lua):
+    import time
+
+    text = _big_document()
+    assert len(text) > 500_000, "not big enough to be a fair test"
+
+    start = time.time()
+    decoded = decode(json_lua, text)
+    elapsed = time.time() - start
+
+    assert plugin.eval("function(t) return #t.results end")(decoded) == 2000
+    assert elapsed < 10, "decode took %.1fs; parsing is quadratic again" % elapsed
+
+
+def test_numbers_late_in_a_large_document_are_still_read_correctly(
+    plugin, json_lua
+):
+    """parse_number matches from an offset now instead of copying the tail, and
+    an off-by-one there would corrupt values rather than fail loudly."""
+    text = '{"pad":"' + ("x" * 200_000) + '","n":-12.5e3,"m":42}'
+
+    decoded = decode(json_lua, text)
+
+    assert decoded["n"] == -12500
+    assert decoded["m"] == 42
