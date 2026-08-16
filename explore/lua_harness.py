@@ -219,9 +219,23 @@ stubs.LrFileUtils = {
   end,
 }
 
+-- Lightroom counts seconds from 2001-01-01, not the Unix epoch, and the whole
+-- point of routing dates through LrDate is that os.date would be 31 years out.
+-- A stub returning a fixed string cannot tell a caller who got that right from
+-- one who got it wrong, so these convert for real. UTC throughout, so a test
+-- gives the same answer on any machine.
+local LR_EPOCH_IN_UNIX = 978307200
+
 stubs.LrDate = {
-  timeToUserFormat = function(_time, _format) return "2026-07-29" end,
-  timeToW3CDate = function(_time) return "2026-07-29T19:36:41Z" end,
+  timeToUserFormat = function(time, format)
+    return os.date("!" .. format, (time or 0) + LR_EPOCH_IN_UNIX)
+  end,
+  -- The real one includes milliseconds and an explicit offset. That exact
+  -- shape matters: findPhotos matches nothing against it, silently, so a test
+  -- that feeds it to a capture-time search should see what Lightroom sees.
+  timeToW3CDate = function(time)
+    return os.date("!%Y-%m-%dT%H:%M:%S.000+00:00", (time or 0) + LR_EPOCH_IN_UNIX)
+  end,
   currentTime = function() return 807126000 end,
 }
 
@@ -380,6 +394,39 @@ stubs.LrFunctionContext = {
   end,
 }
 
+-- The only capture-time value format findPhotos actually understands, plus the
+-- date-only form. Anything else -- a zone, a fraction of a second, the output
+-- of LrDate.timeToW3CDate -- returns nil here and matches nothing there.
+--
+-- `endOfDay` extends a bare date to cover the whole of it, which is what the
+-- real search does with a date-only bound.
+local function parseSearchValue(value, endOfDay)
+  if type(value) ~= "string" then return nil end
+
+  local year, month, day, hour, minute, second = string.match(value,
+    "^(%d%d%d%d)-(%d%d)-(%d%d)T(%d%d):(%d%d):(%d%d)$")
+
+  if not year then
+    year, month, day = string.match(value, "^(%d%d%d%d)-(%d%d)-(%d%d)$")
+    if not year then return nil end
+    hour, minute, second = endOfDay and 23 or 0, endOfDay and 59 or 0,
+      endOfDay and 59 or 0
+  end
+
+  -- os.time reads the machine's zone; these are UTC by construction, so the
+  -- arithmetic is done here instead.
+  local y, m, d = tonumber(year), tonumber(month), tonumber(day)
+  local era = math.floor((m <= 2 and y - 1 or y) / 400)
+  local yoe = (m <= 2 and y - 1 or y) - era * 400
+  local mp  = (m + 9) % 12
+  local doy = math.floor((153 * mp + 2) / 5) + d - 1
+  local doe = yoe * 365 + math.floor(yoe / 4) - math.floor(yoe / 100) + doy
+  local days = era * 146097 + doe - 719468
+
+  return days * 86400 + tonumber(hour) * 3600 + tonumber(minute) * 60
+    + tonumber(second)
+end
+
 local catalogWrites = {}
 local createdKeywords = {}
 local targetPhotos = {}
@@ -441,11 +488,22 @@ end
 catalog = {
   _writing = false,
 
+  -- Nesting is rejected rather than quietly flattened. Lightroom will not open
+  -- a write block inside a write block, and a stub that allowed it would let a
+  -- caller wrap a helper that already opens its own -- which passes here and
+  -- deadlocks there. The exit flag is restored rather than cleared for the
+  -- same reason: clearing it would leave the outer block looking closed.
   withWriteAccessDo = function(self, name, fn)
+    if self._writing then
+      error("withWriteAccessDo: cannot be called inside another write block " ..
+        "(already in " .. tostring(self._writingName) .. ")", 0)
+    end
+
     catalogWrites[#catalogWrites + 1] = name
-    self._writing = true
+    local wasWriting, wasName = self._writing, self._writingName
+    self._writing, self._writingName = true, name
     local ok, err = pcall(fn)
-    self._writing = false
+    self._writing, self._writingName = wasWriting, wasName
     if not ok then error(err, 0) end
   end,
 
@@ -494,6 +552,103 @@ catalog = {
 
   getPublishedCollectionByLocalIdentifier = function(_self, localId)
     return publishedCollections[localId]
+  end,
+
+  -- The capture-time search, with the behaviour the SDK probe measured rather
+  -- than the behaviour the documentation implies. Three details are load
+  -- bearing and all three were found the hard way:
+  --
+  --   * a value it cannot read matches *nothing*, silently. That is how
+  --     LrDate.timeToW3CDate output behaves against the real call -- an empty
+  --     result, indistinguishable from a window holding no photo -- so a stub
+  --     that accepted any date string would hide the bug it exists to catch.
+  --   * an operation outside the date vocabulary never returns at all in
+  --     Lightroom. A stub cannot hang without hanging the suite, so this
+  --     raises instead, which fails the same tests for the same reason.
+  --   * seconds are compared, not rounded away to whole days.
+  findPhotos = function(_self, args)
+    if type(args) ~= "table" or args.searchDesc == nil then
+      error("LrCatalog:findPhotos: must be called with named arguments syntax", 0)
+    end
+
+    local desc = args.searchDesc
+    local criteria = desc.criteria and { desc } or desc
+
+    local matched = {}
+    for _, photo in ipairs(allPhotos) do
+      local keep = true
+
+      for _, rule in ipairs(criteria) do
+        if rule.criteria ~= "captureTime" then
+          error("harness findPhotos: unsupported criteria " ..
+            tostring(rule.criteria), 0)
+        end
+        if rule.operation ~= "in" then
+          error("harness findPhotos: operation " .. tostring(rule.operation) ..
+            " never returns in Lightroom -- use one from the date vocabulary", 0)
+        end
+
+        local from = parseSearchValue(rule.value, false)
+        local to   = parseSearchValue(rule.value2, true)
+        local when = photo._raw.dateTimeOriginal
+
+        -- An unreadable bound matches nothing, exactly as the real call does.
+        if not from or not to or not when then
+          keep = false
+        else
+          local unix = when + LR_EPOCH_IN_UNIX
+          if unix < from or unix > to then keep = false end
+        end
+      end
+
+      if keep then matched[#matched + 1] = photo end
+    end
+
+    return matched
+  end,
+
+  -- Keyed by photo object, not by index, and all or nothing: one key it does
+  -- not know discards every other column. The real message is
+  -- `Unknown key: "fileName"` -- fileName being formatted metadata rather than
+  -- raw, which is the mistake this reproduces.
+  batchGetRawMetadata = function(_self, photos, keys)
+    local known = {
+      dateTimeOriginal = true, dateTimeOriginalISO8601 = true,
+      captureTime = true, gps = true, gpsAltitude = true,
+      path = true, uuid = true, isVirtualCopy = true,
+    }
+    for _, key in ipairs(keys) do
+      if not known[key] then
+        error('Unknown key: "' .. tostring(key) .. '"', 0)
+      end
+    end
+
+    local rows = {}
+    for _, photo in ipairs(photos) do
+      local row = {}
+      for _, key in ipairs(keys) do row[key] = photo._raw[key] end
+      rows[photo] = row
+    end
+    return rows
+  end,
+
+  -- (photos, pluginId, {keys}) -- the keys go last. The other orderings raise
+  -- `bad argument #1 to 'ipairs'` in Lightroom, or hang when handed _PLUGIN.
+  batchGetPropertyForPlugin = function(_self, photos, pluginId, keys)
+    if type(keys) ~= "table" then
+      error("bad argument #1 to 'ipairs' (table expected, got " ..
+        type(keys) .. ")", 0)
+    end
+
+    local rows = {}
+    for _, photo in ipairs(photos) do
+      local row = {}
+      for _, key in ipairs(keys) do
+        if pluginId == _PLUGIN.id then row[key] = photo._props[key] end
+      end
+      rows[photo] = row
+    end
+    return rows
   end,
 }
 

@@ -282,7 +282,7 @@ def test_scoring_an_image_sends_location_and_date(plugin, core):
     arg = call_named(calls, "scoreImage")[0]
     assert arg["lat"] == 47.6
     assert arg["lng"] == -122.3
-    assert arg["observed_on"] == "2026-07-29"
+    assert arg["observed_on"] == "2026-05-23"
 
 
 def test_scoring_cleans_up_the_rendered_file(plugin, core):

@@ -99,7 +99,10 @@ def test_capture_date_is_read_through_lrdate(plugin, upload):
     """Lightroom counts seconds from 2001, so os.date would be 31 years out."""
     photo = plugin.new_photo(raw={"dateTimeOriginal": 801234567})
 
-    assert upload["observedOnFor"](photo) == "2026-07-29"
+    assert upload["observedOnFor"](photo) == "2026-05-23"
+    # The same number read against the Unix epoch, which is the mistake this
+    # guards: same day and month, thirty-one years early.
+    assert upload["observedOnFor"](photo) != "1995-05-23"
 
 
 def test_no_date_when_the_photo_has_no_capture_time(plugin, upload):

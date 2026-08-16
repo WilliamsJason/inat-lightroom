@@ -206,17 +206,34 @@ end
 -- Every photo in the group gets the same observation, which is what makes the
 -- panel show the right thing whichever of them is selected next, and what stops
 -- a second upload creating a duplicate.
-function UploadCore.recordObservation(catalog, photos, observationId, uuid)
+--- Write the link fields onto a group of photos.
+--
+-- Split out from recordObservation because the caller has to own the
+-- transaction sometimes. Reverse Sync links photos in batches of a hundred,
+-- and nesting a write block inside a write block is not a slower way to do it
+-- -- Lightroom refuses. One block per photo is the other extreme, paying the
+-- transaction cost thousands of times over.
+--
+-- Must be called from inside a withWriteAccessDo block.
+function UploadCore.writeObservationFields(photos, observationId, uuid)
   local url = OBSERVATION_URL .. tostring(observationId)
 
-  catalog:withWriteAccessDo("iNat upload", function()
-    for _, photo in ipairs(photos) do
-      photo:setPropertyForPlugin(_PLUGIN, "inat_observation_id", tostring(observationId))
-      photo:setPropertyForPlugin(_PLUGIN, "inat_observation_url", url)
-      if uuid then
-        photo:setPropertyForPlugin(_PLUGIN, "inat_observation_uuid", tostring(uuid))
-      end
+  for _, photo in ipairs(photos) do
+    photo:setPropertyForPlugin(_PLUGIN, "inat_observation_id", tostring(observationId))
+    photo:setPropertyForPlugin(_PLUGIN, "inat_observation_url", url)
+    if uuid then
+      photo:setPropertyForPlugin(_PLUGIN, "inat_observation_uuid", tostring(uuid))
     end
+  end
+
+  return url
+end
+
+function UploadCore.recordObservation(catalog, photos, observationId, uuid)
+  local url
+
+  catalog:withWriteAccessDo("iNat upload", function()
+    url = UploadCore.writeObservationFields(photos, observationId, uuid)
   end)
 
   return url

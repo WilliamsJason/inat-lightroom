@@ -291,8 +291,9 @@ end
 -- `ambiguous` is set whenever anything else was within a second of it, so the
 -- dialog can say so and the user can decide.
 --
--- @param candidates array of { photo = , seconds = , latitude = , longitude = }
--- @return { photo, tier, distance, secondsApart, ambiguous, alternatives }
+-- @param candidates array of { photo = , seconds = , latitude = , longitude = ,
+--                              path = }
+-- @return { photo, path, tier, distance, secondsApart, ambiguous, alternatives }
 function MatchCore.chooseMatch(observation, candidates)
   if type(candidates) ~= "table" or #candidates == 0 then return nil end
 
@@ -308,7 +309,7 @@ function MatchCore.chooseMatch(observation, candidates)
       or (score == bestApart and tier == MatchCore.CONFIRMED
           and bestTier ~= MatchCore.CONFIRMED) then
       best      = { photo = candidate.photo, tier = tier, distance = distance,
-                    secondsApart = apart }
+                    secondsApart = apart, path = candidate.path }
       bestApart = score
       bestTier  = tier
       bestIndex = index

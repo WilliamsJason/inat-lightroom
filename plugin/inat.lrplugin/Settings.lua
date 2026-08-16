@@ -62,6 +62,15 @@ Settings.DEFAULTS = {
   -- same clock and never against a real-world one.
   update_last_checked = 0,
   update_notified_tag = "",
+
+  -- Reverse sync.
+  --
+  -- Two seconds, because the two clocks being compared are the same clock: the
+  -- observation's time came from the photo's EXIF in the first place, by way of
+  -- a phone or an upload, and the gap between them is rounding rather than
+  -- drift. Widening this does not find more photos so much as find the wrong
+  -- ones -- at a minute, a burst of frames all become equally good answers.
+  reverse_sync_tolerance_seconds = 2,
 }
 
 --- The stored value for one preference, or its default.
