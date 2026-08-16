@@ -714,3 +714,24 @@ Two things the batched form demands that the single form did not:
 
 The comma between ids arrives percent-encoded as `%2C`. That is correct and the
 API decodes it; test stubs matching on the URL have to decode it too.
+
+## Batch the species too
+
+With observations down to one request, the taxon lookups were the entire
+remaining cost of a sync: a real run of 264 photos made **one** observation
+request and **158** `/taxa/{id}` requests, and at a paced second each that was
+all but a few seconds of the two minutes forty-four it took.
+
+`/v1/taxa?id=1,2,3` takes the same batching. `InatAPI:prefetchTaxa` fills the
+same cache `getTaxon` already reads, so nothing downstream changes -- the
+lookups inside the photo loop simply stop making requests.
+
+Two rules it follows:
+
+- **Best effort, no error returned.** A batch that fails leaves the cache
+  without those ids and `getTaxon` asks the slow way. Reporting an error would
+  make a partial answer look like a failed sync.
+- **Only cache a taxon that knows its lineage.** A batch answering without
+  `ancestors` must not be cached, or the cached answer stops `getTaxon` ever
+  asking properly -- the same trap that made a throttled run write 346 wrong
+  keywords.

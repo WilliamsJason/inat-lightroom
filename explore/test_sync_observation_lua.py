@@ -61,32 +61,49 @@ def observation_handler(plugin, responses, refuse=None):
     `refuse` makes any URL containing that fragment come back HTTP 429.
     """
     by_id = {}
+    by_taxon_id = {}
     for fragment, payload in responses.items():
         match = re.search(r"/observations/(\d+)$", fragment)
         if match:
             results = payload.get("results") if isinstance(payload, dict) else None
             if results:
                 by_id[match.group(1)] = results[0]
+        match = re.search(r"/taxa/(\d+)$", fragment)
+        if match:
+            results = payload.get("results") if isinstance(payload, dict) else None
+            if results:
+                by_taxon_id[match.group(1)] = results[0]
+
+    def batched(url, table):
+        """The ids a batched request asks for, answered from `table`.
+
+        The comma between ids arrives percent-encoded, which is correct and
+        which the real API decodes.
+        """
+        wanted = urllib.parse.unquote(url.split("id=", 1)[1].split("&")[0])
+        return {"results": [table[one] for one in wanted.split(",")
+                            if one in table]}
 
     def handler(method, url, body=None, headers=None):
         if refuse and refuse in url:
             return "<html>Too many requests</html>", plugin.runtime.table_from(
                 {"status": 429})
 
-        # The comma separating ids comes through percent-encoded, which is
-        # correct and which the real API decodes.
-        batch = re.search(r"/observations\?(?:.*&)?id=([\d,%A-Fa-f]+)", url)
-        if batch:
-            wanted = urllib.parse.unquote(batch.group(1)).split(",")
-            found = [by_id[one] for one in wanted if one in by_id]
-            return json.dumps({"results": found}), plugin.runtime.table_from(
-                {"status": 200})
-
+        # Explicit routes win, so a test can say exactly what a batch replies.
         for fragment, payload in responses.items():
             if fragment in url:
                 return json.dumps(payload), plugin.runtime.table_from(
                     {"status": 200}
                 )
+
+        if re.search(r"/observations\?(?:.*&)?id=", url):
+            return json.dumps(batched(url, by_id)), plugin.runtime.table_from(
+                {"status": 200})
+
+        if re.search(r"/taxa\?(?:.*&)?id=", url):
+            return json.dumps(batched(url, by_taxon_id)), \
+                plugin.runtime.table_from({"status": 200})
+
         raise AssertionError(f"unexpected {method} {url}")
 
     return handler
@@ -513,7 +530,7 @@ def make_refusing_plugin(responses, refuse):
 def test_a_throttled_taxon_writes_no_keyword_at_all():
     plugin = make_refusing_plugin(
         {"/observations/999": observation(community=bare_taxon())},
-        refuse="/taxa/")
+        refuse="/taxa")
     plugin.set_target_photos([plugin.new_photo(inat_observation_id="999")])
 
     run_sync(plugin)
@@ -528,7 +545,7 @@ def test_a_throttled_taxon_still_writes_the_fields():
     later run reads to put the keyword where it belongs."""
     plugin = make_refusing_plugin(
         {"/observations/999": observation(community=bare_taxon())},
-        refuse="/taxa/")
+        refuse="/taxa")
     photo = plugin.new_photo(inat_observation_id="999")
     plugin.set_target_photos([photo])
 
@@ -542,7 +559,7 @@ def test_a_throttled_taxon_says_so_in_the_log():
     """Silence here is what let a third of a keyword tree go wrong unnoticed."""
     plugin = make_refusing_plugin(
         {"/observations/999": observation(community=bare_taxon())},
-        refuse="/taxa/")
+        refuse="/taxa")
     plugin.set_target_photos([plugin.new_photo(inat_observation_id="999")])
 
     run_sync(plugin)
@@ -753,3 +770,76 @@ def test_a_refusal_falls_back_to_the_keyword_already_there():
     stranded = [k["name"] for k in plugin.keywords
                 if k["parent"] is None and k["name"] != "iNaturalist"]
     assert stranded == []
+
+
+# ---------------------------------------------------------------------------
+# Fetching species in batches
+#
+# Once observations came in one request, the taxon lookups were the whole
+# remaining cost of a sync: 158 requests at a paced second each.
+# ---------------------------------------------------------------------------
+
+
+def test_species_are_fetched_together_not_one_per_photo():
+    """Observations carry a taxon with no ancestors, so each needs a lookup."""
+    bare = {"id": 12345, "name": "Ischnura cervula", "rank": "species"}
+    routes = {f"/observations/{i}": observation(obs_id=i, community=bare)
+              for i in range(1000, 1030)}
+    routes["/taxa"] = {"results": [DAMSELFLY]}
+    plugin, seen = counting_plugin(routes)
+    plugin.set_target_photos(
+        [plugin.new_photo(inat_observation_id=str(i))
+         for i in range(1000, 1030)])
+
+    run_sync(plugin)
+
+    assert [url for url in seen if "/taxa/" in url] == []
+    assert len([url for url in seen if "/taxa?" in url]) == 1
+
+
+def test_a_prefetched_species_still_gets_its_full_hierarchy():
+    bare = {"id": 12345, "name": "Ischnura cervula", "rank": "species"}
+    plugin = make_plugin({
+        "/observations/999": observation(community=bare),
+        "/taxa": {"results": [DAMSELFLY]},
+    })
+    photo = plugin.new_photo(inat_observation_id="999")
+    plugin.set_target_photos([photo])
+
+    run_sync(plugin)
+
+    made = [k["name"] for k in plugin.keywords]
+    assert "Odonata" in made
+    assert names_on(photo) == ["Ischnura cervula"]
+
+
+def test_a_failed_prefetch_falls_back_to_asking_one_at_a_time():
+    """A batch that fails must not cost the sync its keywords."""
+    bare = {"id": 12345, "name": "Ischnura cervula", "rank": "species"}
+    plugin = make_refusing_plugin({
+        "/observations/999": observation(community=bare),
+        "/taxa/12345": {"results": [DAMSELFLY]},
+    }, refuse="/taxa?")
+    photo = plugin.new_photo(inat_observation_id="999")
+    plugin.set_target_photos([photo])
+
+    run_sync(plugin)
+
+    assert names_on(photo) == ["Ischnura cervula"]
+
+
+def test_a_species_without_a_lineage_is_not_cached_from_a_batch():
+    """Caching one would stop the slow path ever asking properly."""
+    bare = {"id": 12345, "name": "Ischnura cervula", "rank": "species"}
+    plugin = make_plugin({
+        "/observations/999": observation(community=bare),
+        "/taxa?": {"results": [bare]},     # batch answers without ancestors
+        "/taxa/12345": {"results": [DAMSELFLY]},
+    })
+    photo = plugin.new_photo(inat_observation_id="999")
+    plugin.set_target_photos([photo])
+
+    run_sync(plugin)
+
+    assert names_on(photo) == ["Ischnura cervula"]
+    assert "Odonata" in [k["name"] for k in plugin.keywords]

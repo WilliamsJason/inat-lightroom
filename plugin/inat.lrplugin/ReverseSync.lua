@@ -283,6 +283,16 @@ function ReverseSync.apply(catalog, matches, options)
 
   local done, failures = 0, {}
 
+  -- Every species the selected rows need, in one request rather than one per
+  -- row. Without this a hundred links cost a hundred paced taxon lookups.
+  if SyncCore and SyncCore.prefetchTaxa then
+    local observations = {}
+    for _, match in ipairs(selected) do
+      observations[#observations + 1] = match.observation
+    end
+    SyncCore.prefetchTaxa(observations, options.api)
+  end
+
   local index = 1
   while index <= #selected do
     local last = math.min(index + batchSize - 1, #selected)

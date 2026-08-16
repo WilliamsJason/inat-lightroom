@@ -432,7 +432,10 @@ def test_a_repeated_species_is_only_looked_up_once(plugin, sync):
     Driven through a real InatAPI client rather than a stub with a getTaxon
     method, because that is where the caching lives now, and a stub would
     happily pass while the shipping path made a request per photo -- which is
-    exactly how a real run got itself rate limited."""
+    exactly how a real run got itself rate limited.
+
+    One request covers all four rows: the species are prefetched together, and
+    the repeats are answered from the cache that prefetch fills."""
     requested = []
 
     def handler(_method, url, _body=None, _headers=None):
@@ -453,7 +456,7 @@ def test_a_repeated_species_is_only_looked_up_once(plugin, sync):
 
     sync["apply"](plugin.catalog, matches, plugin.runtime.table_from({"api": api}))
 
-    assert len([url for url in requested if "/taxa/" in url]) == 1
+    assert len([url for url in requested if "/taxa" in url]) == 1
 
 
 def test_linking_without_an_api_still_links(plugin, sync):

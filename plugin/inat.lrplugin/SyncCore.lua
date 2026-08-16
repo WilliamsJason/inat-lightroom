@@ -325,6 +325,31 @@ function SyncCore.taxonFor(api, obs)
   return SyncCore.withAncestors(api, obs.community_taxon or obs.taxon)
 end
 
+--- Warm the taxon cache for a set of observations.
+--
+-- MUST be called from inside a task.
+--
+-- The taxon each observation will be filed under is known as soon as the
+-- observation is in hand, so they can all be fetched together instead of one
+-- at a time from inside the photo loop. Uses the same choice of taxon that
+-- taxonFor will make, so nothing is fetched that will not be used.
+--
+-- @param observations  A table of observations; keys are ignored.
+function SyncCore.prefetchTaxa(observations, api)
+  if not api.prefetchTaxa then return end
+
+  local ids = {}
+  for _, obs in pairs(observations or {}) do
+    local taxon = obs.community_taxon or obs.taxon
+    -- One that already carries its lineage needs no request at all.
+    if taxon and taxon.id ~= nil and taxon.ancestors == nil then
+      ids[#ids + 1] = taxon.id
+    end
+  end
+
+  api:prefetchTaxa(ids)
+end
+
 --- Bring one photo up to date with an observation already in hand.
 --
 -- The observation is passed in rather than fetched so that Reverse Sync, which
@@ -497,6 +522,9 @@ function SyncCore.syncPhotosNow(context, photos, options)
       "Could not fetch your observations.\n\n" .. tostring(fetchErr), "critical")
     return
   end
+
+  progress:setCaption("Fetching species…")
+  SyncCore.prefetchTaxa(observations, api)
 
   for i, photo in ipairs(photos) do
     if progress:isCanceled() then break end

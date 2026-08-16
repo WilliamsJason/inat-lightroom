@@ -364,6 +364,66 @@ function InatAPI:getTaxon(taxonId)
   return taxon, nil
 end
 
+--- GET /taxa?id=1,2,3 -- fill the taxon cache in bulk.
+--
+-- Nothing is returned. This exists purely so that the getTaxon calls that
+-- follow are answered from memory: after batching the observation fetches, the
+-- taxon lookups were the entire remaining cost of a sync -- 158 requests at a
+-- paced second each, against one request for all 169 observations.
+--
+-- Best effort by design. An id that does not come back, or a whole batch that
+-- fails, simply leaves the cache without it, and getTaxon asks for it the slow
+-- way. Reporting an error here would make a partial answer look like a failed
+-- sync when the sync is about to succeed.
+--
+-- MUST be called from inside a task.
+function InatAPI:prefetchTaxa(ids)
+  if type(ids) ~= "table" or #ids == 0 then return end
+
+  self._taxa = self._taxa or {}
+
+  local BATCH = 200
+  local wanted = {}
+  local seen = {}
+  for _, id in ipairs(ids) do
+    local key = tostring(id)
+    if not self._taxa[key] and not seen[key] then
+      seen[key] = true
+      wanted[#wanted + 1] = key
+    end
+  end
+
+  local index = 1
+  while index <= #wanted do
+    local last = math.min(index + BATCH - 1, #wanted)
+    local batch = {}
+    for position = index, last do
+      batch[#batch + 1] = wanted[position]
+    end
+
+    local payload, err = apiGet(API_V1 .. "/taxa", {
+      id       = table.concat(batch, ","),
+      per_page = BATCH,
+    }, self.token)
+
+    if payload then
+      for _, taxon in ipairs(payload.results or {}) do
+        -- Only a taxon that knows its own lineage is worth caching. One
+        -- without ancestors would be a cached answer that stops getTaxon ever
+        -- asking properly, and the lineage is the whole keyword hierarchy.
+        if taxon.id ~= nil and taxon.ancestors ~= nil then
+          self._taxa[tostring(taxon.id)] = taxon
+        end
+      end
+    else
+      logger:warn("Could not prefetch taxa: " .. (err or "unknown")
+        .. "; falling back to one request each")
+    end
+
+    index = last + 1
+  end
+end
+
 --- Build the Lightroom keyword path for a taxon: kingdom down to the taxon,
 -- nested under a single root keyword.
 function InatAPI.buildKeywordPath(taxon, root)
