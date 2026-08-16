@@ -169,6 +169,18 @@ def test_the_caveat_line_is_empty_rather_than_absent(plugin, dialog):
     assert dialog["caveats"](match(plugin)) == ""
 
 
+def test_the_filename_is_its_own_line(plugin, dialog):
+    """The bug this fixes: species and filename shared one fixed-width
+    static_text, which drops a word too long to fit rather than clipping it. A
+    long species name took the whole filename with it -- and adding scientific
+    names made every title longer at once, so it spread. On its own line the
+    filename only has to fit itself."""
+    made, _every, props = pager(plugin, dialog, 1)
+
+    assert props["species1"] == "Common Frog"
+    assert props["file1"] == "2024 Spring/DSC_0042.NEF"
+
+
 # -------------------------------------------------------------- diagnostics
 
 def test_an_ordinary_path_is_not_reported(plugin, dialog):
@@ -200,7 +212,7 @@ def test_the_em_dash_in_our_own_separator_is_not_reported(plugin, dialog):
     rows and say nothing about the one that is wrong."""
     every = matches(plugin, match(plugin))
 
-    assert dialog["logRows"](every, 25) == 0
+    assert dialog["logRows"](every) == 0
 
 
 def test_every_unusual_row_is_logged_however_far_down_it_is(plugin, dialog):
@@ -210,18 +222,18 @@ def test_every_unusual_row_is_logged_however_far_down_it_is(plugin, dialog):
         *[match(plugin) for _ in range(30)],
         match(plugin, path="Bj\xc3\xb6rn/DSC_0042.NEF"))
 
-    assert dialog["logRows"](every, 5) == 1
+    assert dialog["logRows"](every) == 1
     assert any("may not draw" in line and "row 31" in line
                for line in plugin.log_lines)
 
 
-def test_the_first_page_is_logged_even_when_it_is_ordinary(plugin, dialog):
-    """If the odd row turns out to be plain ASCII, the truncation is somewhere
-    other than the bytes -- and knowing that needs the rows that worked."""
+def test_an_ordinary_run_logs_nothing(plugin, dialog):
+    """This is a warning, not a trace. Twenty-five lines a run would bury the
+    one that matters, which is what it exists to surface."""
     every = matches(plugin, *[match(plugin) for _ in range(8)])
 
-    assert dialog["logRows"](every, 3) == 0
-    assert sum(1 for line in plugin.log_lines if "review row" in line) == 3
+    assert dialog["logRows"](every) == 0
+    assert not any("review row" in line for line in plugin.log_lines)
 
 
 # -------------------------------------------------------------------- paging
@@ -298,9 +310,9 @@ def test_no_row_is_ever_left_empty(plugin, dialog):
     made["turn"](made, 1)
     made["turn"](made, 1)
 
-    assert props["title1"] != ""
-    assert props["title2"] != ""
-    assert props["title3"] != ""
+    assert props["species1"] != ""
+    assert props["species2"] != ""
+    assert props["species3"] != ""
 
 
 def test_the_padded_page_repeats_rather_than_invents(plugin, dialog):

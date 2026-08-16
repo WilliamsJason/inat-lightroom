@@ -296,6 +296,32 @@ stubs for `createKeyword`, `withWriteAccessDo` and `LrHttp` refuse to run while
 one is. Reverting the fix makes the test fail with the same error Lightroom
 gave, which is the only way to know the guard guards anything.
 
+## `f:static_text` drops a word rather than clipping it
+
+Given a fixed `width`, a `static_text` whose contents do not fit does not
+truncate mid-word or add an ellipsis. The word that does not fit is simply not
+drawn.
+
+In the Reverse Sync review list each row was one control holding
+`species — folder/file.jpg`. Rows with short species names looked perfect.
+Rows with long ones drew the species, the separator, and then nothing at all:
+
+```
+Narrow-collared Snail-eating Beetle (Scaphinotus angusticollis)  —
+```
+
+The filename is a single unbreakable 31-character token, so once the species
+name had eaten the width there was nowhere to put it and it disappeared whole.
+Nothing about the row said it had been shortened, so it read as a match with no
+file behind it -- a data problem rather than a layout one, which is where the
+first hour went. Adding scientific names lengthened every title at once and
+turned one bad row into many, which is what finally identified it.
+
+Two lessons. Give each piece of information its own control, so the thing that
+overflows is the thing that is too long. And when text goes missing, suspect the
+layout before the string -- the bytes were checked first here, and they were
+fine.
+
 ## A bound `visible` does not hide a row
 
 `visible` is documented as a view property and is accepted on an `f:row`

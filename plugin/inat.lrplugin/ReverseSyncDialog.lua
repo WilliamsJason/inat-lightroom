@@ -166,20 +166,19 @@ function ReverseSyncDialog.oddBytes(text)
   return table.concat(out)
 end
 
---- Write what the rows will actually be handed.
+--- Warn about any path whose bytes a control may refuse to draw.
 --
 -- The path is what gets escaped, not the whole row: the separator between
 -- species and filename is an em dash, so every title contains non-ASCII bytes
--- and reporting on titles would report on all of them. That the em dash draws
--- correctly is itself worth knowing -- it rules out "non-ASCII" as the whole
--- explanation and points at this particular path.
+-- and reporting on titles would report on all of them.
 --
--- Every unusual path is logged however far down it is, and the whole of the
--- first page whether it is unusual or not -- because if the odd row turns out
--- to be plain ASCII then the truncation is somewhere other than the bytes, and
--- knowing that needs the rows that worked next to the one that did not.
-function ReverseSyncDialog.logRows(matches, limit)
-  limit = limit or ReverseSyncDialog.PAGE_SIZE
+-- This was written to explain a row that drew its species and then nothing
+-- where the filename should have been, and it did that by coming back empty.
+-- Every path was plain ASCII, which ruled out the bytes and left the layout --
+-- where the answer was that f:static_text drops a word too long to fit rather
+-- than clipping it. Kept anyway: a path that cannot be drawn is still possible,
+-- and this is the only way it would ever be visible.
+function ReverseSyncDialog.logRows(matches)
   local odd = 0
 
   for index, match in ipairs(matches) do
@@ -190,10 +189,6 @@ function ReverseSyncDialog.logRows(matches, limit)
       logger:warnf("review row %d path has bytes f:static_text may not draw:"
         .. " %s (%d bytes, species %s)",
         index, escaped, #match.path, ReverseSyncDialog.speciesOf(match))
-    elseif index <= limit then
-      logger:infof("review row %d: %s (%d bytes, species %s)",
-        index, tostring(match.path), #tostring(match.path),
-        ReverseSyncDialog.speciesOf(match))
     end
   end
 
@@ -332,7 +327,8 @@ function Pager:render()
 
     if match then
       props["selected" .. row] = self.selected[index] and true or false
-      props["title" .. row]    = ReverseSyncDialog.describe(match)
+      props["species" .. row]  = ReverseSyncDialog.speciesOf(match)
+      props["file" .. row]     = ReverseSyncDialog.shortPath(match.path)
       props["caveat" .. row]   = ReverseSyncDialog.caveats(match)
       props["photo" .. row]    = match.photo
       props["image" .. row]    = self.placeholder
@@ -341,7 +337,8 @@ function Pager:render()
       -- stays because the alternative to clearing a row is leaving the previous
       -- page's photos under a checkbox that links something else.
       props["selected" .. row] = false
-      props["title" .. row]    = ""
+      props["species" .. row]  = ""
+      props["file" .. row]     = ""
       props["caveat" .. row]   = ""
       props["photo" .. row]    = nil
       props["image" .. row]    = self.placeholder
@@ -456,13 +453,27 @@ local function buildRow(f, props, row)
     },
     f:column {
       spacing = 2,
+      -- Three separate controls rather than one line, because f:static_text
+      -- silently drops a word that does not fit rather than clipping it. With
+      -- the species and the filename sharing a fixed width, a long species name
+      -- pushed the filename out entirely -- the row showed
+      -- "Narrow-collared Snail-eating Beetle (Scaphinotus angusticollis)  —  "
+      -- and then nothing, which looks like a match with no photo behind it.
+      -- Adding scientific names made it worse on every row at once.
+      --
+      -- On its own line each piece only has to fit itself, and the one that
+      -- overflows is the one that is too long.
       f:static_text {
-        title = LrView.bind("title" .. row),
-        width = 400,
+        title = LrView.bind("species" .. row),
+        width = 500,
+      },
+      f:static_text {
+        title = LrView.bind("file" .. row),
+        width = 500,
       },
       f:static_text {
         title      = LrView.bind("caveat" .. row),
-        width      = 400,
+        width      = 500,
         text_color = LrColor(0.78, 0.45, 0.1),
       },
     },
@@ -495,7 +506,8 @@ function ReverseSyncDialog.show(context, matches, summary)
   local children = { spacing = 6 }
   for row = 1, pager.pageSize do
     props["selected" .. row] = false
-    props["title" .. row]    = ""
+    props["species" .. row]  = ""
+    props["file" .. row]     = ""
     props["caveat" .. row]   = ""
     props["photo" .. row]    = nil
     props["image" .. row]    = placeholder
