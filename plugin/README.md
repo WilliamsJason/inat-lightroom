@@ -47,7 +47,7 @@ and replace the folder by hand.
 ## First-time setup
 
 Go to **File → Plug-in Extras → iNaturalist Settings…** and open the
-**Account** tab. There are two ways to authenticate, and the tab offers both.
+**Account** tab.
 
 ### Option 1 — paste an API token (works today)
 
@@ -63,15 +63,22 @@ These tokens expire after **24 hours**, so this needs repeating each day you
 use the plugin. It requires no registration, which makes it the practical
 option right now.
 
-### Option 2 — OAuth application (no repeat prompts)
+### Option 2 — sign in with iNaturalist (coming soon)
 
-Fill in **App ID**, **App Secret**, **Username** and **Password**. The plugin
-then mints fresh tokens on demand and never prompts again.
+Not built yet. It will send you to iNaturalist in your browser to sign in and
+return a code the plugin exchanges for tokens, refreshing them quietly from
+then on. Your password goes to iNaturalist and never to the plugin.
 
-This needs an approved iNaturalist application. Since 2022 iNaturalist reviews
-these manually: your account must be at least two months old and have made ten
-or more improving identifications for other users in the past month. Apply at
-<https://www.inaturalist.org/oauth/applications/new>.
+This replaces an earlier OAuth application form that asked for an app ID, app
+secret, username and password. It worked, but it used the OAuth *password
+grant*, which iNaturalist recommends against — especially for distributed
+applications, since it means typing your account password into someone else's
+software. It also required every user to have their own manually approved
+iNaturalist application, which is a bar almost nobody clears. Removed rather
+than left switched off.
+
+If you ever filled that form in, **Clear Stored Credentials** still erases
+what it saved, including the password.
 
 Everything is stored in Lightroom's encrypted password store (`LrPasswords`),
 which is backed by the OS credential vault. Nothing is written to disk by the
