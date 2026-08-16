@@ -812,6 +812,94 @@ displayed string from another, which makes it the wrong tool for an export
 
 ---
 
+## A Plug-in Manager section binds to preferences unless told otherwise
+
+`sectionsForTopOfDialog(f, propertyTable)` hands you a property table, so it
+looks as though `LrView.bind("status")` inside that section resolves against
+it. It does not. Without an enclosing `bind_to_object`, a binding falls through
+to the plugin's *preferences*.
+
+The Updates section shipped without one. It rendered like this:
+
+```
+Installed version:                 <- blank
+                                   <- blank, where the status line should be
+[Check for Updates] [Download and Install] [Release Notes]
+[x] Check for updates automatically <- correctly ticked
+```
+
+Every literal `title` drew fine. `installedVersion` and `status` were blank,
+because no preference has those names. The checkbox looked *perfect*, because
+`update_check_automatically` is a real preference — so that binding silently
+read and wrote the preferences table directly, behind the property table's
+back. `endDialog` would then have written its stale copy back over whatever was
+clicked.
+
+That is the shape of the bug worth remembering: the fields bound to names the
+preferences do not have go blank, and the fields bound to names they do have
+keep working while pointing at the wrong table. A half-correct dialog is much
+harder to read than a dead one.
+
+The fix is one line, stated once, on a container wrapping the whole section:
+
+```lua
+f:column {
+  bind_to_object = props,
+  ...
+}
+```
+
+`SettingsDialog.lua` had always done this, because a modal dialog built with
+`LrBinding.makePropertyTable` has to. The Plug-in Manager path is the one that
+looks like it does not.
+
+The harness could not catch this: its view factory records arguments rather
+than resolving bindings, so a binding with no source looks the same as a good
+one. `explore/test_plugin_info_provider_lua.py` catches it structurally
+instead, by walking the returned section and asserting that every binding has
+an enclosing `bind_to_object` which is the same table the code writes to.
+
+---
+
+## `LrShutdownPlugin` runs on Reload Plug-in, from the file on disk
+
+Verified in the host. The updater's whole design rests on this hook firing, so
+it was worth proving rather than assuming: the plugin stages an update while it
+is loaded and swaps the files as it unloads, which costs the user one restart
+instead of two.
+
+Two things the log showed that are not in the SDK documentation:
+
+**The hook fires on Reload Plug-in, not only on quit.** A user who leaves
+Lightroom running for weeks can still take an update the moment they ask for
+one.
+
+**Lightroom reads `PluginShutdown.lua` at unload, not at load.** The line that
+proved the hook ran was written to the file *after* Lightroom had already
+loaded the plugin, and it still appeared. So the unload path is not a chunk
+compiled at startup. This matters when testing: editing the shutdown script of
+a running plugin takes effect on the next unload, with no reload needed first.
+
+The evidence to look for, since two different code paths can apply an update:
+
+```
+TRACE  PluginShutdown: running
+INFO   Updater: applied v0.9.8 (29 files)
+```
+
+and *no* `PluginInit: applied a staged update ...` line after it. `PluginInit`
+is the fallback for a crash or a kill; if its line appears too, the hook did
+not do the work. Both lines exist to tell those cases apart.
+
+That distinction only became readable after fixing a bug of my own. The
+`pcall` around the swap discarded its error while the comment above it claimed
+failures reached the log, so "the hook never ran" and "the hook ran and the
+swap failed" produced identical evidence — an update landing one restart late
+— despite sharing no fix. `PluginShutdown` now logs on entry unconditionally,
+before anything can fail, and logs the `pcall` error when there is one.
+
+---
+
 ## Testing without Lightroom
 
 Every bug above only appeared by running Lightroom, clicking through, and
