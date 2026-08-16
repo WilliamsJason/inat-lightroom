@@ -223,16 +223,35 @@ local function run(context)
         function(t) return LrDate.timeToUserFormat(t, "%Y-%m-%d") end))
 
       -- Does the comparison honour seconds, or quietly round to whole days?
-      -- One photo alone in its day answers "1" either way, so the question is
-      -- only settled by comparing the tight window against the whole day it
-      -- sits in. If those two counts match on a day holding many photos, the
-      -- time part is being ignored and matching has to filter in Lua.
-      local dayStart = LrDate.timeToUserFormat(when, "%Y-%m-%dT00:00:00")
-      local dayEnd   = LrDate.timeToUserFormat(when, "%Y-%m-%dT23:59:59")
-      local _, tight = inWindow(isoValue(when - 2), isoValue(when + 2))
-      local _, whole = inWindow(dayStart, dayEnd)
-      report:addf("    seconds honoured: ±2 s = %d vs whole day = %d",
-        countOf(tight) or 0, countOf(whole) or 0)
+      -- A photo alone in its day answers "1" either way, which is exactly what
+      -- the first run found and why it settled nothing. The question needs a
+      -- day that actually holds several photos, so keep looking until one
+      -- turns up rather than trusting the first candidate.
+      local settled = false
+      for j = 1, total do
+        local _, other = Report.timed(function()
+          return allPhotos[j]:getRawMetadata("dateTimeOriginal")
+        end)
+        if type(other) == "number" then
+          local dayStart = LrDate.timeToUserFormat(other, "%Y-%m-%dT00:00:00")
+          local dayEnd   = LrDate.timeToUserFormat(other, "%Y-%m-%dT23:59:59")
+          local _, whole = inWindow(dayStart, dayEnd)
+          local dayCount = countOf(whole) or 0
+
+          if dayCount > 3 then
+            local _, tight = inWindow(isoValue(other - 2), isoValue(other + 2))
+            local tightCount = countOf(tight) or 0
+            report:addf("    seconds honoured: ±2 s = %d vs whole day = %d%s",
+              tightCount, dayCount,
+              tightCount < dayCount and "  (yes)" or "  (NO - rounds to days)")
+            settled = true
+            break
+          end
+        end
+      end
+      if not settled then
+        report:add("    seconds honoured: no day held enough photos to tell")
+      end
       report:blank()
       break
     end
@@ -372,24 +391,28 @@ local function run(context)
   end
 
   if #sample > 0 then
-    -- The first two guesses both failed with
-    --   bad argument #1 to 'ipairs' (table expected, got string)
-    -- which is more helpful than it looks. Something inside is iterating an
-    -- argument that was handed a plugin id string, so the second argument is a
-    -- table of keys, exactly as batchGetRawMetadata takes -- and the plugin
-    -- goes somewhere else, or nowhere, because a plugin can only read its own
-    -- properties anyway.
+    -- The error moved when the arguments did, and that pins the signature:
+    --   (photos, {keys})      -> ipairs got nil
+    --   (photos, {keys}, id)  -> ipairs got string
+    -- Whatever it iterates is the *third* argument, and it must be a table. So
+    -- the keys go last and the plugin id goes in the middle -- the reverse of
+    -- the first guess.
+    --
+    -- Passing _PLUGIN itself is not tested here and should not be: it does not
+    -- raise, it hangs, exactly as an unsupported search operator does. Two
+    -- hangs from two different bad arguments is enough to treat "SDK call that
+    -- has not returned" as the house style for "wrong argument" rather than as
+    -- a sign of slow work.
     local keyList  = { "inat_observation_id" }
     local variants = {
+      { label = "(photos, id, {keys})",
+        call  = function() return catalog:batchGetPropertyForPlugin(sample,
+                  "com.github.inat-lightroom", keyList) end },
       { label = "(photos, {keys})",
         call  = function() return catalog:batchGetPropertyForPlugin(sample, keyList) end },
       { label = "(photos, {keys}, id)",
         call  = function() return catalog:batchGetPropertyForPlugin(sample, keyList,
                   "com.github.inat-lightroom") end },
-      { label = "(photos, {keys}, _PLUGIN)",
-        call  = function() return catalog:batchGetPropertyForPlugin(sample, keyList, _PLUGIN) end },
-      { label = "(_PLUGIN, photos, {keys})",
-        call  = function() return catalog:batchGetPropertyForPlugin(_PLUGIN, sample, keyList) end },
     }
 
     for _, variant in ipairs(variants) do
