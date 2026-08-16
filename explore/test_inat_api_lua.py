@@ -13,6 +13,7 @@ at their observation and finds the evidence gone.
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
@@ -53,6 +54,18 @@ def api_pair():
     plugin = LuaPlugin(http_handler=fake)
     InatAPI = plugin.require("InatAPI")
     return plugin, InatAPI.new(TOKEN), fake
+
+
+@pytest.fixture
+def api_pair_with():
+    """Same, but driven by a handler the test supplies."""
+
+    def build(handler):
+        plugin = LuaPlugin(http_handler=handler)
+        InatAPI = plugin.require("InatAPI")
+        return plugin, InatAPI.new(TOKEN), handler
+
+    return build
 
 
 # ---------------------------------------------------------------------------
@@ -299,6 +312,159 @@ def test_transport_failures_report_the_underlying_reason(api_pair):
     assert observation is None
     assert "Network is unreachable" in err
     assert "6" in err
+
+
+# ---------------------------------------------------------------------------
+# Listing every observation
+# ---------------------------------------------------------------------------
+
+
+class Pages:
+    """A user's observations, served the way the API serves them.
+
+    Ignores everything except id_above and per_page, which is the whole point:
+    a paginator that works against a stub keyed on page numbers proves nothing
+    about one that has to carry a cursor.
+    """
+
+    def __init__(self, count: int, per_page_cap: int = 200) -> None:
+        self.observations = [
+            {"id": index, "time_observed_at": "2017-04-29T10:22:27Z"}
+            for index in range(1, count + 1)
+        ]
+        self.per_page_cap = per_page_cap
+        self.requests: list[dict] = []
+
+    def __call__(self, method, url, body, _headers):
+        self.requests.append({"method": method, "url": url})
+
+        id_above = int(re.search(r"id_above=(\d+)", url).group(1))
+        per_page = int(re.search(r"per_page=(\d+)", url).group(1))
+        per_page = min(per_page, self.per_page_cap)
+
+        remaining = [o for o in self.observations if o["id"] > id_above]
+        return json.dumps({
+            "total_results": len(self.observations),
+            "results": remaining[:per_page],
+        }), {"status": 200}
+
+
+def test_lists_every_observation_across_pages(api_pair_with):
+    plugin, api, pages = api_pair_with(Pages(450))
+
+    observations, _ = plugin.call(api.listObservations, api,
+                                  plugin.eval("{ perPage = 200 }"))
+
+    assert len(observations) == 450
+    assert observations[1].id == 1
+    assert observations[450].id == 450
+
+
+def test_pages_by_cursor_rather_than_page_number(api_pair_with):
+    """page x per_page is capped at 10,000 by the API, so a user with more
+    observations than that cannot reach the end by counting pages -- the
+    request fails rather than paging on. id_above has no such ceiling."""
+    plugin, api, pages = api_pair_with(Pages(450))
+
+    plugin.call(api.listObservations, api, plugin.eval("{ perPage = 200 }"))
+
+    assert all("id_above=" in request["url"] for request in pages.requests)
+    assert not any("&page=" in request["url"] for request in pages.requests)
+
+    cursors = [int(re.search(r"id_above=(\d+)", r["url"]).group(1))
+               for r in pages.requests]
+    assert cursors == [0, 200, 400]
+
+
+def test_asks_for_ascending_id_order(api_pair_with):
+    """The cursor is the last id of the previous page, so any other ordering
+    silently repeats or skips observations."""
+    plugin, api, pages = api_pair_with(Pages(10))
+
+    plugin.call(api.listObservations, api, plugin.eval("{ perPage = 200 }"))
+
+    assert "order_by=id" in pages.requests[0]["url"]
+    assert "order=asc" in pages.requests[0]["url"]
+
+
+def test_a_short_page_ends_it(api_pair_with):
+    """Asking again would spend a request against a 100/minute limit to be
+    told the same thing."""
+    plugin, api, pages = api_pair_with(Pages(150))
+
+    plugin.call(api.listObservations, api, plugin.eval("{ perPage = 200 }"))
+
+    assert len(pages.requests) == 1
+
+
+def test_an_exact_multiple_takes_one_extra_page(api_pair_with):
+    """400 observations at 200 a page cannot be distinguished from 400-plus
+    until a page comes back empty."""
+    plugin, api, pages = api_pair_with(Pages(400))
+
+    observations, _ = plugin.call(api.listObservations, api,
+                                  plugin.eval("{ perPage = 200 }"))
+
+    assert len(observations) == 400
+    assert len(pages.requests) == 3
+
+
+def test_no_observations_is_not_an_error(api_pair_with):
+    plugin, api, pages = api_pair_with(Pages(0))
+
+    observations, err = plugin.call(api.listObservations, api,
+                                    plugin.eval("{ perPage = 200 }"))
+
+    assert err is None
+    assert len(observations) == 0
+
+
+def test_reports_progress_per_page(api_pair_with):
+    plugin, api, pages = api_pair_with(Pages(450))
+
+    seen = plugin.eval("{}")
+    options = plugin.eval(
+        """
+        function(seen)
+          return { perPage = 200, onPage = function(fetched, total)
+            seen[#seen + 1] = { fetched = fetched, total = total }
+          end }
+        end
+        """
+    )(seen)
+
+    plugin.call(api.listObservations, api, options)
+
+    assert [row.fetched for row in seen.values()] == [200, 400, 450]
+    assert all(row.total == 450 for row in seen.values())
+
+
+def test_can_be_stopped_between_pages(api_pair_with):
+    """A user who cancels should not wait out every remaining page."""
+    plugin, api, pages = api_pair_with(Pages(1000))
+
+    options = plugin.eval(
+        """
+        { perPage = 200, shouldStop = function() return true end }
+        """
+    )
+    observations, _ = plugin.call(api.listObservations, api, options)
+
+    assert len(observations) == 200
+    assert len(pages.requests) == 1
+
+
+def test_a_failed_page_fails_the_whole_call(api_pair):
+    """Half a user's observations looks exactly like a user with half as many,
+    and would quietly report nothing to match against."""
+    plugin, api, fake = api_pair
+    fake.add("/observations", {"error": "boom"}, status=500)
+
+    observations, err = plugin.call(api.listObservations, api,
+                                    plugin.eval("{ perPage = 200 }"))
+
+    assert observations is None
+    assert err is not None
 
 
 # ---------------------------------------------------------------------------

@@ -325,6 +325,74 @@ function InatAPI:findObservationByUuid(uuid)
   return results[1], nil
 end
 
+--- GET /observations?user_id=me -- every observation, in id order.
+--
+-- Cursor pagination, not page numbers. `page` × `per_page` is capped at 10,000
+-- by the API, so a user with more observations than that simply cannot reach
+-- the end by asking for page 51: the request fails rather than paging on.
+-- `id_above` has no such ceiling, because it asks the index to resume rather
+-- than to count.
+--
+-- That makes ordering load-bearing: `order_by = "id"` ascending is what lets
+-- the last id of one page become the cursor for the next. Any other ordering
+-- silently repeats or skips observations.
+--
+-- @param options.perPage    results per request (default 200, the API maximum)
+-- @param options.fields     comma-separated field list, to keep pages small
+-- @param options.onPage     called with (fetchedSoFar, totalResults) per page
+-- @param options.shouldStop called between pages; return true to stop early
+-- @return array of observations, or nil plus an error message
+function InatAPI:listObservations(options)
+  options = options or {}
+
+  local perPage    = options.perPage or 200
+  local observations = {}
+  local idAbove   = 0
+  local total     = nil
+
+  while true do
+    local params = {
+      user_id  = "me",
+      order_by = "id",
+      order    = "asc",
+      per_page = perPage,
+      id_above = idAbove,
+    }
+    if options.fields then params.fields = options.fields end
+
+    local payload, err = apiGet(API_V1 .. "/observations", params, self.token)
+    if not payload then return nil, err end
+
+    local results = payload.results
+    if type(results) ~= "table" or #results == 0 then
+      break
+    end
+
+    total = total or payload.total_results
+
+    for _, observation in ipairs(results) do
+      observations[#observations + 1] = observation
+      -- The cursor has to advance even if a later page is abandoned, so it is
+      -- taken from every row rather than from the last one after the loop.
+      if type(observation.id) == "number" and observation.id > idAbove then
+        idAbove = observation.id
+      end
+    end
+
+    if options.onPage then
+      options.onPage(#observations, total or #observations)
+    end
+
+    -- A short page means the end of the results, and asking again would cost a
+    -- request against a rate limit of 100/minute to be told the same thing.
+    if #results < perPage then break end
+
+    if options.shouldStop and options.shouldStop() then break end
+  end
+
+  return observations, nil
+end
+
 --- POST /observations -- returns the created observation (with .id).
 --
 -- Pass params.uuid to create an observation the caller has already named. That
