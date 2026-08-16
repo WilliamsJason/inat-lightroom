@@ -612,6 +612,35 @@ reviewed by hand: the account must be two months old with ten or more improving
 identifications for other people in the past month. Registration is in
 progress; revisit around October 2026.
 
+### What to register, and why the two fields are not free choices
+
+Two values on the application form are fixed by decisions already made in this
+repository, and both are awkward to change afterwards.
+
+**Redirect URI** — `lightroom://com.github.inat-lightroom/authorization-redirect`
+
+The host part is `LrToolkitIdentifier` from `Info.lua`, because that is what
+Lightroom routes `lightroom://` URLs by. Registering it pins the identifier:
+from that point on, renaming `LrToolkitIdentifier` breaks the redirect until
+the application is re-registered, on top of orphaning every custom metadata
+field already written to photos. The identifier was left as
+`com.github.inat-lightroom` through the rename to "Pinned for iNaturalist"
+partly for this reason — see `Info.lua`.
+
+**Application name** — `Pinned for iNaturalist`
+
+This one is user-facing, which is easy to miss on a form that otherwise looks
+administrative. Doorkeeper shows the application name on the authorization
+screen — *"Pinned for iNaturalist would like access to your account"* — which
+someone reads at the moment they are deciding whether to trust this with their
+iNaturalist account. It has to match `LrPluginName` exactly. A mismatch there
+is the same confusion the rename set out to remove, reappearing at the worst
+possible moment: a name nobody recognises, asking for account access, is
+indistinguishable from something hostile.
+
+Leave **Confidential unchecked**, per above — that is what makes this a public
+client with no secret to ship.
+
 Until then there is no second option in the dialog, and that is deliberate.
 There used to be: an OAuth application form taking an app id, secret,
 iNaturalist username and password, using the password grant to mint a
@@ -817,6 +846,9 @@ you; neither is about the plugin.
   impossible — `LrView` has no canvas and no mouse coordinates.
 
 **OAuth**, once the iNaturalist application is approved (revisit October 2026).
+Register it as `Pinned for iNaturalist` with the redirect URI
+`lightroom://com.github.inat-lightroom/authorization-redirect`; both are
+constrained, see [Authentication](#authentication).
 
 **The Comments panel** is now out of reach, and it was the panel this whole
 design started out trying to sit next to. Only a publish service can fill it

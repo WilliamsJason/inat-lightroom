@@ -30,6 +30,11 @@ return {
   -- descriptive use, while leading with it implies a product of theirs. The
   -- README disclaimer says so in words; the name should not have to be
   -- corrected by it.
+  --
+  -- Renaming this later means also renaming the registered iNaturalist OAuth
+  -- application, which shows its own name on the authorization screen. The two
+  -- drifting apart puts an unfamiliar name in front of someone at the moment
+  -- they are granting account access. See docs/plugin-architecture.md.
   LrPluginName        = LOC "$$$/iNatLightroom/PluginName=Pinned for iNaturalist",
   LrPluginInfoUrl     = "https://github.com/WilliamsJason/inat-lightroom",
 
