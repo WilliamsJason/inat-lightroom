@@ -80,7 +80,39 @@ The fifth argument (`returnExistingIfAny`) is what makes the call idempotent —
 without it, creating a keyword that already exists is an error, so every sync
 after the first would fail.
 
-## A function context ends when its owning function returns
+## The catalog queries a plugin gets, and the date vocabulary they accept
+
+`LibraryToolkit.dll` exposes a `SdkLrCatalogQueries` set — the plugin-facing one
+— which includes the three calls any whole-catalog operation needs:
+
+| Call | Why it matters |
+|---|---|
+| `catalog:findPhotos{ searchDesc = ..., sort = ..., ascending = ... }` | narrows the catalog before anything is read |
+| `catalog:batchGetRawMetadata(photos, keys)` | one call instead of a `getRawMetadata` loop |
+| `catalog:batchGetPropertyForPlugin(photos, ...)` | the same for this plugin's own fields |
+
+`findPhotos` asserts its arguments, and the assertion strings say exactly what it
+wants: *"must be called with named arguments syntax"*, *"searchDesc must be a
+table or nil"*, *"sort must be a string or nil"*, *"ascending must be a boolean
+or nil"*, and — easy to miss — *"must be called from within an LrTask"*.
+
+The date operations are a fixed list, sitting next to `import AgDate`:
+
+```
+== != > < inLast notInLast in today yesterday thisWeek thisMonth
+thisYear pastYear lastYear anytime thisWeekUntilToday range ...
+```
+
+So a capture-time range is `operation = "in"` with `value` and `value2`, and
+`criteria = "captureTime"` is real — `Library.lrmodule` ships the "Past Month"
+smart collection as plain Lua using `criteria = "captureTime", operation =
+"inLast", value = 1, value_units = "months"`, which is where the criteria name
+and the `value_units` key can be read off directly.
+
+**What the binaries cannot say is how long any of it takes.** That needs a real
+catalog, which is what `explore/probes/sdkprobe.lrplugin` is for.
+
+
 
 This looks reasonable and is wrong:
 
