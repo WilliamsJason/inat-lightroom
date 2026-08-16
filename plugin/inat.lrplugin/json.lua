@@ -247,20 +247,30 @@ end
 
 local function parse_object(str, i)
   local res = {}
+  local pairsSeen = 0
   i = i + 1  -- skip '{'
   while true do
     i = next_char(str, i, space_chars, true)
     if str:sub(i,i) == "}" then return res, i + 1 end
-    if next(res) ~= nil then
+
+    -- Counted rather than asking whether the table is empty. `null` decodes to
+    -- nil, so a pair whose value was null stores nothing, and next(res) still
+    -- reports the object as empty -- at which point the comma before the next
+    -- key is not consumed and the parser blames the key for not being a
+    -- string. Any object whose first field was null failed to decode, and
+    -- iNaturalist observations are full of them.
+    if pairsSeen > 0 then
       if str:sub(i,i) ~= "," then decode_error(str, i, "expected ','") end
       i = next_char(str, i + 1, space_chars, true)
     end
+
     if str:sub(i,i) ~= '"' then decode_error(str, i, "expected string key") end
     local key; key, i = parse_string(str, i)
     i = next_char(str, i, space_chars, true)
     if str:sub(i,i) ~= ":" then decode_error(str, i, "expected ':'") end
     i = next_char(str, i + 1, space_chars, true)
     res[key], i = decode_value(str, i)
+    pairsSeen = pairsSeen + 1
   end
 end
 
