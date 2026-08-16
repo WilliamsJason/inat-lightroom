@@ -201,6 +201,50 @@ def _jwt() -> str:
 
 
 # ---------------------------------------------------------------------------
+# One operation at a time
+#
+# Both buttons start something that walks the whole catalog and writes to it.
+# Overlapping runs fight over write transactions, and a reverse sync working out
+# which photos are unlinked while a sync is busy linking them is reading a
+# catalog that is changing underneath it.
+# ---------------------------------------------------------------------------
+
+
+def test_reverse_sync_will_not_start_while_something_else_is_running(
+    plugin, dialog
+):
+    jobs = plugin.require("Jobs")
+    started = []
+
+    def busy():
+        started.append(dialog["reverseSync"](plugin.eval("{ alive = true }")))
+
+    jobs["run"]("Syncing all linked photos", busy)
+
+    assert started == [False]
+    assert "Syncing all linked photos" in plugin.dialogs[-1]["message"]
+
+
+def test_a_sync_will_not_start_while_something_else_is_running(plugin):
+    """Guarded at SyncCore.syncPhotos rather than at the button, because the
+    menu, the panel and a link all reach the same work by other routes."""
+    jobs = plugin.require("Jobs")
+    sync = plugin.require("SyncCore")
+    plugin.set_all_photos([plugin.new_photo(inat_observation_id="42")])
+    started = []
+
+    def busy():
+        photos = plugin.eval("{}")
+        started.append(sync["syncPhotos"](plugin.eval("{ alive = true }"),
+                                          photos))
+
+    jobs["run"]("Finding unlinked observations", busy)
+
+    assert started == [False]
+    assert "Finding unlinked observations" in plugin.dialogs[-1]["message"]
+
+
+# ---------------------------------------------------------------------------
 # The tab views
 #
 # ui.dll validates tab_view_item at build time and raises. Both messages are in

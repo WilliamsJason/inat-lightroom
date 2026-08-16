@@ -26,6 +26,7 @@ local LrProgressScope = import "LrProgressScope"
 
 local InatAPI      = require "InatAPI"
 local InatAuth     = require "InatAuth"
+local Jobs         = require "Jobs"
 local UploadCore   = require "UploadCore"
 local logger       = require "Log"
 
@@ -303,6 +304,11 @@ end
 --------------------------------------------------------------------------------
 
 --- Sync the given photos, reporting progress and a summary.
+--
+-- Holds the plugin's one job slot for the duration: see Jobs. Nothing else
+-- that walks the catalog can start while this is running, and this will not
+-- start while one of them is.
+--
 -- @param context  A live LrFunctionContext; the progress scope is tied to it,
 --                 so it must belong to the task actually running this.
 -- @param photos   The photos to sync.
@@ -311,6 +317,19 @@ end
 --                 for directly and a modal saying "nothing to report" is just
 --                 something else to dismiss.
 function SyncCore.syncPhotos(context, photos, options)
+  options = options or {}
+
+  return Jobs.runOrReport(options.label or "Syncing photos with iNaturalist",
+    function()
+      SyncCore.syncPhotosNow(context, photos, options)
+    end)
+end
+
+--- The sync itself, without the lock.
+--
+-- Separate so that the guard has exactly one place to be, and so a caller that
+-- already holds the slot does not deadlock against itself.
+function SyncCore.syncPhotosNow(context, photos, options)
   options = options or {}
   local catalog = LrApplication.activeCatalog()
 

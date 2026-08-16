@@ -29,6 +29,7 @@ local LrTasks           = import "LrTasks"
 local LrView            = import "LrView"
 
 local InatAuth = require "InatAuth"
+local Jobs     = require "Jobs"
 local Settings = require "Settings"
 local logger   = require "Log"
 
@@ -219,8 +220,9 @@ local function observationsTab(f, props, actions)
         height_in_lines = 2,
       },
       f:push_button {
-        title  = "Sync All Linked Photos",
-        action = actions.syncAll,
+        title   = "Sync All Linked Photos",
+        action  = actions.syncAll,
+        enabled = LrView.bind("idle"),
       },
 
       f:spacer { height = 10 },
@@ -237,8 +239,16 @@ local function observationsTab(f, props, actions)
         height_in_lines = 4,
       },
       f:push_button {
-        title  = "Find Unlinked Observations…",
-        action = actions.reverseSync,
+        title   = "Find Unlinked Observations…",
+        action  = actions.reverseSync,
+        enabled = LrView.bind("idle"),
+      },
+      f:static_text {
+        title   = LrView.bind("busyLabel"),
+        width   = 500,
+        visible = LrView.bind { key = "idle", transform = function(idle)
+          return not idle
+        end },
       },
     },
   }
@@ -391,7 +401,8 @@ function SettingsDialog.syncAll(context)
   end
 
   logger:info("Sync All: " .. #photos .. " linked photo(s)")
-  require("SyncCore").syncPhotos(context, photos)
+  require("SyncCore").syncPhotos(context, photos,
+    { label = "Syncing all linked photos" })
   return #photos
 end
 
@@ -402,6 +413,13 @@ end
 -- through one progress scope so the user sees continuous movement rather than
 -- a bar that fills, resets, and fills again.
 function SettingsDialog.reverseSync(context)
+  return Jobs.runOrReport("Finding unlinked observations", function()
+    SettingsDialog.reverseSyncNow(context)
+  end)
+end
+
+--- The reverse sync itself, without the lock.
+function SettingsDialog.reverseSyncNow(context)
   local UploadCore  = require "UploadCore"
   local ReverseSync = require "ReverseSync"
 
@@ -513,6 +531,20 @@ function SettingsDialog.show()
     for key, value in pairs(Settings.all()) do
       props[key] = value
     end
+
+    -- Follows the lock rather than the buttons, so the dialog is right about
+    -- what is running even when it was not the one that started it: opened
+    -- during a sync launched from the menu, the buttons come up already greyed.
+    --
+    -- The property table dies with this dialog while the job carries on, so
+    -- the update is guarded. It is a plain field write, which cannot yield, so
+    -- an ordinary pcall is the right one here.
+    Jobs.watch(props, function(running)
+      pcall(function()
+        props.idle      = (running == nil)
+        props.busyLabel = running and (tostring(running) .. "…") or ""
+      end)
+    end)
 
     local actions = {
       syncAll = function()
