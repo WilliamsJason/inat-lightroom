@@ -35,8 +35,7 @@
   The authorization code flow is not built yet. URLHandler.lua and
   PluginUrls.lua already exist to receive its redirect -- that is what
   Info.lua's URLHandler entry is for -- so what remains is the exchange
-  itself. Until then, the pasted JWT is the only path, and InatAuth.clear()
-  still erases the credentials the old flow stored.
+  itself. Until then, the pasted JWT is the only path.
 
   Secrets are held by LrPasswords, which is backed by the OS credential
   vault. Non-secret bookkeeping (when the JWT was obtained, which mode is in
@@ -59,14 +58,6 @@ local API_V1   = "https://api.inaturalist.org/v1"
 -- LrPasswords keys. LrPasswords is already scoped to this plugin, so these
 -- do not need the toolkit identifier prefixed.
 local KEY_API_TOKEN  = "api_token"
-
--- Keys the removed OAuth password-grant flow used to write. Nothing stores
--- these any more, but anyone who configured that flow still has them sitting
--- in their OS credential vault -- including their iNaturalist account
--- password. Removing the feature without erasing them would leave a password
--- behind with no remaining way to remove it, so InatAuth.clear() still names
--- them. Do not delete this list.
-local LEGACY_KEYS = { "app_id", "app_secret", "username", "user_pass" }
 
 
 -- iNaturalist JWTs last 24 hours. Refresh early so a long export does not
@@ -168,12 +159,6 @@ end
 
 function InatAuth.clear()
   store(KEY_API_TOKEN, "")
-
-  -- Also erase what the removed OAuth flow stored. See LEGACY_KEYS.
-  for _, key in ipairs(LEGACY_KEYS) do
-    store(key, "")
-  end
-
   prefs.apiTokenObtainedAt = nil
   prefs.apiTokenExpiresAt  = nil
   prefs.authMode = nil

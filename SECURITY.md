@@ -18,10 +18,7 @@ Windows Credential Manager or the macOS Keychain. It is not written to disk by
 the plugin and it is not written to its log. Use **Clear Stored Credentials**
 in the settings window to remove it.
 
-The plugin never asks for your iNaturalist password. An earlier version offered
-an OAuth application form that did, using the password grant; it has been
-removed in favour of browser sign-in. **Clear Stored Credentials** also erases
-anything that form saved, so if you ever used it, click it once.
+The plugin never asks for your iNaturalist password.
 
 **Your photos and their locations.** Uploads go to iNaturalist over HTTPS. What
 travels with them is yours to decide in the settings window: an observation's
