@@ -23,10 +23,15 @@
 local LrApplication     = import "LrApplication"
 local LrDialogs         = import "LrDialogs"
 local LrFunctionContext = import "LrFunctionContext"
+local LrTasks           = import "LrTasks"
 
 local Report = require "Report"
 
 --- The type of a method on an SDK object, without assuming indexing is safe.
+--
+-- Plain pcall is correct here and nowhere else in this file: reading a field
+-- cannot yield, and if indexing ever did, LrTasks.pcall could not rescue it --
+-- Lua cannot yield across a metamethod at all.
 local function methodType(object, name)
   local ok, value = pcall(function() return object[name] end)
   if not ok then return "error: " .. tostring(value) end
@@ -215,7 +220,7 @@ local function run(_context)
 end
 
 LrFunctionContext.postAsyncTaskWithContext("inat_probe_catalog", function(context)
-  local ok, err = pcall(run, context)
+  local ok, err = LrTasks.pcall(run, context)
   if not ok then
     LrDialogs.message("iNat SDK Probe", "Probe failed:\n\n" .. tostring(err),
       "critical")

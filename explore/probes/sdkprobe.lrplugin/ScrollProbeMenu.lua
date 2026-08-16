@@ -28,6 +28,7 @@ local LrApplication     = import "LrApplication"
 local LrBinding         = import "LrBinding"
 local LrDialogs         = import "LrDialogs"
 local LrFunctionContext = import "LrFunctionContext"
+local LrTasks           = import "LrTasks"
 local LrView            = import "LrView"
 
 local Report = require "Report"
@@ -119,7 +120,7 @@ local function measure(report, context, rowCount, withThumbnail, photos)  local 
   }
 
   local openStart = Report.now()
-  local shown, showErr = pcall(function()
+  local shown, showErr = LrTasks.pcall(function()
     return LrDialogs.presentModalDialog {
       title      = "Probe: " .. rowCount .. " rows",
       contents   = contents,
@@ -193,7 +194,7 @@ local function measureSimpleList(report, context, rowCount)
   }
 
   local openStart = Report.now()
-  local shown, showErr = pcall(function()
+  local shown, showErr = LrTasks.pcall(function()
     return LrDialogs.presentModalDialog {
       title      = "Probe: simple_list, " .. rowCount .. " items",
       contents   = contents,
@@ -264,7 +265,7 @@ local function run(context)
 end
 
 LrFunctionContext.postAsyncTaskWithContext("inat_probe_scroll", function(context)
-  local ok, err = pcall(run, context)
+  local ok, err = LrTasks.pcall(run, context)
   if not ok then
     LrDialogs.message("iNat SDK Probe", "Probe failed:\n\n" .. tostring(err),
       "critical")

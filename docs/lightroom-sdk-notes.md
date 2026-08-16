@@ -136,7 +136,53 @@ end)
 The exception is a modal dialog, which blocks and so keeps its context alive
 for anything started underneath it.
 
-## `exportSession:renditions()` is an iterator
+## A plain `pcall` around an SDK call silently breaks it
+
+`pcall` stops the code inside it from yielding, and most of the interesting SDK
+is asynchronous underneath. What comes back is not "you used pcall wrong", it is
+one of these:
+
+```
+Yielding is not allowed within a C or metamethod call
+LrCatalog:findPhotos: must be called from within an LrTask
+```
+
+The second is the cruel one. It is reported while running inside a perfectly
+good `postAsyncTaskWithContext`, because what the SDK actually tests is whether
+yielding is possible *right now* — and inside a `pcall` it is not. Chasing the
+message leads to auditing task creation, which is not where the problem is.
+
+`getAllPhotos` was quieter still: wrapped in a `pcall` it returned an **empty
+list** rather than raising, which reads as an empty catalog.
+
+`LrTasks` exports a replacement. The full export list, from `LightroomSDK.dll`:
+
+```
+startAsyncTask startAsyncTaskWithoutErrorHandler pcall canYield
+canYieldToScheduler sleep yield yieldToScheduler execute executeWithRunAsVerb
+```
+
+So use `LrTasks.pcall(f, ...)`, which has `pcall`'s signature and lets what it
+calls yield. Plain `pcall` remains correct for things that genuinely cannot
+yield — `string.format`, `io`, reading a field off a table. Note that indexing
+is beyond rescue either way: Lua cannot yield across a metamethod at all.
+
+## `f:edit_text` is Mac-only
+
+In `ui.dll`'s factory constant list it sits directly behind a `MAC_ENV` guard:
+
+```
+... color_well edit_field MAC_ENV edit_text combo_box password_field ...
+```
+
+On Windows `f:edit_text` is simply `nil`, and the failure is
+`attempt to call method 'edit_text' (a nil value)` at the moment the view is
+built. Use `f:edit_field` with `height_in_lines` for multi-line text.
+
+Worth checking any control against that list before relying on it — `MAC_ENV`
+appears 161 times in `ui.dll`, so this is unlikely to be the only one.
+
+
 
 Calling it directly hands back the loop *index* first, so `renditions()()` is a
 number, not a rendition:

@@ -10,8 +10,8 @@
 
 local LrDate      = import "LrDate"
 local LrDialogs   = import "LrDialogs"
-local LrFileUtils = import "LrFileUtils"
 local LrPathUtils = import "LrPathUtils"
+local LrTasks     = import "LrTasks"
 local LrView      = import "LrView"
 
 local Report = {}
@@ -53,9 +53,17 @@ end
 --- Run f, returning elapsed-time text plus whatever f returned.
 -- Errors are caught: a probe that dies half way is still worth the lines it
 -- already produced, and "this call does not exist" is itself a result.
+--
+-- LrTasks.pcall, not Lua's pcall. **A plain pcall stops the code inside it
+-- being able to yield**, and every interesting SDK call here yields. The
+-- symptom is not an obvious one: the call comes back with
+-- "LrCatalog:findPhotos: must be called from within an LrTask" while running
+-- inside a perfectly good task, because what the SDK actually tests is whether
+-- yielding is possible right now. getAllPhotos was quieter still -- it returned
+-- an empty list rather than complaining, which read as an empty catalog.
 function Report.timed(f, ...)
   local startTime = Report.now()
-  local results   = { pcall(f, ...) }
+  local results   = { LrTasks.pcall(f, ...) }
   local took      = Report.elapsed(startTime)
 
   if not results[1] then
@@ -69,14 +77,15 @@ function Report:show()
   local body = self:text()
   local path = nil
 
+  -- io.open in append mode rather than LrFileUtils.readFile and a rewrite:
+  -- plain io does not yield, so it works from anywhere, and appending is what
+  -- was wanted anyway. A probe run is usually one of several, and losing the
+  -- previous answer to run the next one is a poor trade.
   local ok = pcall(function()
     local folder = LrPathUtils.getStandardFilePath("desktop")
     path = LrPathUtils.child(folder, "inat-sdk-probe.txt")
-    -- Append rather than replace: a probe run is usually one of several, and
-    -- losing the previous answer to run the next one is a poor trade.
-    local existing = LrFileUtils.exists(path) and LrFileUtils.readFile(path) or ""
-    local handle = io.open(path, "w")
-    handle:write(existing .. body .. "\n\n")
+    local handle = io.open(path, "a")
+    handle:write(body .. "\n\n")
     handle:close()
   end)
 
@@ -84,19 +93,25 @@ function Report:show()
     body = body .. "\n\nWritten to " .. path
   end
 
+  -- edit_field, not edit_text. **edit_text is Mac-only**: in ui.dll's factory
+  -- list it sits directly behind a MAC_ENV guard, so on Windows f:edit_text is
+  -- nil and calling it fails with "attempt to call method 'edit_text' (a nil
+  -- value)" -- at the moment the probe tries to show its results, which is the
+  -- worst possible time to lose them. The file above is written first for
+  -- exactly that reason.
   local f = LrView.osFactory()
   LrDialogs.presentModalDialog {
     title    = self.title,
     contents = f:column {
-      f:edit_text {
+      f:edit_field {
         value           = body,
         width           = 720,
         height_in_lines = 30,
         enabled         = true,
       },
     },
-    actionVerb   = "Done",
-    cancelVerb   = "< exclude >",
+    actionVerb = "Done",
+    cancelVerb = "< exclude >",
   }
 end
 
