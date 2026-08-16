@@ -31,6 +31,11 @@ return {
       file  = "ScrollProbeMenu.lua",
       id    = "inat_probe_scroll",
     },
+    {
+      title = "iNat Probe: Thumbnails…",
+      file  = "ThumbProbeMenu.lua",
+      id    = "inat_probe_thumbs",
+    },
   },
 
   VERSION = { major = 0, minor = 0, revision = 1, display = "probe" },
