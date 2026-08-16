@@ -24,6 +24,7 @@ local LrBinding         = import "LrBinding"
 local LrDialogs         = import "LrDialogs"
 local LrFunctionContext = import "LrFunctionContext"
 local LrHttp            = import "LrHttp"
+local LrProgressScope   = import "LrProgressScope"
 local LrTasks           = import "LrTasks"
 local LrView            = import "LrView"
 
@@ -221,6 +222,24 @@ local function observationsTab(f, props, actions)
         title  = "Sync All Linked Photos",
         action = actions.syncAll,
       },
+
+      f:spacer { height = 10 },
+      f:separator { fill_horizontal = 1 },
+      f:spacer { height = 6 },
+
+      f:static_text { title = "Observations without a photo", font = "<system/bold>" },
+      f:static_text {
+        title = "Looks through your iNaturalist observations for ones whose\n"
+          .. "photo is in this catalog but not yet linked — the ones recorded\n"
+          .. "on a phone, or uploaded from somewhere else. You choose what\n"
+          .. "gets linked before anything is written.",
+        width           = 500,
+        height_in_lines = 4,
+      },
+      f:push_button {
+        title  = "Find Unlinked Observations…",
+        action = actions.reverseSync,
+      },
     },
   }
 end
@@ -376,6 +395,71 @@ function SettingsDialog.syncAll(context)
   return #photos
 end
 
+--- Find observations whose photo is in the catalog but not linked to them.
+--
+-- Two phases with different shapes: fetching is bounded by iNaturalist's page
+-- size and the network, matching by the number of observations. Both report
+-- through one progress scope so the user sees continuous movement rather than
+-- a bar that fills, resets, and fills again.
+function SettingsDialog.reverseSync(context)
+  local UploadCore  = require "UploadCore"
+  local ReverseSync = require "ReverseSync"
+
+  local api, err = UploadCore.requireAPI()
+  if not api then
+    LrDialogs.message("iNaturalist Reverse Sync", err, "warning")
+    return
+  end
+
+  local progress = LrProgressScope {
+    title           = "iNaturalist Reverse Sync",
+    caption         = "Fetching your observations…",
+    functionContext = context,
+  }
+  progress:setCancelable(true)
+
+  local matches, summary = ReverseSync.prepare(api, {
+    shouldStop = function() return progress:isCanceled() end,
+
+    onFetch = function(fetched, total)
+      -- The total is unknown until the first page comes back, and a bar that
+      -- sits at zero looks identical to one that has hung.
+      progress:setCaption(string.format("Fetched %d of %d observations…",
+        fetched, total or fetched))
+      if total and total > 0 then
+        progress:setPortionComplete(fetched, total * 2)
+      end
+    end,
+
+    onProgress = function(done, total)
+      progress:setCaption(string.format("Checking observation %d of %d…",
+        done, total))
+      progress:setPortionComplete(total + done, total * 2)
+    end,
+  })
+
+  progress:done()
+
+  if not matches then
+    LrDialogs.message("iNaturalist Reverse Sync",
+      "Could not fetch your observations: " .. tostring(summary), "warning")
+    return
+  end
+  if summary.stopped and #matches == 0 then return end
+
+  local reviewed = require("ReverseSyncDialog").show(context, matches, summary)
+  if not reviewed then return end
+
+  local linked, failures = ReverseSync.apply(LrApplication.activeCatalog(),
+    reviewed)
+
+  local message = string.format("Linked %d photo(s) to observations.", linked)
+  if #failures > 0 then
+    message = message .. string.format("\n%d could not be linked.", #failures)
+  end
+  LrDialogs.message("iNaturalist Reverse Sync", message, "info")
+end
+
 --------------------------------------------------------------------------------
 -- Showing it
 --------------------------------------------------------------------------------
@@ -416,6 +500,17 @@ function SettingsDialog.show()
         LrFunctionContext.postAsyncTaskWithContext("inat_sync_all",
           function(syncContext)
             SettingsDialog.syncAll(syncContext)
+          end)
+      end,
+
+      reverseSync = function()
+        -- Same reasoning as syncAll: this outlives the settings dialog, and
+        -- its progress scope must not be tied to a context that ends when the
+        -- dialog is dismissed. It also opens a dialog of its own, which cannot
+        -- be done from inside this one's action.
+        LrFunctionContext.postAsyncTaskWithContext("inat_reverse_sync",
+          function(syncContext)
+            SettingsDialog.reverseSync(syncContext)
           end)
       end,
     }
