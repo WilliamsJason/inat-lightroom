@@ -343,6 +343,14 @@ stubs.LrView = {
   bind = function(spec) return { __bind = spec } end,
 }
 
+-- LrColor is a module that is itself a function: LrColor(r, g, b). The stub
+-- keeps the components so a test can assert a warning is drawn in a warning
+-- colour, rather than only that some colour was asked for.
+stubs.LrColor = function(red, green, blue, alpha)
+  return { red = red, green = green, blue = blue, alpha = alpha,
+           __color = true }
+end
+
 -- A property table that notices writes.
 --
 -- The real one is not a plain table: assigning to it fires anything registered

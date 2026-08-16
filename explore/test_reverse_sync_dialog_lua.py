@@ -87,67 +87,182 @@ def test_an_unidentified_observation_still_gets_a_row(plugin, dialog):
 def test_a_location_conflict_is_spelled_out(plugin, dialog):
     """The user can adjudicate "iNat thinks this was 40 km away"; the matcher
     cannot, which is why it flags rather than discards."""
-    row = dialog["describe"](match(plugin, tier="conflict", distance=40000))
+    note = dialog["caveats"](match(plugin, tier="conflict", distance=40000))
 
-    assert "40 km away" in row
+    assert "40 km away" in note
 
 
 def test_an_ambiguous_match_says_how_many_others_fit(plugin, dialog):
-    row = dialog["describe"](match(plugin, ambiguous=True, alternatives=3))
+    note = dialog["caveats"](match(plugin, ambiguous=True, alternatives=3))
 
-    assert "3 other photo(s) fit equally well" in row
+    assert "3 other photo(s) fit equally well" in note
 
 
 def test_a_confident_match_carries_no_note(plugin, dialog):
     """If every row were annotated the flags would stop meaning anything."""
-    row = dialog["describe"](match(plugin, tier="confirmed", distance=12))
+    assert dialog["caveats"](match(plugin, tier="confirmed", distance=12)) == ""
 
-    assert "[" not in row
+
+def test_the_caveat_line_is_empty_rather_than_absent(plugin, dialog):
+    """Rows are reused as the page turns, so a nil here would leave the
+    previous page's warning attached to a match that does not have one."""
+    assert dialog["caveats"](match(plugin)) == ""
+
+
+# -------------------------------------------------------------------- paging
+
+def test_a_short_run_is_one_page(plugin, dialog):
+    assert dialog["pageCount"](25, 25) == 1
+    assert dialog["pageCount"](1, 25) == 1
+
+
+def test_an_empty_run_still_has_a_page(plugin, dialog):
+    """Zero pages would make "Page 1 of 0" and leave both buttons dead."""
+    assert dialog["pageCount"](0, 25) == 1
+
+
+def test_a_partial_last_page_is_still_a_page(plugin, dialog):
+    assert dialog["pageCount"](26, 25) == 2
+    assert dialog["pageCount"](51, 25) == 3
+
+
+def test_a_page_covers_its_own_slice(plugin, dialog):
+    assert tuple(dialog["pageRange"](1, 60, 25)) == (1, 25)
+    assert tuple(dialog["pageRange"](2, 60, 25)) == (26, 50)
+
+
+def test_the_last_page_stops_at_the_last_match(plugin, dialog):
+    """Running to 75 would index past the end and put nil in ten rows."""
+    assert tuple(dialog["pageRange"](3, 60, 25)) == (51, 60)
 
 
 # ---------------------------------------------------------------- selection
 
+def pager(plugin, dialog, count, page_size=3):
+    """A Pager over `count` throwaway matches, with its own property table."""
+    every = matches(plugin, *[match(plugin) for _ in range(count)])
+    props = plugin.eval(
+        'function() return import("LrBinding").makePropertyTable(nil) end')()
+    made = dialog["Pager"]["new"](every, props,
+                                  plugin.runtime.table_from(
+                                      {"pageSize": page_size}))
+    made["render"](made)
+    return made, every, props
+
+
 def test_every_row_starts_selected(plugin, dialog):
     """Ticking a thousand boxes to accept matches that are already right is an
     offer people abandon halfway through."""
-    items, selection = dialog["build"](matches(plugin,
-        match(plugin), match(plugin), match(plugin)))
+    made, _every, props = pager(plugin, dialog, 3)
 
-    assert len(items) == 3
-    assert [selection[i] for i in range(1, 4)] == [1, 2, 3]
-
-
-def test_an_empty_run_builds_an_empty_list(plugin, dialog):
-    items, selection = dialog["build"](matches(plugin))
-
-    assert len(items) == 0
-    assert len(selection) == 0
+    assert [props["selected" + str(row)] for row in (1, 2, 3)] \
+        == [True, True, True]
 
 
-def test_the_selection_decides_what_gets_linked(plugin, dialog):
-    every = matches(plugin, match(plugin), match(plugin), match(plugin))
+def test_the_page_shows_only_its_own_matches(plugin, dialog):
+    made, _every, props = pager(plugin, dialog, 7)
 
-    count = dialog["applySelection"](every, plugin.runtime.table_from([1, 3]))
+    assert props["visible1"] is True
+    assert props["status"].startswith("Page 1 of 3")
 
-    assert count == 2
-    assert [every[i].selected for i in range(1, 4)] == [True, False, True]
+
+def test_a_short_last_page_hides_its_spare_rows(plugin, dialog):
+    """The rows cannot be removed, so leaving them showing would repeat the
+    previous page's photos under checkboxes that link nothing."""
+    made, _every, props = pager(plugin, dialog, 7)
+
+    made["turn"](made, 1)
+    made["turn"](made, 1)
+
+    assert props["visible1"] is True
+    assert props["visible2"] is False
+    assert props["title2"] == ""
+    assert props["photo2"] is None
+
+
+def test_unticking_survives_turning_the_page_and_back(plugin, dialog):
+    """The checkboxes are reused, so an answer left in a widget is an answer
+    overwritten by the next page. This is the bug the selection array exists
+    to prevent."""
+    made, every, props = pager(plugin, dialog, 6)
+
+    props["selected2"] = False
+    made["turn"](made, 1)
+    made["turn"](made, -1)
+
+    assert props["selected2"] is False
+    assert made["commit"](made) == 5
+    assert [every[i].selected for i in range(1, 7)] \
+        == [True, False, True, True, True, True]
+
+
+def test_the_answer_from_a_page_left_behind_is_still_kept(plugin, dialog):
+    """Untick on page 1, accept from page 2: the dialog never returns to the
+    page holding the decision, so it has to have been harvested on the way
+    out."""
+    made, every, props = pager(plugin, dialog, 6)
+
+    props["selected1"] = False
+    made["turn"](made, 1)
+
+    assert made["commit"](made) == 5
+    assert every[1].selected is False
+
+
+def test_paging_stops_at_both_ends(plugin, dialog):
+    made, _every, props = pager(plugin, dialog, 6)
+
+    assert made["turn"](made, -1) is False
+    assert made["turn"](made, 1) is True
+    assert made["turn"](made, 1) is False
+    assert props["canGoForward"] is False
+    assert props["canGoBack"] is True
+
+
+def test_select_none_reaches_pages_the_user_has_not_seen(plugin, dialog):
+    """The button sits beside a count of the whole run. Clearing only the
+    visible page would leave that number contradicting the button next to
+    it."""
+    made, every, props = pager(plugin, dialog, 6)
+
+    made["setAll"](made, False)
+
+    assert props["status"].endswith("0 of 6 selected")
+    assert made["commit"](made) == 0
+    assert [every[i].selected for i in range(1, 7)] == [False] * 6
+
+
+def test_select_all_puts_back_what_was_unticked(plugin, dialog):
+    made, _every, props = pager(plugin, dialog, 6)
+
+    props["selected1"] = False
+    made["setAll"](made, True)
+
+    assert props["selected1"] is True
+    assert made["commit"](made) == 6
+
+
+def test_select_all_does_not_discard_the_page_s_thumbnails(plugin, dialog):
+    """Re-rendering would bump the epoch and abandon downloads that are already
+    correct -- only the ticks changed."""
+    made, _every, _props = pager(plugin, dialog, 6)
+    before = made["epoch"]
+
+    made["setAll"](made, False)
+
+    assert made["epoch"] == before
 
 
 def test_unticking_everything_links_nothing(plugin, dialog):
     """An empty selection has to mean none rather than all. Read the other way
     -- as "no filter" -- it would link every match the user just rejected."""
-    every = matches(plugin, match(plugin), match(plugin))
+    made, every, props = pager(plugin, dialog, 2, page_size=25)
 
-    count = dialog["applySelection"](every, plugin.runtime.table_from([]))
+    props["selected1"] = False
+    props["selected2"] = False
 
-    assert count == 0
+    assert made["commit"](made) == 0
     assert [every[i].selected for i in range(1, 3)] == [False, False]
-
-
-def test_a_missing_selection_links_nothing(plugin, dialog):
-    every = matches(plugin, match(plugin))
-
-    assert dialog["applySelection"](every, None) == 0
 
 
 # ------------------------------------------------------------------ summary

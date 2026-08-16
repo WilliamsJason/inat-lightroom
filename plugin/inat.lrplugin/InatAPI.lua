@@ -381,6 +381,10 @@ local LIST_FIELDS = table.concat({
   "taxon.id", "taxon.name", "taxon.rank", "taxon.preferred_common_name",
   "community_taxon.id", "community_taxon.name", "community_taxon.rank",
   "community_taxon.preferred_common_name",
+  -- The review list draws the iNaturalist photo beside the catalog one, so the
+  -- user can confirm a match by looking rather than by trusting a timestamp.
+  -- `photos.url` is the 75px square; ThumbCache rewrites it for a bigger size.
+  "photos.id", "photos.url",
 }, ",")
 
 InatAPI.LIST_FIELDS = LIST_FIELDS
