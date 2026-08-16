@@ -29,12 +29,19 @@
       local obs     = api:getObservation(12345678)
 --]]
 
+local LrDate   = import "LrDate"
 local LrHttp   = import "LrHttp"
+local LrTasks  = import "LrTasks"
 
 local json   = require "json"
 local logger = require "Log"
 
 local API_V1   = "https://api.inaturalist.org/v1"
+
+-- Declared here rather than beside its constructor because the request verbs
+-- above read the rate-limit settings off it.
+local InatAPI = {}
+InatAPI.__index = InatAPI
 
 -- v2 is used for exactly one call: listing observations. It is the only
 -- endpoint here that returns thousands of rows, and the only one where v2's
@@ -148,14 +155,87 @@ local function firstResult(payload)
 end
 
 --------------------------------------------------------------------------------
+-- Staying inside the rate limit
+--------------------------------------------------------------------------------
+
+--- Seconds to leave between requests.
+--
+-- iNaturalist asks for no more than 60 requests a minute and refuses above
+-- roughly 100. A sync loop makes one or two requests per photo and nothing
+-- paces it, so a few hundred photos hit the ceiling within seconds: a real run
+-- took 346 of 654 taxon lookups to HTTP 429.
+--
+-- That mattered far more than a failed request usually does, because the code
+-- that asks for a taxon wants its ancestors, and a taxon without ancestors
+-- still looks like a taxon. Every 429 wrote a species keyword directly under
+-- "iNaturalist" instead of under its lineage, so throttling quietly flattened
+-- a third of the user's keyword tree.
+InatAPI.MIN_INTERVAL = 1.0
+
+--- How many times to retry a request the server refused for rate.
+InatAPI.MAX_RETRIES = 4
+
+local lastRequestAt = nil
+
+--- Wait until the next request is allowed.
+--
+-- MUST be called from inside a task. LrTasks.sleep yields, and the whole API
+-- is task-only already.
+local function pace()
+  if lastRequestAt then
+    local since = LrDate.currentTime() - lastRequestAt
+    local wait  = InatAPI.MIN_INTERVAL - since
+    -- Guarded against a negative wait and against a clock that has gone
+    -- backwards, which would otherwise sleep for most of a day.
+    if wait > 0 and wait <= InatAPI.MIN_INTERVAL then
+      LrTasks.sleep(wait)
+    end
+  end
+  lastRequestAt = LrDate.currentTime()
+end
+
+--- True when the server refused this request for rate rather than for content.
+local function throttled(err)
+  return type(err) == "string" and err:find("HTTP 429", 1, true) ~= nil
+end
+
+--- Run one request, pacing it and retrying while the server says 429.
+--
+-- Backoff doubles from a second. A 429 means the window is already full, so
+-- retrying at the same rate spends the whole allowance on refusals.
+local function paced(send)
+  local delay = 1.0
+
+  for attempt = 1, InatAPI.MAX_RETRIES + 1 do
+    pace()
+    local payload, err = send()
+    if payload or not throttled(err) then return payload, err end
+
+    if attempt <= InatAPI.MAX_RETRIES then
+      logger:warn(string.format(
+        "Rate limited by iNaturalist; waiting %.0fs (attempt %d of %d)",
+        delay, attempt, InatAPI.MAX_RETRIES))
+      LrTasks.sleep(delay)
+      delay = delay * 2
+    end
+  end
+
+  return nil, "iNaturalist is rate limiting this plugin; try again shortly."
+end
+
+InatAPI._paced = paced
+
+--------------------------------------------------------------------------------
 -- Request verbs
 --------------------------------------------------------------------------------
 
 local function apiGet(url, params, token)
   local fullUrl = url .. buildQuery(params)
   logger:debug("GET " .. fullUrl)
-  local body, respHeaders = LrHttp.get(fullUrl, jsonHeaders(token))
-  return handleResponse("GET", fullUrl, body, respHeaders)
+  return paced(function()
+    local body, respHeaders = LrHttp.get(fullUrl, jsonHeaders(token))
+    return handleResponse("GET", fullUrl, body, respHeaders)
+  end)
 end
 
 local function apiSend(method, url, payload, token)
@@ -237,9 +317,6 @@ end
 -- InatAPI class
 --------------------------------------------------------------------------------
 
-local InatAPI = {}
-InatAPI.__index = InatAPI
-
 --- Create a new API client.
 -- @param token  A JWT from InatAuth.getToken(). NOT a bare OAuth token.
 function InatAPI.new(token)
@@ -262,14 +339,28 @@ function InatAPI:autocompleteTaxon(query, rank)
 end
 
 --- GET /taxa/{id} -- full taxon including the ancestors array.
+--
+-- Memoised on the client, because the callers ask the same question over and
+-- over: a sync of 654 photos was 654 lookups covering a few hundred species,
+-- and one taxon id appeared dozens of times. A taxon's lineage cannot change
+-- while Lightroom is open, so the second answer is always the first one.
+--
+-- Only successes are kept. Caching a failure would turn one refused request
+-- into a permanently wrong keyword for every photo of that species in the run.
 function InatAPI:getTaxon(taxonId)
-  local payload, err = apiGet(API_V1 .. "/taxa/" .. tostring(taxonId), nil, self.token)
+  local key = tostring(taxonId)
+  self._taxa = self._taxa or {}
+  if self._taxa[key] then return self._taxa[key], nil end
+
+  local payload, err = apiGet(API_V1 .. "/taxa/" .. key, nil, self.token)
   if not payload then return nil, err end
 
   local taxon = firstResult(payload)
   if not taxon then
-    return nil, "Taxon " .. tostring(taxonId) .. " not found"
+    return nil, "Taxon " .. key .. " not found"
   end
+
+  self._taxa[key] = taxon
   return taxon, nil
 end
 

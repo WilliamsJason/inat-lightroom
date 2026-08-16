@@ -652,3 +652,42 @@ Neither shows up on the small payloads every other endpoint returns, and
 nothing is logged while it happens: Lightroom stops redrawing while a task is
 inside a single Lua call, so the window greys out and Windows offers to close
 it. Decoding the same 15 MB page after both were fixed: 1.3 seconds.
+
+## Rate limiting corrupts data, it does not just fail
+
+iNaturalist asks for no more than 60 requests a minute and starts answering
+HTTP 429 above roughly 100. Nothing in the plugin paced its requests, and a
+sync sends one or two per photo, so a real run of 654 photos took **346 taxon
+lookups to 429** -- more than half.
+
+The damage was not the failed requests. A taxon on an observation arrives with
+a name and a rank but no `ancestors`, and the ancestors are the entire keyword
+hierarchy, so the plugin fetches the full taxon. When that fetch failed the
+code fell back to the taxon it already had, on the reasoning that a keyword
+under the wrong parent beats no keyword at all. That reasoning was wrong. The
+fallback still looks like a taxon, `buildKeywordPath` still returns a path, and
+the path it returns is `{"iNaturalist", "Bombus"}` -- so 346 species, genera
+and families were filed directly beside the kingdoms, in the user's own
+catalog, with nothing in the UI saying anything had gone wrong.
+
+Three things came out of it:
+
+- **Pace requests.** One second between them, which is exactly the 60/minute
+  they ask for, plus retry on 429 with a doubling backoff. A 429 means the
+  window is already full, so retrying at the same rate spends the rest of the
+  allowance on refusals.
+- **Cache what does not change.** `getTaxon` is memoised on the client. 654
+  photos were a few hundred species and one taxon id appeared dozens of times;
+  people photograph the same bee all summer. Only successes are cached --
+  caching a refusal turns one throttled request into every photo of that
+  species being filed wrong for the rest of the run.
+- **Never degrade a write.** A request that fails costs a re-run. A wrong
+  keyword written into someone's catalog costs a cleanup, and they may not
+  notice for weeks. `SyncCore.hasLineage` now gates keyword creation, and a
+  taxon whose lineage never loaded gets its fields written and no keyword.
+  Presence, not length: a kingdom legitimately has `ancestors = []`, and
+  reading that as failure would refuse to file anything at kingdom rank.
+
+The cost is that pacing makes a full sync slow -- one request per photo per
+second. Fetching observations in batches by id is the way out of that, not a
+faster rate.

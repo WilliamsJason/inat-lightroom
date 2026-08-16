@@ -444,3 +444,94 @@ def test_an_observation_with_no_coordinates_writes_no_gps():
     run_sync(plugin)
 
     assert photo["_raw"]["gps"] is None
+
+
+# ---------------------------------------------------------------------------
+# When the lineage cannot be fetched
+#
+# A taxon on an observation carries a name but no ancestors, so the plugin
+# fetches the full one. When iNaturalist refuses -- and under rate limiting it
+# refused 346 times in one real run -- the fallback taxon still looks like a
+# taxon, and the keyword code used to file it directly under "iNaturalist".
+# Writing nothing is a re-run; writing a species beside the kingdoms is a
+# cleanup in someone else's catalog.
+# ---------------------------------------------------------------------------
+
+
+def bare_taxon(name="Bombus", taxon_id=52775):
+    """As an observation reports it: named, ranked, no lineage."""
+    return {"id": taxon_id, "name": name, "rank": "genus",
+            "preferred_common_name": "Bumble Bees"}
+
+
+def make_refusing_plugin(responses, refuse):
+    """Like make_plugin, but any URL containing `refuse` comes back 429."""
+    plugin = LuaPlugin()
+    auth = plugin.require("InatAuth")
+    plugin.call(auth["storeApiToken"], make_jwt(FUTURE))
+
+    def handler(method, url, body=None, headers=None):
+        if refuse in url:
+            return "<html>Too many requests</html>", plugin.runtime.table_from(
+                {"status": 429})
+        for fragment, payload in responses.items():
+            if fragment in url:
+                return json.dumps(payload), plugin.runtime.table_from(
+                    {"status": 200})
+        raise AssertionError(f"unexpected {method} {url}")
+
+    plugin.set_http_handler(handler)
+    return plugin
+
+
+def test_a_throttled_taxon_writes_no_keyword_at_all():
+    plugin = make_refusing_plugin(
+        {"/observations/999": observation(community=bare_taxon())},
+        refuse="/taxa/")
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="999")])
+
+    run_sync(plugin)
+
+    # Not even the root: a lone "iNaturalist" keyword is harmless, but the
+    # species that used to land under it is not.
+    assert [k["name"] for k in plugin.keywords] == []
+
+
+def test_a_throttled_taxon_still_writes_the_fields():
+    """They are right whatever happened to the lineage, and they are what a
+    later run reads to put the keyword where it belongs."""
+    plugin = make_refusing_plugin(
+        {"/observations/999": observation(community=bare_taxon())},
+        refuse="/taxa/")
+    photo = plugin.new_photo(inat_observation_id="999")
+    plugin.set_target_photos([photo])
+
+    run_sync(plugin)
+
+    assert photo._props["inat_taxon_name"] == "Bombus"
+    assert photo._props["inat_taxon_id"] == "52775"
+
+
+def test_a_throttled_taxon_says_so_in_the_log():
+    """Silence here is what let a third of a keyword tree go wrong unnoticed."""
+    plugin = make_refusing_plugin(
+        {"/observations/999": observation(community=bare_taxon())},
+        refuse="/taxa/")
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="999")])
+
+    run_sync(plugin)
+
+    assert any("No lineage for taxon Bombus" in line
+               for line in plugin.log_lines)
+
+
+def test_a_kingdom_is_not_mistaken_for_a_missing_lineage():
+    """An empty ancestors list is the top of the tree, not a failed fetch. Read
+    as failure it would refuse to file anything at kingdom rank."""
+    plugin = make_plugin({"/observations/999": observation(
+        community=taxon("Animalia", 1, ancestors=[]))})
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="999")])
+
+    run_sync(plugin)
+
+    assert [k["name"] for k in plugin.keywords] == ["iNaturalist", "Animalia"]

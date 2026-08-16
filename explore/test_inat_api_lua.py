@@ -733,3 +733,110 @@ def test_an_empty_payload_yields_no_rows_and_no_ancestor(inat_api):
 
     assert len(rows) == 0
     assert ancestor is None
+
+
+# ---------------------------------------------------------------------------
+# Staying inside the rate limit
+#
+# The failure this guards against was not a failed request. A sync of 654
+# photos sent one taxon lookup each, unpaced; 346 came back HTTP 429; every
+# one of those fell back to a taxon with no ancestors; and the keyword code
+# happily filed a species directly under "iNaturalist". Throttling flattened
+# a third of a real catalog's keyword tree, and nothing in the run said so.
+# ---------------------------------------------------------------------------
+
+
+class Throttling:
+    """Refuses the first `refusals` requests with 429, then answers."""
+
+    def __init__(self, payload, refusals):
+        self.payload = payload
+        self.refusals = refusals
+        self.requests = []
+
+    def __call__(self, method, url, body, _headers):
+        self.requests.append(url)
+        if len(self.requests) <= self.refusals:
+            return "<html>Too many requests</html>", {"status": 429}
+        return json.dumps(self.payload), {"status": 200}
+
+
+def test_requests_are_paced(api_pair):
+    plugin, api, fake = api_pair
+    fake.add("/taxa/", {"results": [{"id": 1, "name": "Bombus", "ancestors": []}]})
+
+    api["getTaxon"](api, 1)
+    api["getTaxon"](api, 2)
+
+    # A wait between requests, not before the first one -- there is nothing to
+    # be too soon after. Unpaced, a few hundred photos exhaust the allowance in
+    # seconds.
+    assert plugin.sleeps == [1.0]
+
+
+def test_a_429_is_retried_rather_than_believed(api_pair_with):
+    """A refusal is the server saying "not yet", and the caller cannot tell the
+    difference between that and "no such taxon" -- it just gets a taxon with no
+    lineage and writes the wrong keyword."""
+    handler = Throttling({"results": [{"id": 7, "name": "Bombus",
+                                       "ancestors": []}]}, refusals=2)
+    plugin, api, _ = api_pair_with(handler)
+
+    taxon, err = api["getTaxon"](api, 7)
+
+    assert err is None
+    assert taxon["name"] == "Bombus"
+    assert len(handler.requests) == 3
+
+
+def test_the_wait_doubles_between_attempts(api_pair_with):
+    """A 429 means the window is already full, so retrying at the same rate
+    spends the rest of the allowance on refusals. Pacing only ever waits the
+    flat interval, so anything longer in here is backoff."""
+    handler = Throttling({"results": [{"id": 7, "name": "Bombus",
+                                       "ancestors": []}]}, refusals=3)
+    plugin, api, _ = api_pair_with(handler)
+
+    api["getTaxon"](api, 7)
+
+    backoff = [wait for wait in plugin.sleeps if wait > 1.0]
+    assert backoff == [2.0, 4.0]
+
+
+def test_giving_up_says_it_was_rate_limiting(api_pair_with):
+    """"failed with HTTP 429: <?xml ..." tells the user nothing they can act
+    on, and this is the one error where waiting is the whole answer."""
+    handler = Throttling({}, refusals=99)
+    plugin, api, _ = api_pair_with(handler)
+
+    taxon, err = api["getTaxon"](api, 7)
+
+    assert taxon is None
+    assert "rate limiting" in err
+
+
+def test_a_taxon_is_fetched_once_however_often_it_is_asked_for(api_pair):
+    """654 photos of a few hundred species made 654 requests. Repeats are the
+    normal case: people photograph the same bee all summer."""
+    plugin, api, fake = api_pair
+    fake.add("/taxa/", {"results": [{"id": 1, "name": "Bombus", "ancestors": []}]})
+
+    for _ in range(5):
+        api["getTaxon"](api, 1)
+
+    assert len([r for r in fake.requests if "/taxa/" in r["url"]]) == 1
+
+
+def test_a_failed_taxon_is_not_cached(api_pair_with):
+    """Caching a refusal turns one throttled request into every photo of that
+    species being filed wrong for the rest of the run."""
+    handler = Throttling({"results": [{"id": 7, "name": "Bombus",
+                                       "ancestors": []}]}, refusals=99)
+    plugin, api, _ = api_pair_with(handler)
+
+    api["getTaxon"](api, 7)
+    handler.refusals = 0
+    taxon, err = api["getTaxon"](api, 7)
+
+    assert err is None
+    assert taxon["name"] == "Bombus"

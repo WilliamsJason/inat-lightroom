@@ -74,18 +74,33 @@ end
 -- MUST be called from inside a task: it may make an HTTP call.
 --
 -- A taxon from an observation or a vision result carries a name and a rank but
--- usually no lineage, and the lineage is the whole keyword hierarchy. Returns
--- the original taxon when the fetch fails, because a leaf keyword under the
--- wrong parent is still better than no keyword and an error the user cannot act
--- on.
+-- usually no lineage, and the lineage is the whole keyword hierarchy.
+--
+-- Returns the original taxon when the fetch fails, and callers must check
+-- `hasLineage` before building a keyword from it. It used to say here that a
+-- leaf keyword under the wrong parent beats no keyword at all, and that was
+-- wrong: one run that hit the rate limit filed 346 species directly under
+-- "iNaturalist" instead of under their lineage. A keyword written into
+-- someone's catalog is much harder to take back than one not written yet --
+-- nothing written is a re-run, something wrong written is a cleanup.
 function SyncCore.withAncestors(api, taxon)
   if not taxon or taxon.ancestors then return taxon end
+  -- Nothing to look it up by. Asking anyway spends a request on /taxa/nil.
+  if taxon.id == nil then return taxon end
 
   local full, err = api:getTaxon(taxon.id)
   if full then return full end
 
   logger:warn("Could not fetch full taxon: " .. (err or "unknown"))
   return taxon
+end
+
+--- True when this taxon knows its own lineage.
+--
+-- A kingdom legitimately has an empty ancestors list, so the test is presence
+-- rather than length: nil means "never loaded", {} means "top of the tree".
+function SyncCore.hasLineage(taxon)
+  return taxon ~= nil and taxon.ancestors ~= nil
 end
 
 --- Write a taxon onto a photo: the keyword hierarchy and the taxon fields.
@@ -103,9 +118,20 @@ end
 function SyncCore.applyTaxon(catalog, photo, taxon)
   if not taxon then return false end
 
-  local leafKw = ensureKeywordPath(catalog, buildKeywordPath(taxon))
-  if leafKw then
-    photo:addKeyword(leafKw)
+  -- The keyword is skipped, not guessed, when the lineage never loaded.
+  -- buildKeywordPath on a taxon with no ancestors yields
+  -- {"iNaturalist", "Bombus"}, which files a genus beside the kingdoms as
+  -- though that were where it belongs. The taxon fields below are still
+  -- written -- they are correct either way, and they are what a later run
+  -- reads to put the keyword right.
+  if SyncCore.hasLineage(taxon) then
+    local leafKw = ensureKeywordPath(catalog, buildKeywordPath(taxon))
+    if leafKw then
+      photo:addKeyword(leafKw)
+    end
+  else
+    logger:warn("No lineage for taxon " .. tostring(taxon.name or taxon.id)
+      .. "; wrote the fields and left the keyword for a later run")
   end
 
   photo:setPropertyForPlugin(_PLUGIN, "inat_taxon_id", tostring(taxon.id or ""))

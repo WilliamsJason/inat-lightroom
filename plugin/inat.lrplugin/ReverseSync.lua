@@ -269,22 +269,16 @@ function ReverseSync.apply(catalog, matches, options)
     if match.selected then selected[#selected + 1] = match end
   end
 
-  -- Keyed by taxon id and shared across the whole run. A few thousand
-  -- observations are usually a few hundred species, and without this the same
-  -- taxon is fetched once per observation of it.
-  local taxa = {}
-
+  -- No cache of its own any more. InatAPI:getTaxon memoises, which every
+  -- caller benefits from rather than just this one -- and, unlike the table
+  -- that used to live here, it remembers only successes. This one kept
+  -- whatever withAncestors returned, so a taxon the server refused once was
+  -- refused for the rest of the run, and every photo of that species got the
+  -- degraded answer.
   local function taxonFor(observation)
     local raw = observation.community_taxon or observation.taxon
     if not raw then return nil end
-    if raw.ancestors then return raw end
-
-    local id = raw.id
-    if id == nil then return raw end
-    if taxa[id] == nil then
-      taxa[id] = SyncCore.withAncestors(options.api, raw) or false
-    end
-    return taxa[id] or raw
+    return SyncCore.withAncestors(options.api, raw)
   end
 
   local done, failures = 0, {}

@@ -15,6 +15,7 @@ cannot read, exactly as Lightroom does.
 from __future__ import annotations
 
 import calendar
+import json
 
 import pytest
 
@@ -426,18 +427,33 @@ def test_the_observation_is_not_fetched_again(plugin, sync):
 
 
 def test_a_repeated_species_is_only_looked_up_once(plugin, sync):
-    """A few thousand observations are usually a few hundred species."""
+    """A few thousand observations are usually a few hundred species.
+
+    Driven through a real InatAPI client rather than a stub with a getTaxon
+    method, because that is where the caching lives now, and a stub would
+    happily pass while the shipping path made a request per photo -- which is
+    exactly how a real run got itself rate limited."""
+    requested = []
+
+    def handler(_method, url, _body=None, _headers=None):
+        requested.append(url)
+        return json.dumps({"results": [{"id": 42, "name": "Rana temporaria",
+                                        "ancestors": [{"name": "Animalia"}]}]}), \
+            plugin.runtime.table_from({"status": 200})
+
+    plugin.set_http_handler(handler)
+    api = plugin.require("InatAPI")["new"]("header.payload.signature")
+
     photos = [photo_at(plugin, "2024-05-01T10:00:%02d" % second)
               for second in range(0, 4)]
     plugin.set_all_photos(photos)
     matches, _ = sync["scan"](plugin.catalog, observations(plugin, *[
         observed_with_taxon(plugin, index, "2024-05-01T10:00:%02d+00:00" % index)
         for index in range(0, 4)]))
-    api, asked = taxon_api(plugin)
 
     sync["apply"](plugin.catalog, matches, plugin.runtime.table_from({"api": api}))
 
-    assert asked == [42]
+    assert len([url for url in requested if "/taxa/" in url]) == 1
 
 
 def test_linking_without_an_api_still_links(plugin, sync):

@@ -167,6 +167,11 @@ stubs.LrHttp = {
 -- its function context visible here instead of only in the host.
 local pendingTasks = {}
 
+-- Every LrTasks.sleep the plugin asked for, in order. Rate limiting is a
+-- behaviour made entirely of waiting, so the waits have to be observable.
+local sleeps = {}
+stubs._sleeps = sleeps
+
 -- Shell-outs. LrTasks.execute is how the plugin reaches Win32 to fix the
 -- floating panel's z-order, so tests need to see the command and to be able to
 -- make it fail.
@@ -191,7 +196,10 @@ end
 
 stubs.LrTasks = {
   startAsyncTask = function(fn) pendingTasks[#pendingTasks + 1] = fn end,
-  sleep = function() end,
+  -- Records rather than waits. Pacing and backoff are worth asserting on --
+  -- the whole point is how long the plugin waits -- and a test suite that
+  -- actually slept would take minutes.
+  sleep = function(seconds) sleeps[#sleeps + 1] = seconds end,
   -- Lightroom's own pcall, which unlike Lua's can be used around code that
   -- yields. realPcall, and deliberately without touching plainPcallDepth: this
   -- is the one that is safe to yield inside.
@@ -926,6 +934,12 @@ class LuaPlugin:
     def log_lines(self) -> list[str]:
         lines = self.env["logLines"]
         return [lines[i] for i in range(1, len(lines) + 1)]
+
+    @property
+    def sleeps(self) -> list[float]:
+        """Every LrTasks.sleep the plugin asked for, in seconds, in order."""
+        waits = self.env["stubs"]["_sleeps"]
+        return [waits[i] for i in range(1, len(waits) + 1)]
 
     @property
     def http_calls(self) -> list[dict]:
