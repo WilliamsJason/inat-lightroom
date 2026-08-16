@@ -40,6 +40,7 @@ local LrHttp            = import "LrHttp"
 local LrTasks           = import "LrTasks"
 local LrView            = import "LrView"
 
+local InatAuth   = require "InatAuth"
 local PanelCore  = require "PanelCore"
 local Settings   = require "Settings"
 local UploadCore = require "UploadCore"
@@ -514,7 +515,7 @@ function ObservationPanel.uploadOrUpdate(props)
 
   local api, authErr = UploadCore.requireAPI()
   if not api then
-    LrDialogs.message("Pinned", authErr, "critical")
+    InatAuth.reportMissingCredentials(authErr)
     return
   end
 
@@ -640,7 +641,7 @@ function ObservationPanel.applyLocally(props)
 
   local api, authErr = UploadCore.requireAPI()
   if not api then
-    LrDialogs.message("Pinned", authErr, "critical")
+    InatAuth.reportMissingCredentials(authErr)
     return
   end
 

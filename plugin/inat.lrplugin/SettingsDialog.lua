@@ -407,7 +407,7 @@ function SettingsDialog.reverseSync(context)
 
   local api, err = UploadCore.requireAPI()
   if not api then
-    LrDialogs.message("iNaturalist Reverse Sync", err, "warning")
+    InatAuth.reportMissingCredentials(err)
     return
   end
 

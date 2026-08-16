@@ -323,7 +323,7 @@ function SyncCore.syncPhotos(context, photos, options)
 
   local token, authErr = InatAuth.getToken()
   if not token then
-    LrDialogs.message("iNaturalist Sync", authErr or "Authentication failed.", "critical")
+    InatAuth.reportMissingCredentials(authErr)
     return
   end
 
