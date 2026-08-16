@@ -77,9 +77,6 @@ software. It also required every user to have their own manually approved
 iNaturalist application, which is a bar almost nobody clears. Removed rather
 than left switched off.
 
-If you ever filled that form in, **Clear Stored Credentials** still erases
-what it saved, including the password.
-
 Everything is stored in Lightroom's encrypted password store (`LrPasswords`),
 which is backed by the OS credential vault. Nothing is written to disk by the
 plugin. Use **Clear Stored Credentials** on the same tab to remove it all.

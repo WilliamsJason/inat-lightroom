@@ -623,10 +623,11 @@ third-party software — the exact problem PKCE exists to solve. And the app id
 and secret are per-application, so with manual review every user would have
 needed their own approved application before the fields did anything.
 
-`InatAuth.clear()` still erases the keys that form wrote, including the stored
-password, so anyone who configured it has a way to remove it. A test in
-`explore/test_settings_dialog_lua.py` walks the Account tab and fails if any
-field binds to those names again.
+`InatAuth.clear()` erases the token. It briefly also erased the keys that form
+wrote, on the theory that removing the feature should not strand a password in
+the credential vault; that was dropped once it was certain nobody had ever
+stored one. A test in `explore/test_settings_dialog_lua.py` walks the Account
+tab and fails if any field binds to those names again.
 
 ---
 
