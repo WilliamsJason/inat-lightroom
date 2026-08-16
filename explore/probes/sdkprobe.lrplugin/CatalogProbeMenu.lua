@@ -21,6 +21,7 @@
 --]]
 
 local LrApplication     = import "LrApplication"
+local LrDate            = import "LrDate"
 local LrDialogs         = import "LrDialogs"
 local LrFunctionContext = import "LrFunctionContext"
 local LrProgressScope   = import "LrProgressScope"
@@ -133,12 +134,129 @@ local function run(context)
     ascending  = true,
   })
 
-  trySearch(report, catalog, ">= only", {
+  -- ">=" is deliberately not tested here, and must not be reintroduced.
+  --
+  -- It is not in the vocabulary next to AgDate in LibraryToolkit.dll -- that
+  -- list has ">" and "<" but no ">=" -- and an unsupported operator does not
+  -- raise. findPhotos simply never returns. The first run of this probe sat on
+  -- that one call for minutes with the progress bar up, which is a far worse
+  -- failure than an error, and is the reason Reverse Sync builds its search
+  -- descriptors from a fixed table of known-good operators rather than by
+  -- assembling operator strings.
+  trySearch(report, catalog, "> only", {
     searchDesc = {
-      { criteria = "captureTime", operation = ">=", value = "2000-01-01" },
+      { criteria = "captureTime", operation = ">", value = "2000-01-01" },
       combine = "intersect",
     },
   })
+
+  report:blank()
+
+  -- ------------------------------------------------- narrow window queries
+  --
+  -- The measurement the whole feature rests on.
+  --
+  -- Indexing every photo does not survive a catalog of millions, but it does
+  -- not have to: observations top out around five digits, so Reverse Sync can
+  -- ask one narrow capture-time question per observation instead of holding
+  -- the catalog in memory. That trade is only worth making if a narrow window
+  -- query is cheap, and if captureTime comparisons honour seconds rather than
+  -- silently rounding to whole days.
+  --
+  -- The result count says which: roughly one match means second-level
+  -- precision works, hundreds means the time part is being dropped and only
+  -- the date is comparing, zero means the value format was rejected outright.
+  report:step("Narrow captureTime windows")
+  report:add("Narrow window queries (one per observation is the plan):")
+
+  local WINDOWS = 25
+  local stride  = math.max(1, math.floor(total / WINDOWS))
+  local windowTotal, windowRuns, windowHits = 0, 0, 0
+  local shownExample = false
+
+  --- Count what a ±2 s window around `when` returns, for one value format.
+  local function windowCount(when, format, makeValue)
+    local _, found, err = Report.timed(function()
+      return catalog:findPhotos {
+        searchDesc = {
+          { criteria = "captureTime", operation = "in",
+            value = makeValue(when - 2), value2 = makeValue(when + 2) },
+          combine = "intersect",
+        },
+      }
+    end)
+    if err then return format .. ": FAILED " .. err end
+    return string.format("%s: %d", format, countOf(found) or 0)
+  end
+
+  -- Which string format the value wants is not written down anywhere legible,
+  -- and getting it wrong is not loud: a rejected format returns nothing rather
+  -- than complaining. Three candidates, on one photo, before trusting any of
+  -- them 25 times over.
+  for i = 1, total do
+    local _, when = Report.timed(function()
+      return allPhotos[i]:getRawMetadata("dateTimeOriginal")
+    end)
+    if type(when) == "number" then
+      report:add("  value formats (a ±2 s window should hold ~1 photo):")
+      report:addf("    %s", windowCount(when, "W3C     ",
+        function(t) return LrDate.timeToW3CDate(t) end))
+      report:addf("    %s", windowCount(when, "ISO-ish ",
+        function(t) return LrDate.timeToUserFormat(t, "%Y-%m-%dT%H:%M:%S") end))
+      report:addf("    %s", windowCount(when, "date    ",
+        function(t) return LrDate.timeToUserFormat(t, "%Y-%m-%d") end))
+      report:blank()
+      break
+    end
+  end
+
+  for i = 1, total, stride do
+    if windowRuns >= WINDOWS then break end
+    local photo   = allPhotos[i]
+    local _, when = Report.timed(function()
+      return photo:getRawMetadata("dateTimeOriginal")
+    end)
+
+    if type(when) == "number" then
+      local from = LrDate.timeToW3CDate(when - 2)
+      local to   = LrDate.timeToW3CDate(when + 2)
+
+      local took, found, err = Report.timed(function()
+        return catalog:findPhotos {
+          searchDesc = {
+            { criteria = "captureTime", operation = "in",
+              value = from, value2 = to },
+            combine = "intersect",
+          },
+        }
+      end)
+
+      if err then
+        report:addf("  window query FAILED  %s", err)
+        break
+      end
+
+      windowRuns  = windowRuns + 1
+      windowTotal = windowTotal + (tonumber(took:match("[%d%.]+")) or 0)
+      windowHits  = windowHits + (countOf(found) or 0)
+
+      if not shownExample then
+        report:addf("  example window  %s .. %s", from, to)
+        report:addf("  first query     %8s  %d photo(s)", took,
+          countOf(found) or 0)
+        shownExample = true
+      end
+    end
+  end
+
+  if windowRuns > 0 then
+    report:addf("  %d windows      %.1f ms avg   %.1f photo(s) avg",
+      windowRuns, windowTotal / windowRuns, windowHits / windowRuns)
+    report:addf("  projected: 10,000 observations = %.1f s of querying",
+      (windowTotal / windowRuns) * 10000 / 1000)
+  else
+    report:add("  (no photo carried a dateTimeOriginal)")
+  end
 
   report:blank()
 
