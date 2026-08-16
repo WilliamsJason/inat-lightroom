@@ -33,7 +33,7 @@ function LinkObservation.run(context)
   local photos  = catalog:getTargetPhotos()
 
   if not photos or #photos == 0 then
-    LrDialogs.message("iNaturalist", "No photos selected.", "warning")
+    LrDialogs.message("Pinned", "No photos selected.", "warning")
     return 0
   end
 
@@ -57,7 +57,7 @@ function LinkObservation.run(context)
   }
 
   local result = LrDialogs.presentModalDialog {
-    title      = "iNaturalist - Link to Observation",
+    title      = "Pinned - Link to Observation",
     contents   = contents,
     actionVerb = "Link and Sync",
   }
@@ -69,7 +69,7 @@ function LinkObservation.run(context)
   local obsId = PluginUrls.parseObservationId(props.obs_id)
 
   if not obsId then
-    LrDialogs.message("iNaturalist",
+    LrDialogs.message("Pinned",
       "That does not look like an observation ID or URL.", "warning")
     return 0
   end

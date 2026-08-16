@@ -201,7 +201,7 @@ function UpdateCore.checkOnStartup()
     -- anyone. There is a preference to turn the whole check off.
     local LrDialogs = import "LrDialogs"
     local answer = LrDialogs.confirm(
-      "iNaturalist",
+      "Pinned",
       UpdateCore.statusText(result),
       "Show Me",
       "Later")

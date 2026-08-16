@@ -1,6 +1,7 @@
 # Lightroom Plugin
 
-This directory contains the **inat.lrplugin** Adobe Lightroom Classic plugin.
+This directory contains **Pinned for iNaturalist**, the `inat.lrplugin` Adobe
+Lightroom Classic plugin.
 
 ---
 
@@ -14,7 +15,8 @@ The plugin is an unofficial, community-built project — see the
    and unzip it. You will get a folder called `inat.lrplugin`.
 2. In Lightroom Classic, open **File → Plug-in Manager**.
 3. Click **Add**, select the `inat.lrplugin` folder, and click **Add Plug-in**.
-4. The plugin appears in the list; ensure it is checked (enabled).
+4. The plugin appears in the list as **Pinned for iNaturalist**; ensure it is
+   checked (enabled).
 
 Put the folder somewhere you can write to and somewhere permanent — your user
 folder rather than `Program Files`, and not a Downloads folder you empty. The
@@ -44,7 +46,7 @@ To run from a clone of this repository instead, point step 3 at
 
 ## Updating
 
-Open **File → Plug-in Manager**, select **iNaturalist**, and use the **Updates**
+Open **File → Plug-in Manager**, select **Pinned for iNaturalist**, and use the **Updates**
 section:
 
 - **Check for Updates** asks GitHub what the latest release is.
@@ -65,7 +67,7 @@ and replace the folder by hand.
 
 ## First-time setup
 
-Go to **File → Plug-in Extras → iNaturalist Settings…** and open the
+Go to **File → Plug-in Extras → Pinning Settings…** and open the
 **Account** tab.
 
 ### Option 1 — paste an API token (works today)
@@ -109,9 +111,9 @@ Everything the plugin does happens in two floating windows, both under
 entry in the Export dialog — see [Why there is no publish
 service](#why-there-is-no-publish-service).
 
-### The iNaturalist panel
+### The Pinned panel
 
-**File → Plug-in Extras → iNaturalist Panel** opens a window that follows
+**File → Plug-in Extras → Pinning Panel** opens a window that follows
 whatever is selected in the filmstrip. It shows what the selection currently is
 on iNaturalist — observation ID, taxon, common name, quality grade, last sync —
 and carries every action.
@@ -291,7 +293,7 @@ disagreeing with itself. Posting a new identification withdraws the old one.
 
 ### The settings window
 
-**File → Plug-in Extras → iNaturalist Settings…**, in three tabs:
+**File → Plug-in Extras → Pinning Settings…**, in three tabs:
 
 - **Account** — credentials, as above.
 - **Observations** — what new observations say: geoprivacy, whether to send the

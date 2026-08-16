@@ -11,8 +11,26 @@ return {
   LrSdkVersion        = 10.0,
   LrSdkMinimumVersion = 6.0,
 
+  -- The identifier is not the plugin's name and must never be renamed with it.
+  -- Every custom metadata field is addressed as "<identifier>.<field>", and the
+  -- OAuth redirect is lightroom://<identifier>/<action>, so changing it orphans
+  -- the observation IDs already written to people's photos.
   LrToolkitIdentifier = "com.github.inat-lightroom",
-  LrPluginName        = LOC "$$$/iNatLightroom/PluginName=iNaturalist",
+
+  -- The displayed name, which is deliberately not "iNaturalist".
+  --
+  -- rcloran's lr-inaturalist-publish -- the plugin most people with this
+  -- workflow already have -- sets LrPluginName to exactly "iNaturalist", and
+  -- so did this one. Two identically named rows in the Plug-in Manager, with
+  -- nothing but install path to tell them apart, is a support burden paid by
+  -- whoever is more confused.
+  --
+  -- "for iNaturalist" rather than "by" or a bare "iNaturalist": the mark is
+  -- theirs, and naming the site as the thing this works with is ordinary
+  -- descriptive use, while leading with it implies a product of theirs. The
+  -- README disclaimer says so in words; the name should not have to be
+  -- corrected by it.
+  LrPluginName        = LOC "$$$/iNatLightroom/PluginName=Pinned for iNaturalist",
   LrPluginInfoUrl     = "https://github.com/WilliamsJason/inat-lightroom",
 
   -- No LrExportServiceProvider key, deliberately.
@@ -89,14 +107,19 @@ return {
   -- parent because the Library menu only exists in the Library module, while
   -- both of these items open floating windows that work from anywhere, and
   -- neither is an operation on the selected photos.
+  --
+  -- "Pinning", not "iNaturalist": Plug-in Extras is one flat shared submenu,
+  -- so these items sit directly alongside those of every other installed
+  -- plugin, and lr-inaturalist-publish puts its own unprefixed items in the
+  -- same list. The item text is the only thing distinguishing them.
   LrExportMenuItems = {
     {
-      title = LOC "$$$/iNatLightroom/Menu/Panel=iNaturalist Panel",
+      title = LOC "$$$/iNatLightroom/Menu/Panel=Pinning Panel",
       file  = "ObservationPanelMenu.lua",
       id    = "inat_panel",
     },
     {
-      title = LOC "$$$/iNatLightroom/Menu/Settings=iNaturalist Settings…",
+      title = LOC "$$$/iNatLightroom/Menu/Settings=Pinning Settings…",
       file  = "SettingsMenu.lua",
       id    = "inat_settings",
     },

@@ -72,7 +72,7 @@ return {
     local handler = handlers[action]
     if not handler then
       logger:warn("Unknown action: " .. tostring(action))
-      LrDialogs.message("iNaturalist",
+      LrDialogs.message("Pinned",
         "Unknown action: " .. tostring(action), "warning")
       return
     end
