@@ -169,6 +169,26 @@ before asking Lightroom to reload:
 .\.venv\Scripts\python.exe check_lua.py
 ```
 
+`plugin_version.py` reports the version `Info.lua` declares, by running it
+rather than pattern-matching it, which is how the release workflow refuses a
+tag that disagrees with the manifest:
+
+```powershell
+.\.venv\Scripts\python.exe plugin_version.py            # prints 0.1.0
+.\.venv\Scripts\python.exe plugin_version.py --expect v0.1.0
+```
+
+`install_plugin.ps1` copies this working tree into the one fixed folder
+Lightroom is pointed at, so that switching branch does not mean re-adding the
+plugin in the Plug-in Manager:
+
+```powershell
+.\install_plugin.ps1        # → ~\Documents\LrPlugins\inat.lrplugin
+```
+
+See [plugin/README.md](../plugin/README.md#installing-a-working-tree) for why
+Lightroom should not be aimed at a checkout directly.
+
 ## Proving the tests can fail
 
 A passing test proves nothing until it has been seen to fail. Each `mutate_*.py`
@@ -181,6 +201,7 @@ noticed:
 .\.venv\Scripts\python.exe mutate_upload_core.py
 .\.venv\Scripts\python.exe mutate_settings.py
 .\.venv\Scripts\python.exe mutate_render_photo.py
+.\.venv\Scripts\python.exe mutate_update.py       # updater, install, staging, swap
 ```
 
 Each mutation is named after the bug it would be — "the species guess is

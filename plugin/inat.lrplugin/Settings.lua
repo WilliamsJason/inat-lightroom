@@ -43,6 +43,25 @@ Settings.DEFAULTS = {
   render_metadata_option = "all",
   render_use_watermark   = false,
   render_watermark_id    = "",
+
+  -- Updating.
+  --
+  -- On by default: a plugin that talks to a live API is worth keeping current,
+  -- and the check is one request a day. Checking is all it does -- installing
+  -- an update stays a button in the Plug-in Manager, because replacing the
+  -- code that touches someone's catalog while they are not looking is not a
+  -- default anyone chose.
+  update_check_automatically = true,
+
+  -- Bookkeeping rather than settings. They live here so that everything stored
+  -- for this plugin has one home and one set of defaults, but nothing in the
+  -- settings dialog binds them: the check writes them and reads them back.
+  --
+  -- update_last_checked is a Lightroom time (seconds since 2001), which is what
+  -- LrDate.currentTime returns; the automatic check compares it against the
+  -- same clock and never against a real-world one.
+  update_last_checked = 0,
+  update_notified_tag = "",
 }
 
 --- The stored value for one preference, or its default.

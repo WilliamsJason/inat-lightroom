@@ -6,10 +6,41 @@ This directory contains the **inat.lrplugin** Adobe Lightroom Classic plugin.
 
 ## Installation
 
-1. In Lightroom Classic, open **File → Plug-in Manager**.
-2. Click **Add** and navigate to the `plugin/` directory in this repository.
-3. Select the `inat.lrplugin` folder and click **Add Plug-in**.
+1. Download `inat-lightroom-<version>.zip` from the
+   [latest release](https://github.com/WilliamsJason/inat-lightroom/releases/latest)
+   and unzip it. You will get a folder called `inat.lrplugin`.
+2. In Lightroom Classic, open **File → Plug-in Manager**.
+3. Click **Add**, select the `inat.lrplugin` folder, and click **Add Plug-in**.
 4. The plugin appears in the list; ensure it is checked (enabled).
+
+Put the folder somewhere you can write to and somewhere permanent — your user
+folder rather than `Program Files`, and not a Downloads folder you empty. The
+plugin updates itself in place, so it needs to be able to write there, and
+Lightroom remembers it by path.
+
+To run from a clone of this repository instead, point step 3 at
+`plugin/inat.lrplugin`.
+
+---
+
+## Updating
+
+Open **File → Plug-in Manager**, select **iNaturalist**, and use the **Updates**
+section:
+
+- **Check for Updates** asks GitHub what the latest release is.
+- **Download and Install** downloads it, checks it against the checksum
+  published alongside it, and stages it.
+- The update finishes installing **when you quit Lightroom**, and is in use the
+  next time you start it.
+
+The plugin also checks once a day on its own and tells you once about each new
+version. Untick **Check for updates automatically** to stop that; the button
+still works.
+
+Nothing is installed without you clicking it. If your plugin folder is
+read-only the plugin says so rather than failing half way — download the release
+and replace the folder by hand.
 
 ---
 
@@ -395,6 +426,31 @@ documented at their call sites and in [docs/inat-api-notes.md](../docs/inat-api-
 ### Reloading after edits
 
 In Plug-in Manager, click **Reload Plug-in** after any Lua file change, or press **Ctrl+Alt+Shift+,** (Mac: **⌘⌥⇧,**) in Lightroom Classic.
+
+### Installing a working tree
+
+Point Lightroom at one fixed folder outside the repository, once, and copy into
+it from whichever branch or worktree you are working in:
+
+```powershell
+cd explore
+.\install_plugin.ps1        # → ~\Documents\LrPlugins\inat.lrplugin
+```
+
+The source is taken from wherever the script lives, so running it from a
+worktree installs that worktree without being told which one. Switching
+branches becomes: check out, run this, click **Reload Plug-in**.
+
+Pointing Lightroom straight at a working tree instead is tempting and worth
+avoiding. Lightroom remembers a plugin by path, so every worktree is a separate
+Add in the Plug-in Manager — and the updater, when it applies a staged version
+on shutdown, copies over the plugin folder and deletes whatever the release does
+not contain. Aimed at a checkout, that rewrites tracked files.
+
+For the same reason the script clears any staged update by default: it would
+otherwise be applied on the next quit and silently replace the copy just
+installed, which looks precisely like the install having failed. Pass
+`-KeepStaged` when deliberately testing the update path.
 
 ### Testing before reloading
 

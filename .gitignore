@@ -38,3 +38,8 @@ htmlcov/
 
 # Rendered upload copies produced by explore/feasibility_test.py
 .render/
+
+# Where the plugin unpacks an update before swapping it in on shutdown.
+# Only appears when the plugin is installed from a checkout, which is exactly
+# what happens while developing it.
+.update-staging/
