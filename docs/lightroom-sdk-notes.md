@@ -270,6 +270,32 @@ calls yield. Plain `pcall` remains correct for things that genuinely cannot
 yield — `string.format`, `io`, reading a field off a table. Note that indexing
 is beyond rescue either way: Lua cannot yield across a metamethod at all.
 
+### The second symptom, which reads as a different bug
+
+The message above is what you get when the SDK notices in advance. The other
+one arrives from Lua itself, after the call has already started:
+
+```
+Yielding is not allowed within a C or metamethod call
+```
+
+It names neither `pcall` nor the call that yielded, and it is what
+`catalog:createKeyword` produces when it runs inside a plain `pcall`.
+
+This cost a whole Reverse Sync run. Each row was wrapped in a plain `pcall` so
+that one bad observation could not abandon the other ninety-nine — and every
+row then failed, because linking creates the taxon's keyword path. The failures
+were caught and counted exactly as designed, so the result was "Linked 0
+photo(s), 1 could not be linked": a report that reads as a matching problem
+rather than a Lua one. A defensive `pcall` is precisely where this hides,
+because its whole purpose is to turn an error into a count.
+
+The harness models the rule now: it replaces `pcall` with one that records that
+a plain `pcall` is on the stack, leaves `LrTasks.pcall` alone, and makes the
+stubs for `createKeyword`, `withWriteAccessDo` and `LrHttp` refuse to run while
+one is. Reverting the fix makes the test fail with the same error Lightroom
+gave, which is the only way to know the guard guards anything.
+
 ## `f:edit_text` is Mac-only
 
 In `ui.dll`'s factory constant list it sits directly behind a `MAC_ENV` guard:

@@ -458,3 +458,49 @@ def test_a_failure_is_logged_not_only_counted(plugin, sync):
     logged = " ".join(plugin.log_lines)
     assert "4242" in logged
     assert "catalog said no" in logged
+
+
+def test_linking_creates_keywords_without_yielding_inside_a_plain_pcall(
+    plugin, sync
+):
+    """The bug this exists for: apply wrapped each row in Lua's pcall, and
+    creating the taxon's keyword path yields. Lua 5.1 cannot yield across a C
+    call and pcall is one, so every single link failed with
+
+        Yielding is not allowed within a C or metamethod call
+
+    which names neither pcall nor the call that yielded. The failures were
+    caught and counted, so the run reported "0 linked" and read as a matching
+    problem rather than a Lua one.
+    """
+    plugin.set_http_handler(lambda method, url, body, headers: (
+        '{"results":[{"id":60053,"name":"Agulla","rank":"genus",'
+        '"ancestors":[{"id":1,"name":"Animalia","rank":"kingdom"}]}]}',
+        {"status": 200},
+    ))
+
+    photo = plugin.new_photo(path="C:/photos/one.jpg")
+    match = plugin.eval("""
+      function(photo)
+        return {
+          selected = true,
+          photo    = photo,
+          observation = {
+            id = 15845541, uuid = "u-1",
+            quality_grade = "needs_id",
+            taxon = { id = 60053, name = "Agulla", rank = "genus" },
+          },
+        }
+      end
+    """)(photo)
+
+    api = plugin.require("InatAPI").new("token")
+    linked, failures = sync.apply(
+        plugin.catalog,
+        plugin.eval("function(m) return { m } end")(match),
+        plugin.eval("function(api) return { api = api } end")(api))
+
+    assert list(failures.values()) == []
+    assert linked == 1
+    assert photo._props["inat_observation_id"] == "15845541"
+    assert photo._props["inat_taxon_name"] == "Agulla"

@@ -30,6 +30,7 @@
 
 local LrApplication = import "LrApplication"
 local LrDate        = import "LrDate"
+local LrTasks       = import "LrTasks"
 
 local Logger    = require "Log"
 local MatchCore = require "MatchCore"
@@ -272,7 +273,8 @@ function ReverseSync.apply(catalog, matches, options)
     local resolved = {}
     if SyncCore then
       for position = index, last do
-        local ok, taxon = pcall(taxonFor, selected[position].observation)
+        -- Also LrTasks.pcall: withAncestors makes an HTTP call, which yields.
+        local ok, taxon = LrTasks.pcall(taxonFor, selected[position].observation)
         resolved[position] = ok and taxon or nil
       end
     end
@@ -282,7 +284,17 @@ function ReverseSync.apply(catalog, matches, options)
         local match = selected[position]
         local observation = match.observation
 
-        local ok, err = pcall(function()
+        -- LrTasks.pcall, not Lua's. Lua 5.1 cannot yield across a C call, and
+        -- pcall is one, so anything inside a plain pcall that yields fails with
+        -- "Yielding is not allowed within a C or metamethod call" -- which is
+        -- what this did, on every single photo. createKeyword yields, and every
+        -- link creates the taxon's keyword path.
+        --
+        -- The failure is doubly unhelpful: it names neither pcall nor the call
+        -- that yielded, and because it was caught and counted the whole run
+        -- reported "0 linked, 1 could not be linked" and looked like a matching
+        -- problem rather than a Lua one.
+        local ok, err = LrTasks.pcall(function()
           UploadCore.writeObservationFields({ match.photo },
             observation.id, observation.uuid)
 

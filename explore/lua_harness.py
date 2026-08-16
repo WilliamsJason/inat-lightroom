@@ -34,6 +34,40 @@ PLUGIN_DIR = Path(__file__).resolve().parent.parent / "plugin" / "inat.lrplugin"
 _STUB_SOURCE = """
 local stubs = {}
 
+-- Lua 5.1 cannot yield across a C call, and pcall is a C function. So an SDK
+-- call that yields -- which is most of the catalog, and all of the network --
+-- fails when it happens inside a plain pcall, with a message that names neither
+-- the pcall nor the call that yielded:
+--
+--     Yielding is not allowed within a C or metamethod call
+--
+-- Nothing about the shape of the code says so, and it is invisible until it
+-- runs inside Lightroom. It cost a whole reverse sync run: every photo failed,
+-- the failures were caught and counted, and the result read as a matching
+-- problem rather than a Lua one.
+--
+-- So the harness models the rule. pcall is replaced with one that remembers it
+-- is a plain pcall, LrTasks.pcall is not, and the stubs that stand for yielding
+-- calls refuse to run while a plain one is on the stack.
+local realPcall = pcall
+local plainPcallDepth = 0
+
+function pcall(fn, ...)
+  plainPcallDepth = plainPcallDepth + 1
+  local results = { realPcall(fn, ...) }
+  plainPcallDepth = plainPcallDepth - 1
+  return unpack(results)
+end
+
+--- Called by every stub that stands in for a call that yields in Lightroom.
+local function yieldsHere(what)
+  if plainPcallDepth > 0 then
+    error("Yielding is not allowed within a C or metamethod call -- "
+      .. tostring(what) .. " yields, and it is inside a plain pcall. "
+      .. "Use LrTasks.pcall.", 0)
+  end
+end
+
 -- Captures every logged line so tests can assert on them if useful.
 local logLines = {}
 
@@ -50,7 +84,7 @@ stubs.LrLogger = function(_name)
   -- never reached.
   local function recordf(level)
     return function(_self, format, ...)
-      local ok, message = pcall(string.format, tostring(format), ...)
+      local ok, message = realPcall(string.format, tostring(format), ...)
       logLines[#logLines + 1] = level .. ": " .. (ok and message or tostring(format))
     end
   end
@@ -101,6 +135,7 @@ local httpCalls = {}
 local openedUrls = {}
 stubs.LrHttp = {
   get = function(url, headers)
+    yieldsHere("LrHttp.get")
     httpCalls[#httpCalls + 1] = { method = "GET", url = url, headers = headers }
     if HTTP_HANDLER then return HTTP_HANDLER("GET", url, nil, headers) end
     error("unexpected HTTP GET in test: " .. tostring(url))
@@ -109,6 +144,7 @@ stubs.LrHttp = {
   -- beyond the fourth argument is recorded so tests can assert we are not
   -- passing a content type positionally, which silently stops the request.
   post = function(url, body, headers, method, ...)
+    yieldsHere("LrHttp.post")
     httpCalls[#httpCalls + 1] = {
       method = method or "POST",
       url = url,
@@ -157,8 +193,9 @@ stubs.LrTasks = {
   startAsyncTask = function(fn) pendingTasks[#pendingTasks + 1] = fn end,
   sleep = function() end,
   -- Lightroom's own pcall, which unlike Lua's can be used around code that
-  -- yields. Same contract, so the plain one is a faithful stand-in.
-  pcall = function(fn, ...) return pcall(fn, ...) end,
+  -- yields. realPcall, and deliberately without touching plainPcallDepth: this
+  -- is the one that is safe to yield inside.
+  pcall = function(fn, ...) return realPcall(fn, ...) end,
 
   -- Records the command instead of running a shell, and hands back whatever
   -- exit code the test asked for. Real one blocks until the child exits.
@@ -494,6 +531,7 @@ catalog = {
   -- deadlocks there. The exit flag is restored rather than cleared for the
   -- same reason: clearing it would leave the outer block looking closed.
   withWriteAccessDo = function(self, name, fn)
+    yieldsHere("catalog:withWriteAccessDo")
     if self._writing then
       error("withWriteAccessDo: cannot be called inside another write block " ..
         "(already in " .. tostring(self._writingName) .. ")", 0)
@@ -502,7 +540,7 @@ catalog = {
     catalogWrites[#catalogWrites + 1] = name
     local wasWriting, wasName = self._writing, self._writingName
     self._writing, self._writingName = true, name
-    local ok, err = pcall(fn)
+    local ok, err = realPcall(fn)
     self._writing, self._writingName = wasWriting, wasName
     if not ok then error(err, 0) end
   end,
@@ -511,15 +549,17 @@ catalog = {
   -- transaction the export itself is holding. It takes no name, which is the
   -- easiest way for a test to tell the two apart.
   withPrivateWriteAccessDo = function(self, fn)
+    yieldsHere("catalog:withPrivateWriteAccessDo")
     catalogWrites[#catalogWrites + 1] = "<private>"
     self._writing = true
-    local ok, err = pcall(fn)
+    local ok, err = realPcall(fn)
     self._writing = false
     if not ok then error(err, 0) end
   end,
 
   -- createKeyword(name, synonyms, includeOnExport, parent, returnExistingIfAny)
   createKeyword = function(_self, name, _synonyms, _include, parent, returnExisting)
+    yieldsHere("catalog:createKeyword")
     requireWriteAccess("LrCatalog:createKeyword")
     local parentName = parent and parent.name or nil
     for _, keyword in ipairs(createdKeywords) do
