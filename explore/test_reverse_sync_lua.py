@@ -208,10 +208,11 @@ def test_every_match_starts_selected(plugin, sync):
     assert matches[1].selected is True
 
 
-def test_two_observations_cannot_claim_the_same_photo(plugin, sync):
-    """Observations made seconds apart both fall inside the same window. Without
-    claiming as it goes, both would match the one frame and the second link
-    would silently overwrite the first."""
+def test_two_observations_wanting_one_photo_both_get_a_row(plugin, sync):
+    """Observations made seconds apart both fall inside the same window. Hiding
+    the frame from the second one made it report as unmatched, which is a lie --
+    which of the two it belongs to is precisely the user's call, so both are
+    offered and only the first is ticked."""
     photo = photo_at(plugin, "2024-05-01T10:00:00")
     plugin.set_all_photos([photo])
 
@@ -219,8 +220,45 @@ def test_two_observations_cannot_claim_the_same_photo(plugin, sync):
         observation(plugin, 1, "2024-05-01T10:00:00+00:00"),
         observation(plugin, 2, "2024-05-01T10:00:01+00:00")))
 
+    assert summary.matched == 2
+    assert summary.unmatched == 0
+    assert summary.claimed == 1
+    assert [matches[1].selected, matches[2].selected] == [True, False]
+    assert matches[2].claimedBy == 1
+
+
+def test_a_burst_becomes_one_row_per_frame(plugin, sync):
+    """An observation is allowed several photos, so four frames of a settled
+    insect are four links to make, not three to throw away."""
+    plugin.set_all_photos([
+        photo_at(plugin, "2024-05-01T10:00:00"),
+        photo_at(plugin, "2024-05-01T10:00:01"),
+        photo_at(plugin, "2024-05-01T10:00:02"),
+    ])
+
+    matches, summary = sync["scan"](plugin.catalog, observations(plugin,
+        observation(plugin, 1, "2024-05-01T10:00:00+00:00")))
+
     assert summary.matched == 1
-    assert summary.unmatched == 1
+    assert summary.photos == 3
+    assert len(matches) == 3
+    assert all(matches[row].selected for row in (1, 2, 3))
+
+
+def test_the_closest_frame_leads_the_group(plugin, sync):
+    """Rows are reviewed in order, so the one the matcher believes in most has
+    to be the one read first."""
+    plugin.set_all_photos([
+        photo_at(plugin, "2024-05-01T10:00:02"),
+        photo_at(plugin, "2024-05-01T10:00:00"),
+    ])
+
+    matches, _ = sync["scan"](plugin.catalog, observations(plugin,
+        observation(plugin, 1, "2024-05-01T10:00:00+00:00")))
+
+    assert matches[1].secondsApart == 0
+    assert matches[1].primary is True
+    assert matches[2].primary is False
 
 
 def test_an_observation_with_no_photo_is_counted_not_dropped(plugin, sync):

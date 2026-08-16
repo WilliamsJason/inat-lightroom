@@ -283,38 +283,76 @@ function MatchCore.rate(observation, photoInfo)
   return MatchCore.LIKELY, distance, apart
 end
 
+--- Every candidate for one observation, best first.
+--
+-- An observation is allowed more than one photo -- that is how iNaturalist
+-- works, and a burst of a settled insect is the ordinary case -- so the review
+-- list wants all of them as separate rows rather than one row and a note
+-- saying two others existed. The user can then untick the frames they do not
+-- want, which is also the only way to recover when the closest-in-time frame
+-- is not the one the observation was made from.
+--
+-- Ordering is the same judgement chooseMatch makes: closest in time wins, and
+-- location breaks a tie that time cannot. table.sort is not stable, so the
+-- original position is the final tiebreak -- otherwise two frames on the same
+-- second could swap places between runs and the row order would wander.
+--
+-- @return array of { photo, path, tier, distance, secondsApart }
+function MatchCore.rankMatches(observation, candidates)
+  if type(candidates) ~= "table" or #candidates == 0 then return {} end
+
+  local rated = {}
+  for index, candidate in ipairs(candidates) do
+    local tier, distance, apart = MatchCore.rate(observation, candidate)
+    rated[#rated + 1] = {
+      photo        = candidate.photo,
+      path         = candidate.path,
+      tier         = tier,
+      distance     = distance,
+      secondsApart = apart,
+      _score       = apart or math.huge,
+      _index       = index,
+    }
+  end
+
+  table.sort(rated, function(left, right)
+    if left._score ~= right._score then return left._score < right._score end
+
+    local leftConfirmed  = left.tier == MatchCore.CONFIRMED
+    local rightConfirmed = right.tier == MatchCore.CONFIRMED
+    if leftConfirmed ~= rightConfirmed then return leftConfirmed end
+
+    return left._index < right._index
+  end)
+
+  for _, entry in ipairs(rated) do
+    entry._score = nil
+    entry._index = nil
+  end
+
+  return rated
+end
+
 --- Pick the best candidate for one observation.
 --
 -- Ties are the interesting case. A burst of frames two seconds apart is one
 -- observation and several equally good photos, and picking the first quietly
 -- would link an arbitrary one of them. Instead the closest in time wins, and
--- `ambiguous` is set whenever anything else was within a second of it, so the
--- dialog can say so and the user can decide.
+-- `ambiguous` is set whenever anything else was within a second of it.
+--
+-- Kept alongside rankMatches because "which single photo is this observation
+-- of" is still a real question -- it is what a caller that is not offering a
+-- choice needs, and what decides which row is ticked first.
 --
 -- @param candidates array of { photo = , seconds = , latitude = , longitude = ,
 --                              path = }
 -- @return { photo, path, tier, distance, secondsApart, ambiguous, alternatives }
 function MatchCore.chooseMatch(observation, candidates)
-  if type(candidates) ~= "table" or #candidates == 0 then return nil end
+  local ranked = MatchCore.rankMatches(observation, candidates)
+  if #ranked == 0 then return nil end
 
-  local best, bestApart, bestTier, bestIndex
-  for index, candidate in ipairs(candidates) do
-    local tier, distance, apart = MatchCore.rate(observation, candidate)
-    local score = apart or math.huge
-
-    -- Location breaks a tie that time cannot: two frames one second apart,
-    -- one of them at the observation's own coordinates, is not really a tie.
-    if not best
-      or score < bestApart
-      or (score == bestApart and tier == MatchCore.CONFIRMED
-          and bestTier ~= MatchCore.CONFIRMED) then
-      best      = { photo = candidate.photo, tier = tier, distance = distance,
-                    secondsApart = apart, path = candidate.path }
-      bestApart = score
-      bestTier  = tier
-      bestIndex = index
-    end
-  end
+  local best = ranked[1]
+  local bestApart = best.secondsApart or math.huge
 
   -- Counted by position rather than by comparing photos. Identity looks like
   -- the obvious key and is not: virtual copies, and any caller that reuses one
@@ -322,12 +360,10 @@ function MatchCore.chooseMatch(observation, candidates)
   -- the failure is silent -- a burst reports itself as unambiguous and the
   -- user is never asked which frame they meant.
   local alternatives = 0
-  for index, candidate in ipairs(candidates) do
-    if index ~= bestIndex then
-      local _, _, apart = MatchCore.rate(observation, candidate)
-      if apart and bestApart and math.abs(apart - bestApart) <= 1 then
-        alternatives = alternatives + 1
-      end
+  for position = 2, #ranked do
+    local apart = ranked[position].secondsApart
+    if apart and bestApart and math.abs(apart - bestApart) <= 1 then
+      alternatives = alternatives + 1
     end
   end
 

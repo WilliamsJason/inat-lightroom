@@ -159,8 +159,19 @@ function ReverseSync.scan(catalog, observations, options)
     unmatched    = 0,
     ambiguous    = 0,
     conflicts    = 0,
+    claimed      = 0,
+    matched      = 0,
     stopped      = false,
   }
+
+  -- Photos taken by an earlier observation *in this run*, which is a different
+  -- thing from `linked`. `linked` is what the catalog already says and is a
+  -- hard exclusion -- relinking a photo the user has already placed is the one
+  -- outcome worse than finding nothing. This is provisional: the photo is still
+  -- offered under the second observation, unticked and flagged, because which
+  -- of two observations seconds apart a frame belongs to is exactly the
+  -- judgement the user is here to make.
+  local claimed = {}
 
   for index, observation in ipairs(observations) do
     local candidates = ReverseSync.candidatesFor(catalog, observation,
@@ -173,24 +184,36 @@ function ReverseSync.scan(catalog, observations, options)
     elseif #candidates == 0 then
       summary.unmatched = summary.unmatched + 1
     else
-      local best = MatchCore.chooseMatch(observation, candidates)
-      if best then
-        best.observation = observation
-        best.selected    = true
+      local ranked = MatchCore.rankMatches(observation, candidates)
 
-        -- Claimed straight away, so two observations seconds apart cannot both
-        -- take the same frame. Whichever is considered first wins, which is
-        -- arbitrary but at least visible: the loser reports as unmatched
-        -- rather than quietly overwriting the winner at link time.
-        linked[best.photo] = "pending"
-
-        matches[#matches + 1] = best
-        if best.ambiguous then summary.ambiguous = summary.ambiguous + 1 end
-        if best.tier == MatchCore.CONFLICT then
-          summary.conflicts = summary.conflicts + 1
-        end
-      else
+      if #ranked == 0 then
         summary.unmatched = summary.unmatched + 1
+      else
+        summary.matched = summary.matched + 1
+        if #ranked > 1 then summary.ambiguous = summary.ambiguous + 1 end
+
+        -- Every candidate becomes its own row. An observation is allowed more
+        -- than one photo, so a burst of the same subject is not a problem to
+        -- resolve down to one frame -- it is several photos of one observation,
+        -- and the user should be able to take all of them.
+        for position, entry in ipairs(ranked) do
+          entry.observation = observation
+          entry.primary     = position == 1
+
+          if claimed[entry.photo] then
+            entry.selected = false
+            entry.claimedBy = claimed[entry.photo]
+            summary.claimed = summary.claimed + 1
+          else
+            entry.selected = true
+            claimed[entry.photo] = observation.id or true
+          end
+
+          matches[#matches + 1] = entry
+          if entry.tier == MatchCore.CONFLICT then
+            summary.conflicts = summary.conflicts + 1
+          end
+        end
       end
     end
 
@@ -204,10 +227,12 @@ function ReverseSync.scan(catalog, observations, options)
     end
   end
 
-  summary.matched = #matches
+  summary.photos = #matches
   logger:info(string.format(
-    "reverse sync scanned %d observations: %d matched, %d unmatched, %d undatable",
-    summary.observations, summary.matched, summary.unmatched, summary.undatable))
+    "reverse sync scanned %d observations: %d matched %d photo(s),"
+    .. " %d unmatched, %d undatable",
+    summary.observations, summary.matched, summary.photos,
+    summary.unmatched, summary.undatable))
 
   return matches, summary
 end

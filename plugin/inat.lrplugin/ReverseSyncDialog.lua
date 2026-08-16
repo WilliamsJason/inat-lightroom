@@ -117,13 +117,23 @@ end
 function ReverseSyncDialog.caveats(match)
   local notes = {}
 
+  -- First, because it is the only note that explains why a row arrived
+  -- unticked. Everything else is a reason to look harder at a row that is
+  -- ticked.
+  if match.claimedBy then
+    notes[#notes + 1] = "already taken by an earlier observation"
+  end
+
+  -- An observation is allowed several photos, so an extra frame is an offer
+  -- rather than a warning -- but it still has to be labelled, or a burst looks
+  -- like the same match listed four times by mistake.
+  if match.primary == false then
+    notes[#notes + 1] = "another photo of this observation"
+  end
+
   if match.tier == MatchCore.CONFLICT and match.distance then
     notes[#notes + 1] = string.format("iNat says %.0f km away",
       match.distance / 1000)
-  end
-  if match.ambiguous then
-    notes[#notes + 1] = string.format("%d other photo(s) fit equally well",
-      match.alternatives or 0)
   end
   if match.secondsApart and match.secondsApart > 0 then
     notes[#notes + 1] = string.format("%ds apart", match.secondsApart)
@@ -228,8 +238,20 @@ end
 
 --- The summary line above the list.
 function ReverseSyncDialog.summarise(summary)
-  local parts = { string.format("%d of %d observations matched a photo",
-    summary.matched or 0, summary.observations or 0) }
+  local parts = {}
+
+  -- Photos and observations are counted separately because they are no longer
+  -- the same number: one observation can offer several frames, and a user who
+  -- reads "212 matched" against 798 observations would be counting the wrong
+  -- thing in both directions.
+  if (summary.photos or 0) > 0 and summary.photos ~= summary.matched then
+    parts[#parts + 1] = string.format(
+      "%d of %d observations matched %d photos",
+      summary.matched or 0, summary.observations or 0, summary.photos)
+  else
+    parts[#parts + 1] = string.format("%d of %d observations matched a photo",
+      summary.matched or 0, summary.observations or 0)
+  end
 
   if (summary.unmatched or 0) > 0 then
     parts[#parts + 1] = string.format("%d found no photo", summary.unmatched)
@@ -241,7 +263,11 @@ function ReverseSyncDialog.summarise(summary)
     parts[#parts + 1] = string.format("%d had no time of day", summary.undatable)
   end
   if (summary.ambiguous or 0) > 0 then
-    parts[#parts + 1] = string.format("%d were ambiguous", summary.ambiguous)
+    parts[#parts + 1] = string.format("%d matched more than one photo",
+      summary.ambiguous)
+  end
+  if (summary.claimed or 0) > 0 then
+    parts[#parts + 1] = string.format("%d were already taken", summary.claimed)
   end
   if (summary.conflicts or 0) > 0 then
     parts[#parts + 1] = string.format("%d disagree on location", summary.conflicts)
@@ -277,8 +303,13 @@ Pager.__index = Pager
 function Pager.new(matches, props, options)
   options = options or {}
 
+  -- Ticked by default, but the scan gets the last word: a photo an earlier
+  -- observation already took arrives unticked, because linking it twice is a
+  -- decision rather than a default.
   local selected = {}
-  for index = 1, #matches do selected[index] = true end
+  for index, match in ipairs(matches) do
+    selected[index] = match.selected ~= false
+  end
 
   local pageSize = math.min(options.pageSize or ReverseSyncDialog.PAGE_SIZE,
     math.max(#matches, 1))

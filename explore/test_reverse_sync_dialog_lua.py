@@ -152,10 +152,42 @@ def test_a_location_conflict_is_spelled_out(plugin, dialog):
     assert "40 km away" in note
 
 
-def test_an_ambiguous_match_says_how_many_others_fit(plugin, dialog):
-    note = dialog["caveats"](match(plugin, ambiguous=True, alternatives=3))
+def test_an_extra_photo_for_one_observation_is_labelled(plugin, dialog):
+    """Every candidate now gets its own row, so a burst of four frames appears
+    four times. Without a note that reads as the same match listed by mistake."""
+    note = dialog["caveats"](match(plugin, primary=False))
 
-    assert "3 other photo(s) fit equally well" in note
+    assert "another photo of this observation" in note
+
+
+def test_a_photo_an_earlier_observation_took_says_so(plugin, dialog):
+    """The one row that arrives unticked, so it is the one row that has to
+    explain itself."""
+    note = dialog["caveats"](match(plugin, primary=False, claimedBy=99))
+
+    assert "already taken by an earlier observation" in note
+
+
+def test_the_claim_note_comes_first(plugin, dialog):
+    """It is the reason the box is empty; the rest are reasons to look twice at
+    a box that is ticked."""
+    note = dialog["caveats"](match(plugin, primary=False, claimedBy=99,
+        secondsApart=2))
+
+    assert note.index("already taken") < note.index("2s apart")
+
+
+def test_a_burst_row_is_not_ticked_when_it_is_claimed(plugin, dialog):
+    """Pager.new defers to the scan rather than ticking everything, or the
+    warning above would sit next to a ticked box and mean nothing."""
+    every = matches(plugin, match(plugin, selected=True),
+                    match(plugin, selected=False))
+    props = plugin.eval(
+        'function() return import("LrBinding").makePropertyTable(nil) end')()
+    made = dialog["Pager"]["new"](every, props)
+
+    assert made.selected[1] is True
+    assert made.selected[2] is False
 
 
 def test_a_confident_match_carries_no_note(plugin, dialog):

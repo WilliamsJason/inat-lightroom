@@ -352,3 +352,72 @@ def test_location_breaks_a_tie_time_cannot(plugin, match):
 def test_no_candidates_is_no_match(plugin, match):
     obs = observation(plugin, time_observed_at="2017-04-29T10:22:27Z")
     assert match.chooseMatch(obs, plugin.runtime.table_from([])) is None
+
+
+# ------------------------------------------------------------ ranking them all
+
+def test_ranking_returns_every_candidate_closest_first(plugin, match):
+    """One observation may legitimately have several photos, so the caller wants
+    the whole field ranked rather than a winner and a count of the rest."""
+    obs = observation(plugin, time_observed_at="2017-04-29T10:22:27Z")
+    candidates = plugin.runtime.table_from([
+        photo_info(plugin, match, "2017-04-29T10:22:29Z", name="c"),
+        photo_info(plugin, match, "2017-04-29T10:22:27Z", name="a"),
+        photo_info(plugin, match, "2017-04-29T10:22:28Z", name="b"),
+    ])
+
+    ranked = match.rankMatches(obs, candidates)
+
+    assert len(ranked) == 3
+    assert [ranked[row].secondsApart for row in (1, 2, 3)] == [0, 1, 2]
+
+
+def test_ranking_keeps_equal_candidates_in_catalog_order(plugin, match):
+    """table.sort is not stable. Two frames on the same second would otherwise
+    swap places between runs, and the review list would reorder itself for no
+    reason the user could see."""
+    obs = observation(plugin, time_observed_at="2017-04-29T10:22:27Z")
+    candidates = plugin.runtime.table_from([
+        photo_info(plugin, match, "2017-04-29T10:22:27Z", name="first"),
+        photo_info(plugin, match, "2017-04-29T10:22:27Z", name="second"),
+        photo_info(plugin, match, "2017-04-29T10:22:27Z", name="third"),
+    ])
+
+    ranked = match.rankMatches(obs, candidates)
+
+    assert [ranked[row].photo for row in (1, 2, 3)] \
+        == ["first", "second", "third"]
+
+
+def test_ranking_prefers_the_confirmed_frame_on_a_tie(plugin, match):
+    """Same judgement chooseMatch makes: location breaks a tie time cannot."""
+    obs = observation(plugin, time_observed_at="2017-04-29T10:22:27Z",
+                      location="45.512300,-122.658000")
+    far = photo_info(plugin, match, "2017-04-29T10:22:28Z", 47.6062, -122.3321)
+    near = photo_info(plugin, match, "2017-04-29T10:22:28Z", 45.5123, -122.658)
+    candidates = plugin.runtime.table_from([far, near])
+
+    ranked = match.rankMatches(obs, candidates)
+
+    assert ranked[1].tier == match.CONFIRMED
+
+
+def test_ranking_nothing_is_an_empty_list_not_nil(plugin, match):
+    """The caller loops over the result; nil would be an error rather than an
+    empty afternoon."""
+    obs = observation(plugin, time_observed_at="2017-04-29T10:22:27Z")
+
+    assert len(match.rankMatches(obs, plugin.runtime.table_from([]))) == 0
+
+
+def test_ranking_leaves_no_bookkeeping_on_the_rows(plugin, match):
+    """The rows go straight into the review list and out to the linker, so a
+    stray sort key would travel with them."""
+    obs = observation(plugin, time_observed_at="2017-04-29T10:22:27Z")
+    candidates = plugin.runtime.table_from(
+        [photo_info(plugin, match, "2017-04-29T10:22:27Z")])
+
+    ranked = match.rankMatches(obs, candidates)
+
+    assert ranked[1]._score is None
+    assert ranked[1]._index is None
