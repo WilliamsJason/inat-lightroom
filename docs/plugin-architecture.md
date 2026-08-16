@@ -713,6 +713,11 @@ Staging downloads the archive, verifies it, and unpacks it into
 as Lightroom closes. The next launch reads a folder that is entirely one
 release, and the user restarts once.
 
+This is verified in the host rather than assumed: `LrShutdownPlugin` does fire,
+and it fires on Reload Plug-in as well as on quit, so an update can land without
+Lightroom ever closing. See `docs/lightroom-sdk-notes.md` for the log evidence
+and for how to tell the two apply paths apart.
+
 A shutdown hook is not a promise — Lightroom can crash or be killed — so
 `PluginInit` applies a leftover staged update at the next launch instead. That
 runs before any other module of this plugin is required, which is the same

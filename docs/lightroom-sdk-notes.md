@@ -861,6 +861,45 @@ an enclosing `bind_to_object` which is the same table the code writes to.
 
 ---
 
+## `LrShutdownPlugin` runs on Reload Plug-in, from the file on disk
+
+Verified in the host. The updater's whole design rests on this hook firing, so
+it was worth proving rather than assuming: the plugin stages an update while it
+is loaded and swaps the files as it unloads, which costs the user one restart
+instead of two.
+
+Two things the log showed that are not in the SDK documentation:
+
+**The hook fires on Reload Plug-in, not only on quit.** A user who leaves
+Lightroom running for weeks can still take an update the moment they ask for
+one.
+
+**Lightroom reads `PluginShutdown.lua` at unload, not at load.** The line that
+proved the hook ran was written to the file *after* Lightroom had already
+loaded the plugin, and it still appeared. So the unload path is not a chunk
+compiled at startup. This matters when testing: editing the shutdown script of
+a running plugin takes effect on the next unload, with no reload needed first.
+
+The evidence to look for, since two different code paths can apply an update:
+
+```
+TRACE  PluginShutdown: running
+INFO   Updater: applied v0.9.8 (29 files)
+```
+
+and *no* `PluginInit: applied a staged update ...` line after it. `PluginInit`
+is the fallback for a crash or a kill; if its line appears too, the hook did
+not do the work. Both lines exist to tell those cases apart.
+
+That distinction only became readable after fixing a bug of my own. The
+`pcall` around the swap discarded its error while the comment above it claimed
+failures reached the log, so "the hook never ran" and "the hook ran and the
+swap failed" produced identical evidence — an update landing one restart late
+— despite sharing no fix. `PluginShutdown` now logs on entry unconditionally,
+before anything can fail, and logs the `pcall` error when there is one.
+
+---
+
 ## Testing without Lightroom
 
 Every bug above only appeared by running Lightroom, clicking through, and
