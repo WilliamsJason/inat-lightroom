@@ -161,13 +161,26 @@ SettingsDialog.KEYWORD_ROOT_SEPARATOR = " > "
 
 --- How many keywords the picker is willing to list.
 --
--- A catalog can hold tens of thousands -- this plugin creates one per taxon,
--- so a heavy user's own tree is the smaller half of it -- and a popup with
--- that many items is both unusable and slow to build. Past the cap the edit
--- field is still there and still takes any path.
+-- A backstop rather than the thing that keeps the list short -- the depth
+-- below does that. It still matters for a catalog with hundreds of top-level
+-- keywords, where a popup that long is unusable and slow to build. Past the
+-- cap the edit field is still there and still takes any path.
 SettingsDialog.KEYWORD_ROOT_PICK_LIMIT = 500
 
---- Every keyword in the catalog, as picker items of full paths.
+--- How deep into the keyword tree the picker looks.
+--
+-- Listing the whole tree made the popup useless: this plugin writes a keyword
+-- per taxon under the root, so the picker filled with its own output -- five
+-- hundred rows of "iNaturalist > Animalia > Arthropoda > …" covering the
+-- screen, none of which anyone would file a taxonomy under.
+--
+-- Two levels is where the useful answers are. A root is somewhere near the top
+-- of a catalog -- "Nature", or "Nature > iNaturalist" -- and anything deeper is
+-- quicker to type than to find in a list. The field beside the popup still
+-- takes a path of any depth.
+SettingsDialog.KEYWORD_ROOT_PICK_DEPTH = 2
+
+--- The catalog's top two levels of keywords, as picker items of full paths.
 --
 -- Depth-first so children follow their parent, which keeps a tree readable in
 -- a flat list. Exposed for testing: walking a catalog needs no dialog.
@@ -180,7 +193,9 @@ function SettingsDialog.keywordRootItems(catalog)
     { title = SettingsDialog.KEYWORD_ROOT_PICK_PROMPT, value = "" },
   }
 
-  local function walk(keywords, prefix)
+  local function walk(keywords, prefix, depth)
+    if depth > SettingsDialog.KEYWORD_ROOT_PICK_DEPTH then return end
+
     -- Sorting a copy: getChildren hands back the catalog's own ordering, and
     -- the list is read alphabetically whatever order it arrives in.
     --
@@ -203,7 +218,12 @@ function SettingsDialog.keywordRootItems(catalog)
         or (prefix .. SettingsDialog.KEYWORD_ROOT_SEPARATOR .. entry.name)
 
       items[#items + 1] = { title = path, value = path }
-      walk(entry.keyword:getChildren(), path)
+      -- Asking for children one level past the last one listed would read the
+      -- whole taxonomy tree to throw it away, which is the expensive half of
+      -- the walk on the catalogs that need this most.
+      if depth < SettingsDialog.KEYWORD_ROOT_PICK_DEPTH then
+        walk(entry.keyword:getChildren(), path, depth + 1)
+      end
     end
   end
 
@@ -211,7 +231,7 @@ function SettingsDialog.keywordRootItems(catalog)
   -- lock, and taking it thousands of times for a tree that is not changing
   -- costs more than holding it once.
   catalog:withReadAccessDo(function()
-    walk(catalog:getKeywords(), "")
+    walk(catalog:getKeywords(), "", 1)
   end)
 
   return items

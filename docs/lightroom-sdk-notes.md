@@ -392,6 +392,25 @@ Two things about how this survived so long:
   exists, assert that it was *not* taken — the dialog's test now fails if the
   warning is logged at all.
 
+## A `popup_menu` does not cope with a long list -- so do not build one
+
+`f:popup_menu` puts every item on screen at once. Given a few hundred it draws
+a menu the height and width of the display, with the longest title setting the
+width and a scroll arrow at each end. There is no `max_visible`, no filtering,
+and no truncation.
+
+The keyword-root picker hit this the moment it worked: it listed the catalog's
+whole keyword tree, and on a synced catalog that tree is mostly the plugin's
+own taxonomy -- five hundred rows of `iNaturalist > Animalia > Arthropoda > …`
+covering the screen. The item cap that was supposed to protect against this was
+doing its job perfectly; five hundred items is still unusable.
+
+A cap on **quantity** is not the same as a cap on **relevance**. The list is
+two levels deep now, which is where roots actually live, and the cap stayed as
+a backstop for a catalog that is wide rather than deep. When a control cannot
+show a big list, the answer is a smaller question, not a bigger control -- and
+in a dialog with a free-text field beside it, "type the rest" is a real answer.
+
 ## `f:static_text` drops a word rather than clipping it
 
 Given a fixed `width`, a `static_text` whose contents do not fit does not

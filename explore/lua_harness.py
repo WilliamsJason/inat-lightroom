@@ -539,6 +539,10 @@ local catalogWrites = {}
 local createdKeywords = {}
 local refusedKeywords = {}
 local keywordsFail = false
+-- Which keywords were asked for their children, in order. A walk that reads a
+-- level it has no intention of listing costs a catalog read per keyword on the
+-- deep trees this plugin writes, and nothing about its output says it did.
+local keywordChildrenRead = {}
 local targetPhotos = {}
 local allPhotos = {}
 local publishedCollections = {}
@@ -684,6 +688,7 @@ catalog = {
     keyword.getChildren = function(_kw)
       yieldsHere("LrKeyword:getChildren")
       requireReadAccess("LrKeyword:getChildren")
+      keywordChildrenRead[#keywordChildrenRead + 1] = name
       local children = {}
       for _, other in ipairs(createdKeywords) do
         if other.parent == name then children[#children + 1] = other end
@@ -967,6 +972,7 @@ return {
   catalogWrites = catalogWrites,
   createdKeywords = createdKeywords,
   refusedKeywords = refusedKeywords,
+  keywordChildrenRead = keywordChildrenRead,
   newPhoto = newPhoto,
   exportSessions = exportSessions,
   createdDirectories = createdDirectories,
@@ -1173,6 +1179,18 @@ class LuaPlugin:
             {"name": created[i]["name"], "parent": created[i]["parent"]}
             for i in range(1, len(created) + 1)
         ]
+
+    @property
+    def keyword_children_read(self) -> list[str]:
+        """Names of the keywords asked for their children, in order.
+
+        A walk that reads a level it does not list is invisible in its output
+        and expensive on a deep tree, which is what the plugin's own taxonomy
+        is. Seeding uses createKeyword rather than getChildren, so this holds
+        only what the code under test did.
+        """
+        read = self.env["keywordChildrenRead"]
+        return [read[i] for i in range(1, len(read) + 1)]
 
     def add_keyword(self, name: str, parent: str | None = None) -> None:
         """Put a keyword in the catalog before anything runs.
