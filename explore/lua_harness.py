@@ -34,6 +34,40 @@ PLUGIN_DIR = Path(__file__).resolve().parent.parent / "plugin" / "inat.lrplugin"
 _STUB_SOURCE = """
 local stubs = {}
 
+-- Lua 5.1 cannot yield across a C call, and pcall is a C function. So an SDK
+-- call that yields -- which is most of the catalog, and all of the network --
+-- fails when it happens inside a plain pcall, with a message that names neither
+-- the pcall nor the call that yielded:
+--
+--     Yielding is not allowed within a C or metamethod call
+--
+-- Nothing about the shape of the code says so, and it is invisible until it
+-- runs inside Lightroom. It cost a whole reverse sync run: every photo failed,
+-- the failures were caught and counted, and the result read as a matching
+-- problem rather than a Lua one.
+--
+-- So the harness models the rule. pcall is replaced with one that remembers it
+-- is a plain pcall, LrTasks.pcall is not, and the stubs that stand for yielding
+-- calls refuse to run while a plain one is on the stack.
+local realPcall = pcall
+local plainPcallDepth = 0
+
+function pcall(fn, ...)
+  plainPcallDepth = plainPcallDepth + 1
+  local results = { realPcall(fn, ...) }
+  plainPcallDepth = plainPcallDepth - 1
+  return unpack(results)
+end
+
+--- Called by every stub that stands in for a call that yields in Lightroom.
+local function yieldsHere(what)
+  if plainPcallDepth > 0 then
+    error("Yielding is not allowed within a C or metamethod call -- "
+      .. tostring(what) .. " yields, and it is inside a plain pcall. "
+      .. "Use LrTasks.pcall.", 0)
+  end
+end
+
 -- Captures every logged line so tests can assert on them if useful.
 local logLines = {}
 
@@ -50,7 +84,7 @@ stubs.LrLogger = function(_name)
   -- never reached.
   local function recordf(level)
     return function(_self, format, ...)
-      local ok, message = pcall(string.format, tostring(format), ...)
+      local ok, message = realPcall(string.format, tostring(format), ...)
       logLines[#logLines + 1] = level .. ": " .. (ok and message or tostring(format))
     end
   end
@@ -101,6 +135,7 @@ local httpCalls = {}
 local openedUrls = {}
 stubs.LrHttp = {
   get = function(url, headers)
+    yieldsHere("LrHttp.get")
     httpCalls[#httpCalls + 1] = { method = "GET", url = url, headers = headers }
     if HTTP_HANDLER then return HTTP_HANDLER("GET", url, nil, headers) end
     error("unexpected HTTP GET in test: " .. tostring(url))
@@ -109,6 +144,7 @@ stubs.LrHttp = {
   -- beyond the fourth argument is recorded so tests can assert we are not
   -- passing a content type positionally, which silently stops the request.
   post = function(url, body, headers, method, ...)
+    yieldsHere("LrHttp.post")
     httpCalls[#httpCalls + 1] = {
       method = method or "POST",
       url = url,
@@ -130,6 +166,11 @@ stubs.LrHttp = {
 -- caller has returned. Modelling that is what makes a progress scope outliving
 -- its function context visible here instead of only in the host.
 local pendingTasks = {}
+
+-- Every LrTasks.sleep the plugin asked for, in order. Rate limiting is a
+-- behaviour made entirely of waiting, so the waits have to be observable.
+local sleeps = {}
+stubs._sleeps = sleeps
 
 -- Shell-outs. LrTasks.execute is how the plugin reaches Win32 to fix the
 -- floating panel's z-order, so tests need to see the command and to be able to
@@ -155,10 +196,14 @@ end
 
 stubs.LrTasks = {
   startAsyncTask = function(fn) pendingTasks[#pendingTasks + 1] = fn end,
-  sleep = function() end,
+  -- Records rather than waits. Pacing and backoff are worth asserting on --
+  -- the whole point is how long the plugin waits -- and a test suite that
+  -- actually slept would take minutes.
+  sleep = function(seconds) sleeps[#sleeps + 1] = seconds end,
   -- Lightroom's own pcall, which unlike Lua's can be used around code that
-  -- yields. Same contract, so the plain one is a faithful stand-in.
-  pcall = function(fn, ...) return pcall(fn, ...) end,
+  -- yields. realPcall, and deliberately without touching plainPcallDepth: this
+  -- is the one that is safe to yield inside.
+  pcall = function(fn, ...) return realPcall(fn, ...) end,
 
   -- Records the command instead of running a shell, and hands back whatever
   -- exit code the test asked for. Real one blocks until the child exits.
@@ -219,9 +264,23 @@ stubs.LrFileUtils = {
   end,
 }
 
+-- Lightroom counts seconds from 2001-01-01, not the Unix epoch, and the whole
+-- point of routing dates through LrDate is that os.date would be 31 years out.
+-- A stub returning a fixed string cannot tell a caller who got that right from
+-- one who got it wrong, so these convert for real. UTC throughout, so a test
+-- gives the same answer on any machine.
+local LR_EPOCH_IN_UNIX = 978307200
+
 stubs.LrDate = {
-  timeToUserFormat = function(_time, _format) return "2026-07-29" end,
-  timeToW3CDate = function(_time) return "2026-07-29T19:36:41Z" end,
+  timeToUserFormat = function(time, format)
+    return os.date("!" .. format, (time or 0) + LR_EPOCH_IN_UNIX)
+  end,
+  -- The real one includes milliseconds and an explicit offset. That exact
+  -- shape matters: findPhotos matches nothing against it, silently, so a test
+  -- that feeds it to a capture-time search should see what Lightroom sees.
+  timeToW3CDate = function(time)
+    return os.date("!%Y-%m-%dT%H:%M:%S.000+00:00", (time or 0) + LR_EPOCH_IN_UNIX)
+  end,
   currentTime = function() return 807126000 end,
 }
 
@@ -291,6 +350,14 @@ stubs.LrView = {
   osFactory = passthroughFactory,
   bind = function(spec) return { __bind = spec } end,
 }
+
+-- LrColor is a module that is itself a function: LrColor(r, g, b). The stub
+-- keeps the components so a test can assert a warning is drawn in a warning
+-- colour, rather than only that some colour was asked for.
+stubs.LrColor = function(red, green, blue, alpha)
+  return { red = red, green = green, blue = blue, alpha = alpha,
+           __color = true }
+end
 
 -- A property table that notices writes.
 --
@@ -380,8 +447,42 @@ stubs.LrFunctionContext = {
   end,
 }
 
+-- The only capture-time value format findPhotos actually understands, plus the
+-- date-only form. Anything else -- a zone, a fraction of a second, the output
+-- of LrDate.timeToW3CDate -- returns nil here and matches nothing there.
+--
+-- `endOfDay` extends a bare date to cover the whole of it, which is what the
+-- real search does with a date-only bound.
+local function parseSearchValue(value, endOfDay)
+  if type(value) ~= "string" then return nil end
+
+  local year, month, day, hour, minute, second = string.match(value,
+    "^(%d%d%d%d)-(%d%d)-(%d%d)T(%d%d):(%d%d):(%d%d)$")
+
+  if not year then
+    year, month, day = string.match(value, "^(%d%d%d%d)-(%d%d)-(%d%d)$")
+    if not year then return nil end
+    hour, minute, second = endOfDay and 23 or 0, endOfDay and 59 or 0,
+      endOfDay and 59 or 0
+  end
+
+  -- os.time reads the machine's zone; these are UTC by construction, so the
+  -- arithmetic is done here instead.
+  local y, m, d = tonumber(year), tonumber(month), tonumber(day)
+  local era = math.floor((m <= 2 and y - 1 or y) / 400)
+  local yoe = (m <= 2 and y - 1 or y) - era * 400
+  local mp  = (m + 9) % 12
+  local doy = math.floor((153 * mp + 2) / 5) + d - 1
+  local doe = yoe * 365 + math.floor(yoe / 4) - math.floor(yoe / 100) + doy
+  local days = era * 146097 + doe - 719468
+
+  return days * 86400 + tonumber(hour) * 3600 + tonumber(minute) * 60
+    + tonumber(second)
+end
+
 local catalogWrites = {}
 local createdKeywords = {}
+local refusedKeywords = {}
 local targetPhotos = {}
 local allPhotos = {}
 local publishedCollections = {}
@@ -441,11 +542,23 @@ end
 catalog = {
   _writing = false,
 
+  -- Nesting is rejected rather than quietly flattened. Lightroom will not open
+  -- a write block inside a write block, and a stub that allowed it would let a
+  -- caller wrap a helper that already opens its own -- which passes here and
+  -- deadlocks there. The exit flag is restored rather than cleared for the
+  -- same reason: clearing it would leave the outer block looking closed.
   withWriteAccessDo = function(self, name, fn)
+    yieldsHere("catalog:withWriteAccessDo")
+    if self._writing then
+      error("withWriteAccessDo: cannot be called inside another write block " ..
+        "(already in " .. tostring(self._writingName) .. ")", 0)
+    end
+
     catalogWrites[#catalogWrites + 1] = name
-    self._writing = true
-    local ok, err = pcall(fn)
-    self._writing = false
+    local wasWriting, wasName = self._writing, self._writingName
+    self._writing, self._writingName = true, name
+    local ok, err = realPcall(fn)
+    self._writing, self._writingName = wasWriting, wasName
     if not ok then error(err, 0) end
   end,
 
@@ -453,16 +566,23 @@ catalog = {
   -- transaction the export itself is holding. It takes no name, which is the
   -- easiest way for a test to tell the two apart.
   withPrivateWriteAccessDo = function(self, fn)
+    yieldsHere("catalog:withPrivateWriteAccessDo")
     catalogWrites[#catalogWrites + 1] = "<private>"
     self._writing = true
-    local ok, err = pcall(fn)
+    local ok, err = realPcall(fn)
     self._writing = false
     if not ok then error(err, 0) end
   end,
 
   -- createKeyword(name, synonyms, includeOnExport, parent, returnExistingIfAny)
   createKeyword = function(_self, name, _synonyms, _include, parent, returnExisting)
+    yieldsHere("catalog:createKeyword")
     requireWriteAccess("LrCatalog:createKeyword")
+    -- Lightroom sometimes hands back nil instead of a keyword. Tests need to
+    -- reproduce that, because the interesting question is what the caller does
+    -- next: carrying on with a nil parent silently creates the rest of the
+    -- hierarchy at the top level of the catalog.
+    if refusedKeywords[name] then return nil end
     local parentName = parent and parent.name or nil
     for _, keyword in ipairs(createdKeywords) do
       if keyword.name == name and keyword.parent == parentName then
@@ -471,8 +591,27 @@ catalog = {
       end
     end
     local keyword = { name = name, parent = parentName }
+    -- Real keywords answer questions about themselves. The plugin asks, when
+    -- createKeyword refuses, whether the keyword it wanted is already there.
+    keyword.getName     = function(_kw) return name end
+    keyword.getChildren = function(_kw)
+      local children = {}
+      for _, other in ipairs(createdKeywords) do
+        if other.parent == name then children[#children + 1] = other end
+      end
+      return children
+    end
     createdKeywords[#createdKeywords + 1] = keyword
     return keyword
+  end,
+
+  --- The top level of the keyword list. Children hang off getChildren.
+  getKeywords = function(_self)
+    local top = {}
+    for _, keyword in ipairs(createdKeywords) do
+      if keyword.parent == nil then top[#top + 1] = keyword end
+    end
+    return top
   end,
 
   getTargetPhotos = function() return targetPhotos end,
@@ -494,6 +633,103 @@ catalog = {
 
   getPublishedCollectionByLocalIdentifier = function(_self, localId)
     return publishedCollections[localId]
+  end,
+
+  -- The capture-time search, with the behaviour the SDK probe measured rather
+  -- than the behaviour the documentation implies. Three details are load
+  -- bearing and all three were found the hard way:
+  --
+  --   * a value it cannot read matches *nothing*, silently. That is how
+  --     LrDate.timeToW3CDate output behaves against the real call -- an empty
+  --     result, indistinguishable from a window holding no photo -- so a stub
+  --     that accepted any date string would hide the bug it exists to catch.
+  --   * an operation outside the date vocabulary never returns at all in
+  --     Lightroom. A stub cannot hang without hanging the suite, so this
+  --     raises instead, which fails the same tests for the same reason.
+  --   * seconds are compared, not rounded away to whole days.
+  findPhotos = function(_self, args)
+    if type(args) ~= "table" or args.searchDesc == nil then
+      error("LrCatalog:findPhotos: must be called with named arguments syntax", 0)
+    end
+
+    local desc = args.searchDesc
+    local criteria = desc.criteria and { desc } or desc
+
+    local matched = {}
+    for _, photo in ipairs(allPhotos) do
+      local keep = true
+
+      for _, rule in ipairs(criteria) do
+        if rule.criteria ~= "captureTime" then
+          error("harness findPhotos: unsupported criteria " ..
+            tostring(rule.criteria), 0)
+        end
+        if rule.operation ~= "in" then
+          error("harness findPhotos: operation " .. tostring(rule.operation) ..
+            " never returns in Lightroom -- use one from the date vocabulary", 0)
+        end
+
+        local from = parseSearchValue(rule.value, false)
+        local to   = parseSearchValue(rule.value2, true)
+        local when = photo._raw.dateTimeOriginal
+
+        -- An unreadable bound matches nothing, exactly as the real call does.
+        if not from or not to or not when then
+          keep = false
+        else
+          local unix = when + LR_EPOCH_IN_UNIX
+          if unix < from or unix > to then keep = false end
+        end
+      end
+
+      if keep then matched[#matched + 1] = photo end
+    end
+
+    return matched
+  end,
+
+  -- Keyed by photo object, not by index, and all or nothing: one key it does
+  -- not know discards every other column. The real message is
+  -- `Unknown key: "fileName"` -- fileName being formatted metadata rather than
+  -- raw, which is the mistake this reproduces.
+  batchGetRawMetadata = function(_self, photos, keys)
+    local known = {
+      dateTimeOriginal = true, dateTimeOriginalISO8601 = true,
+      captureTime = true, gps = true, gpsAltitude = true,
+      path = true, uuid = true, isVirtualCopy = true,
+    }
+    for _, key in ipairs(keys) do
+      if not known[key] then
+        error('Unknown key: "' .. tostring(key) .. '"', 0)
+      end
+    end
+
+    local rows = {}
+    for _, photo in ipairs(photos) do
+      local row = {}
+      for _, key in ipairs(keys) do row[key] = photo._raw[key] end
+      rows[photo] = row
+    end
+    return rows
+  end,
+
+  -- (photos, pluginId, {keys}) -- the keys go last. The other orderings raise
+  -- `bad argument #1 to 'ipairs'` in Lightroom, or hang when handed _PLUGIN.
+  batchGetPropertyForPlugin = function(_self, photos, pluginId, keys)
+    if type(keys) ~= "table" then
+      error("bad argument #1 to 'ipairs' (table expected, got " ..
+        type(keys) .. ")", 0)
+    end
+
+    local rows = {}
+    for _, photo in ipairs(photos) do
+      local row = {}
+      for _, key in ipairs(keys) do
+        if pluginId == _PLUGIN.id then row[key] = photo._props[key] end
+      end
+      rows[photo] = row
+    end
+    return rows
   end,
 }
 
@@ -629,6 +865,7 @@ return {
   floatingDialogs = floatingDialogs,
   catalogWrites = catalogWrites,
   createdKeywords = createdKeywords,
+  refusedKeywords = refusedKeywords,
   newPhoto = newPhoto,
   exportSessions = exportSessions,
   createdDirectories = createdDirectories,
@@ -723,6 +960,12 @@ class LuaPlugin:
     def log_lines(self) -> list[str]:
         lines = self.env["logLines"]
         return [lines[i] for i in range(1, len(lines) + 1)]
+
+    @property
+    def sleeps(self) -> list[float]:
+        """Every LrTasks.sleep the plugin asked for, in seconds, in order."""
+        waits = self.env["stubs"]["_sleeps"]
+        return [waits[i] for i in range(1, len(waits) + 1)]
 
     @property
     def http_calls(self) -> list[dict]:
@@ -827,6 +1070,15 @@ class LuaPlugin:
             {"name": created[i]["name"], "parent": created[i]["parent"]}
             for i in range(1, len(created) + 1)
         ]
+
+    def refuse_keyword(self, name: str) -> None:
+        """Make catalog:createKeyword hand back nil for this name.
+
+        Lightroom does this in circumstances the SDK does not document. What
+        matters is that the plugin notices, rather than treating nil as "no
+        parent" and creating the remainder of the lineage at the catalog root.
+        """
+        self.env["refusedKeywords"][name] = True
 
     @property
     def catalog(self):

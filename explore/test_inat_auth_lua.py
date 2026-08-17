@@ -167,3 +167,44 @@ def test_token_is_not_written_to_preferences(plugin, auth):
 
     assert token not in stored_prefs
     assert plugin.passwords["api_token"] == token
+
+
+# ---------------------------------------------------------------------------
+# Reporting that there are none
+# ---------------------------------------------------------------------------
+
+
+def test_missing_credentials_are_reported_as_a_warning(plugin, auth):
+    """Not having set the plugin up yet is the state everybody starts in, not
+    something that went wrong."""
+    auth.reportMissingCredentials(None)
+
+    shown = plugin.dialogs[-1]
+    assert shown["style"] == "warning"
+    assert "credentials are not set up" in shown["message"]
+
+
+def test_the_dialog_is_not_named_after_whatever_asked(plugin, auth):
+    """Four features need a token, and it is one problem with one fix. Titled
+    per caller, the same sentence looked like a different fault depending on
+    which button had been pressed -- which is what this replaced."""
+    auth.reportMissingCredentials(None)
+
+    assert plugin.dialogs[-1]["title"] == "Pinned"
+
+
+def test_the_reason_given_is_the_one_passed_in(plugin, auth):
+    """An expired token and an absent one need different advice, so the caller
+    passes on whatever getToken said rather than this inventing a message."""
+    auth.reportMissingCredentials("Your iNaturalist token has expired.")
+
+    assert plugin.dialogs[-1]["message"] == "Your iNaturalist token has expired."
+
+
+def test_every_caller_gets_the_same_dialog(plugin, auth):
+    """The whole point: two calls, from wherever, are indistinguishable."""
+    auth.reportMissingCredentials(None)
+    auth.reportMissingCredentials(None)
+
+    first, second = plugin.dialogs[-2], plugin.dialogs[-1]
+    assert first == second

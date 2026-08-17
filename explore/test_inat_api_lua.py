@@ -13,6 +13,7 @@ at their observation and finds the evidence gone.
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
@@ -53,6 +54,18 @@ def api_pair():
     plugin = LuaPlugin(http_handler=fake)
     InatAPI = plugin.require("InatAPI")
     return plugin, InatAPI.new(TOKEN), fake
+
+
+@pytest.fixture
+def api_pair_with():
+    """Same, but driven by a handler the test supplies."""
+
+    def build(handler):
+        plugin = LuaPlugin(http_handler=handler)
+        InatAPI = plugin.require("InatAPI")
+        return plugin, InatAPI.new(TOKEN), handler
+
+    return build
 
 
 # ---------------------------------------------------------------------------
@@ -302,6 +315,279 @@ def test_transport_failures_report_the_underlying_reason(api_pair):
 
 
 # ---------------------------------------------------------------------------
+# Who we are
+# ---------------------------------------------------------------------------
+
+
+def test_the_account_is_looked_up_before_searching(api_pair_with):
+    """user_id=me reads like it should work and does not: the search endpoint
+    answers HTTP 422 Unknown user_id me, because user_id is an index filter and
+    the index holds numbers. This is what shipped broken."""
+    plugin, api, pages = api_pair_with(Pages(3))
+
+    plugin.call(api.listObservations, api, plugin.eval("{}"))
+
+    assert "/users/me" in pages.requests[0]["url"]
+    assert "user_id=4242" in pages.searches[0]["url"]
+    assert not any("user_id=me" in r["url"] for r in pages.requests)
+
+
+def test_the_account_is_only_looked_up_once(api_pair_with):
+    """It cannot change while a token is in use, and asking again would put a
+    round trip in front of every search."""
+    plugin, api, pages = api_pair_with(Pages(500))
+
+    plugin.call(api.listObservations, api, plugin.eval("{ perPage = 200 }"))
+
+    identity = [r for r in pages.requests if "/users/me" in r["url"]]
+    assert len(identity) == 1
+    assert len(pages.searches) == 3
+
+
+def test_currentUser_returns_the_account(api_pair_with):
+    plugin, api, _ = api_pair_with(Pages(0))
+
+    user, err = plugin.call(api.currentUser, api)
+
+    assert err is None
+    assert user.id == 4242
+    assert user.login == "naturalist"
+
+
+def test_a_failed_lookup_stops_the_listing(api_pair):
+    """Better a plain "who are you" failure than a search filtered by nothing,
+    which would return every observation on iNaturalist."""
+    plugin, api, _ = api_pair
+    plugin.set_http_handler(
+        lambda *_args: ('{"error":"Unauthorized"}', plugin.eval("{status = 401}")))
+
+    observations, err = plugin.call(api.listObservations, api, plugin.eval("{}"))
+
+    assert observations is None
+    assert err is not None
+
+
+def test_a_response_without_an_id_is_refused(api_pair):
+    """An empty results array would otherwise become user_id=nil, which the
+    query builder drops, leaving a search across everybody's observations."""
+    plugin, api, _ = api_pair
+    plugin.set_http_handler(
+        lambda *_args: ('{"total_results":0,"results":[]}', plugin.eval("{status = 200}")))
+
+    user, err = plugin.call(api.currentUser, api)
+
+    assert user is None
+    assert "account" in err
+
+
+# ---------------------------------------------------------------------------
+# Listing every observation
+# ---------------------------------------------------------------------------
+
+
+class Pages:
+    """A user's observations, served the way the API serves them.
+
+    Ignores everything except id_above and per_page, which is the whole point:
+    a paginator that works against a stub keyed on page numbers proves nothing
+    about one that has to carry a cursor.
+    """
+
+    def __init__(self, count: int, per_page_cap: int = 200) -> None:
+        self.observations = [
+            {"id": index, "time_observed_at": "2017-04-29T10:22:27Z"}
+            for index in range(1, count + 1)
+        ]
+        self.per_page_cap = per_page_cap
+        self.requests: list[dict] = []
+
+    def __call__(self, method, url, body, _headers):
+        self.requests.append({"method": method, "url": url})
+
+        # The search endpoints have no notion of "me", so the client has to ask
+        # who it is before it can ask what it owns.
+        if "/users/me" in url:
+            return json.dumps({
+                "total_results": 1,
+                "results": [{"id": 4242, "login": "naturalist"}],
+            }), {"status": 200}
+
+        id_above = int(re.search(r"id_above=(\d+)", url).group(1))
+        per_page = int(re.search(r"per_page=(\d+)", url).group(1))
+        per_page = min(per_page, self.per_page_cap)
+
+        remaining = [o for o in self.observations if o["id"] > id_above]
+        return json.dumps({
+            "total_results": len(self.observations),
+            "results": remaining[:per_page],
+        }), {"status": 200}
+
+    @property
+    def searches(self) -> list[dict]:
+        """The observation requests, without the identity lookup in front."""
+        return [r for r in self.requests if "/users/me" not in r["url"]]
+
+
+def test_lists_every_observation_across_pages(api_pair_with):
+    plugin, api, pages = api_pair_with(Pages(450))
+
+    observations, _ = plugin.call(api.listObservations, api,
+                                  plugin.eval("{ perPage = 200 }"))
+
+    assert len(observations) == 450
+    assert observations[1].id == 1
+    assert observations[450].id == 450
+
+
+def test_pages_by_cursor_rather_than_page_number(api_pair_with):
+    """page x per_page is capped at 10,000 by the API, so a user with more
+    observations than that cannot reach the end by counting pages -- the
+    request fails rather than paging on. id_above has no such ceiling."""
+    plugin, api, pages = api_pair_with(Pages(450))
+
+    plugin.call(api.listObservations, api, plugin.eval("{ perPage = 200 }"))
+
+    assert all("id_above=" in request["url"] for request in pages.searches)
+    assert not any("&page=" in request["url"] for request in pages.searches)
+
+    cursors = [int(re.search(r"id_above=(\d+)", r["url"]).group(1))
+               for r in pages.searches]
+    assert cursors == [0, 200, 400]
+
+
+def test_lists_observations_from_v2_asking_for_named_fields(api_pair_with):
+    """v1 cannot return less than everything, and everything is about 15 MB per
+    page of 200: identifications, comments, six photo URLs apiece and the
+    observer's profile repeated 200 times. The same page from v2, restricted to
+    the fields below, is about 95 KB.
+
+    That is not a nicety. Decoding one 15 MB page in Lua took minutes, during
+    which Lightroom stopped redrawing and looked like it had crashed."""
+    plugin, api, pages = api_pair_with(Pages(10))
+
+    plugin.call(api.listObservations, api, plugin.eval("{ perPage = 200 }"))
+
+    url = pages.searches[0]["url"]
+    assert "/v2/observations" in url
+    assert "fields=" in url
+
+
+@pytest.mark.parametrize("field", [
+    # Everything MatchCore reads to decide which photo an observation belongs
+    # to. v2 returns exactly what was asked for, so one missing name here does
+    # not error -- it arrives nil, and every observation quietly becomes
+    # unmatchable.
+    "time_observed_at",
+    "observed_on_string",
+    "location",
+    "private_location",
+    "obscured",
+    # And what linking then writes to the photo.
+    "id",
+    "uuid",
+    "taxon.name",
+    "quality_grade",
+    "positional_accuracy",
+    "community_taxon.name",
+])
+def test_the_field_list_covers_what_the_plugin_reads(inat_api, field):
+    _plugin, api = inat_api
+
+    assert api.LIST_FIELDS.split(",").count(field) == 1
+
+
+def test_asks_for_ascending_id_order(api_pair_with):
+    """The cursor is the last id of the previous page, so any other ordering
+    silently repeats or skips observations."""
+    plugin, api, pages = api_pair_with(Pages(10))
+
+    plugin.call(api.listObservations, api, plugin.eval("{ perPage = 200 }"))
+
+    assert "order_by=id" in pages.searches[0]["url"]
+    assert "order=asc" in pages.searches[0]["url"]
+
+
+def test_a_short_page_ends_it(api_pair_with):
+    """Asking again would spend a request against a 100/minute limit to be
+    told the same thing."""
+    plugin, api, pages = api_pair_with(Pages(150))
+
+    plugin.call(api.listObservations, api, plugin.eval("{ perPage = 200 }"))
+
+    assert len(pages.searches) == 1
+
+
+def test_an_exact_multiple_takes_one_extra_page(api_pair_with):
+    """400 observations at 200 a page cannot be distinguished from 400-plus
+    until a page comes back empty."""
+    plugin, api, pages = api_pair_with(Pages(400))
+
+    observations, _ = plugin.call(api.listObservations, api,
+                                  plugin.eval("{ perPage = 200 }"))
+
+    assert len(observations) == 400
+    assert len(pages.searches) == 3
+
+
+def test_no_observations_is_not_an_error(api_pair_with):
+    plugin, api, pages = api_pair_with(Pages(0))
+
+    observations, err = plugin.call(api.listObservations, api,
+                                    plugin.eval("{ perPage = 200 }"))
+
+    assert err is None
+    assert len(observations) == 0
+
+
+def test_reports_progress_per_page(api_pair_with):
+    plugin, api, pages = api_pair_with(Pages(450))
+
+    seen = plugin.eval("{}")
+    options = plugin.eval(
+        """
+        function(seen)
+          return { perPage = 200, onPage = function(fetched, total)
+            seen[#seen + 1] = { fetched = fetched, total = total }
+          end }
+        end
+        """
+    )(seen)
+
+    plugin.call(api.listObservations, api, options)
+
+    assert [row.fetched for row in seen.values()] == [200, 400, 450]
+    assert all(row.total == 450 for row in seen.values())
+
+
+def test_can_be_stopped_between_pages(api_pair_with):
+    """A user who cancels should not wait out every remaining page."""
+    plugin, api, pages = api_pair_with(Pages(1000))
+
+    options = plugin.eval(
+        """
+        { perPage = 200, shouldStop = function() return true end }
+        """
+    )
+    observations, _ = plugin.call(api.listObservations, api, options)
+
+    assert len(observations) == 200
+    assert len(pages.searches) == 1
+
+
+def test_a_failed_page_fails_the_whole_call(api_pair):
+    """Half a user's observations looks exactly like a user with half as many,
+    and would quietly report nothing to match against."""
+    plugin, api, fake = api_pair
+    fake.add("/observations", {"error": "boom"}, status=500)
+
+    observations, err = plugin.call(api.listObservations, api,
+                                    plugin.eval("{ perPage = 200 }"))
+
+    assert observations is None
+    assert err is not None
+
+
+# ---------------------------------------------------------------------------
 # Verified upload
 # ---------------------------------------------------------------------------
 
@@ -447,3 +733,110 @@ def test_an_empty_payload_yields_no_rows_and_no_ancestor(inat_api):
 
     assert len(rows) == 0
     assert ancestor is None
+
+
+# ---------------------------------------------------------------------------
+# Staying inside the rate limit
+#
+# The failure this guards against was not a failed request. A sync of 654
+# photos sent one taxon lookup each, unpaced; 346 came back HTTP 429; every
+# one of those fell back to a taxon with no ancestors; and the keyword code
+# happily filed a species directly under "iNaturalist". Throttling flattened
+# a third of a real catalog's keyword tree, and nothing in the run said so.
+# ---------------------------------------------------------------------------
+
+
+class Throttling:
+    """Refuses the first `refusals` requests with 429, then answers."""
+
+    def __init__(self, payload, refusals):
+        self.payload = payload
+        self.refusals = refusals
+        self.requests = []
+
+    def __call__(self, method, url, body, _headers):
+        self.requests.append(url)
+        if len(self.requests) <= self.refusals:
+            return "<html>Too many requests</html>", {"status": 429}
+        return json.dumps(self.payload), {"status": 200}
+
+
+def test_requests_are_paced(api_pair):
+    plugin, api, fake = api_pair
+    fake.add("/taxa/", {"results": [{"id": 1, "name": "Bombus", "ancestors": []}]})
+
+    api["getTaxon"](api, 1)
+    api["getTaxon"](api, 2)
+
+    # A wait between requests, not before the first one -- there is nothing to
+    # be too soon after. Unpaced, a few hundred photos exhaust the allowance in
+    # seconds.
+    assert plugin.sleeps == [1.0]
+
+
+def test_a_429_is_retried_rather_than_believed(api_pair_with):
+    """A refusal is the server saying "not yet", and the caller cannot tell the
+    difference between that and "no such taxon" -- it just gets a taxon with no
+    lineage and writes the wrong keyword."""
+    handler = Throttling({"results": [{"id": 7, "name": "Bombus",
+                                       "ancestors": []}]}, refusals=2)
+    plugin, api, _ = api_pair_with(handler)
+
+    taxon, err = api["getTaxon"](api, 7)
+
+    assert err is None
+    assert taxon["name"] == "Bombus"
+    assert len(handler.requests) == 3
+
+
+def test_the_wait_doubles_between_attempts(api_pair_with):
+    """A 429 means the window is already full, so retrying at the same rate
+    spends the rest of the allowance on refusals. Pacing only ever waits the
+    flat interval, so anything longer in here is backoff."""
+    handler = Throttling({"results": [{"id": 7, "name": "Bombus",
+                                       "ancestors": []}]}, refusals=3)
+    plugin, api, _ = api_pair_with(handler)
+
+    api["getTaxon"](api, 7)
+
+    backoff = [wait for wait in plugin.sleeps if wait > 1.0]
+    assert backoff == [2.0, 4.0]
+
+
+def test_giving_up_says_it_was_rate_limiting(api_pair_with):
+    """"failed with HTTP 429: <?xml ..." tells the user nothing they can act
+    on, and this is the one error where waiting is the whole answer."""
+    handler = Throttling({}, refusals=99)
+    plugin, api, _ = api_pair_with(handler)
+
+    taxon, err = api["getTaxon"](api, 7)
+
+    assert taxon is None
+    assert "rate limiting" in err
+
+
+def test_a_taxon_is_fetched_once_however_often_it_is_asked_for(api_pair):
+    """654 photos of a few hundred species made 654 requests. Repeats are the
+    normal case: people photograph the same bee all summer."""
+    plugin, api, fake = api_pair
+    fake.add("/taxa/", {"results": [{"id": 1, "name": "Bombus", "ancestors": []}]})
+
+    for _ in range(5):
+        api["getTaxon"](api, 1)
+
+    assert len([r for r in fake.requests if "/taxa/" in r["url"]]) == 1
+
+
+def test_a_failed_taxon_is_not_cached(api_pair_with):
+    """Caching a refusal turns one throttled request into every photo of that
+    species being filed wrong for the rest of the run."""
+    handler = Throttling({"results": [{"id": 7, "name": "Bombus",
+                                       "ancestors": []}]}, refusals=99)
+    plugin, api, _ = api_pair_with(handler)
+
+    api["getTaxon"](api, 7)
+    handler.refusals = 0
+    taxon, err = api["getTaxon"](api, 7)
+
+    assert err is None
+    assert taxon["name"] == "Bombus"

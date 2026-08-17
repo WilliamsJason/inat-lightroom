@@ -16,6 +16,8 @@ outside a transaction fails here rather than in the host.
 from __future__ import annotations
 
 import json
+import re
+import urllib.parse
 
 import pytest
 
@@ -42,17 +44,69 @@ def make_plugin(responses):
     # at storage keys the auth module owns.
     auth = plugin.require("InatAuth")
     plugin.call(auth["storeApiToken"], make_jwt(FUTURE))
+    plugin.set_http_handler(observation_handler(plugin, responses))
+    return plugin
+
+
+def observation_handler(plugin, responses, refuse=None):
+    """Answer both the single and the batched observation endpoints.
+
+    Tests declare observations one per id, the way the API used to be asked for
+    them. The sync now fetches up to 200 at a time, so the stub has to read the
+    `id=` list and answer with whichever of them it has -- including answering
+    with fewer than were asked for, which is what a deleted observation looks
+    like and is the whole reason the real code keys by id instead of zipping
+    two lists together.
+
+    `refuse` makes any URL containing that fragment come back HTTP 429.
+    """
+    by_id = {}
+    by_taxon_id = {}
+    for fragment, payload in responses.items():
+        match = re.search(r"/observations/(\d+)$", fragment)
+        if match:
+            results = payload.get("results") if isinstance(payload, dict) else None
+            if results:
+                by_id[match.group(1)] = results[0]
+        match = re.search(r"/taxa/(\d+)$", fragment)
+        if match:
+            results = payload.get("results") if isinstance(payload, dict) else None
+            if results:
+                by_taxon_id[match.group(1)] = results[0]
+
+    def batched(url, table):
+        """The ids a batched request asks for, answered from `table`.
+
+        The comma between ids arrives percent-encoded, which is correct and
+        which the real API decodes.
+        """
+        wanted = urllib.parse.unquote(url.split("id=", 1)[1].split("&")[0])
+        return {"results": [table[one] for one in wanted.split(",")
+                            if one in table]}
 
     def handler(method, url, body=None, headers=None):
+        if refuse and refuse in url:
+            return "<html>Too many requests</html>", plugin.runtime.table_from(
+                {"status": 429})
+
+        # Explicit routes win, so a test can say exactly what a batch replies.
         for fragment, payload in responses.items():
             if fragment in url:
                 return json.dumps(payload), plugin.runtime.table_from(
                     {"status": 200}
                 )
+
+        if re.search(r"/observations\?(?:.*&)?id=", url):
+            return json.dumps(batched(url, by_id)), plugin.runtime.table_from(
+                {"status": 200})
+
+        if re.search(r"/taxa\?(?:.*&)?id=", url):
+            return json.dumps(batched(url, by_taxon_id)), \
+                plugin.runtime.table_from({"status": 200})
+
         raise AssertionError(f"unexpected {method} {url}")
 
-    plugin.set_http_handler(handler)
-    return plugin
+    return handler
 
 
 def run_sync(plugin):
@@ -444,3 +498,478 @@ def test_an_observation_with_no_coordinates_writes_no_gps():
     run_sync(plugin)
 
     assert photo["_raw"]["gps"] is None
+
+
+# ---------------------------------------------------------------------------
+# When the lineage cannot be fetched
+#
+# A taxon on an observation carries a name but no ancestors, so the plugin
+# fetches the full one. When iNaturalist refuses -- and under rate limiting it
+# refused 346 times in one real run -- the fallback taxon still looks like a
+# taxon, and the keyword code used to file it directly under "iNaturalist".
+# Writing nothing is a re-run; writing a species beside the kingdoms is a
+# cleanup in someone else's catalog.
+# ---------------------------------------------------------------------------
+
+
+def bare_taxon(name="Bombus", taxon_id=52775):
+    """As an observation reports it: named, ranked, no lineage."""
+    return {"id": taxon_id, "name": name, "rank": "genus",
+            "preferred_common_name": "Bumble Bees"}
+
+
+def make_refusing_plugin(responses, refuse):
+    """Like make_plugin, but any URL containing `refuse` comes back 429."""
+    plugin = LuaPlugin()
+    auth = plugin.require("InatAuth")
+    plugin.call(auth["storeApiToken"], make_jwt(FUTURE))
+    plugin.set_http_handler(observation_handler(plugin, responses, refuse=refuse))
+    return plugin
+
+
+def test_a_throttled_taxon_writes_no_keyword_at_all():
+    plugin = make_refusing_plugin(
+        {"/observations/999": observation(community=bare_taxon())},
+        refuse="/taxa")
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="999")])
+
+    run_sync(plugin)
+
+    # Not even the root: a lone "iNaturalist" keyword is harmless, but the
+    # species that used to land under it is not.
+    assert [k["name"] for k in plugin.keywords] == []
+
+
+def test_a_throttled_taxon_still_writes_the_fields():
+    """They are right whatever happened to the lineage, and they are what a
+    later run reads to put the keyword where it belongs."""
+    plugin = make_refusing_plugin(
+        {"/observations/999": observation(community=bare_taxon())},
+        refuse="/taxa")
+    photo = plugin.new_photo(inat_observation_id="999")
+    plugin.set_target_photos([photo])
+
+    run_sync(plugin)
+
+    assert photo._props["inat_taxon_name"] == "Bombus"
+    assert photo._props["inat_taxon_id"] == "52775"
+
+
+def test_a_throttled_taxon_says_so_in_the_log():
+    """Silence here is what let a third of a keyword tree go wrong unnoticed."""
+    plugin = make_refusing_plugin(
+        {"/observations/999": observation(community=bare_taxon())},
+        refuse="/taxa")
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="999")])
+
+    run_sync(plugin)
+
+    assert any("No lineage for taxon Bombus" in line
+               for line in plugin.log_lines)
+
+
+def test_a_kingdom_is_not_mistaken_for_a_missing_lineage():
+    """An empty ancestors list is the top of the tree, not a failed fetch. Read
+    as failure it would refuse to file anything at kingdom rank."""
+    plugin = make_plugin({"/observations/999": observation(
+        community=taxon("Animalia", 1, ancestors=[]))})
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="999")])
+
+    run_sync(plugin)
+
+    assert [k["name"] for k in plugin.keywords] == ["iNaturalist", "Animalia"]
+
+
+# ---------------------------------------------------------------------------
+# Fetching observations in batches
+#
+# One request per photo was fine until requests had to be paced a second apart
+# to stay inside the rate limit. At that point a sync of the author's 654
+# linked photos spent eleven minutes doing nothing but waiting.
+# ---------------------------------------------------------------------------
+
+
+def names_on(photo):
+    """The keywords actually applied to one photo, in order."""
+    return [photo.keywords[i]["name"] for i in range(1, len(photo.keywords) + 1)]
+
+
+def counting_plugin(responses):
+    """A plugin that also records every URL its HTTP stub is asked for."""
+    plugin = make_plugin(responses)
+    inner = observation_handler(plugin, responses)
+    seen = []
+
+    def handler(method, url, body=None, headers=None):
+        seen.append(url)
+        return inner(method, url, body, headers)
+
+    plugin.set_http_handler(handler)
+    return plugin, seen
+
+
+def test_many_photos_cost_a_handful_of_requests_not_one_each():
+    routes = {f"/observations/{i}": observation(obs_id=i, community=DAMSELFLY)
+              for i in range(1000, 1450)}
+    plugin, seen = counting_plugin(routes)
+    plugin.set_target_photos(
+        [plugin.new_photo(inat_observation_id=str(i))
+         for i in range(1000, 1450)])
+
+    run_sync(plugin)
+
+    fetches = [url for url in seen if "/observations?" in url]
+    # 450 ids at 200 to a request.
+    assert len(fetches) == 3
+
+
+def test_photos_sharing_an_observation_are_fetched_once():
+    plugin, seen = counting_plugin(
+        {"/observations/999": observation(community=DAMSELFLY)})
+    plugin.set_target_photos(
+        [plugin.new_photo(inat_observation_id="999") for _ in range(5)])
+
+    run_sync(plugin)
+
+    assert len([url for url in seen if "/observations?" in url]) == 1
+    assert "Synced: 5" in plugin.dialogs[-1]["message"]
+
+
+def test_an_observation_that_no_longer_exists_is_reported_not_skipped():
+    """A deleted id simply does not come back. That is this photo's error."""
+    plugin = make_plugin({"/observations/999": observation(community=DAMSELFLY)})
+    plugin.set_target_photos([
+        plugin.new_photo(inat_observation_id="888"),
+        plugin.new_photo(inat_observation_id="999"),
+    ])
+
+    run_sync(plugin)
+
+    summary = plugin.dialogs[-1]["message"]
+    assert "Synced: 1" in summary
+    assert "Errors: 1" in summary
+
+
+def test_each_photo_gets_its_own_observation_not_the_next_one_along():
+    """The API may answer in any order, so assignment must be by id."""
+    other = taxon("Bombus vosnesenskii", 555,
+                  ancestors=["Animalia", "Arthropoda", "Insecta",
+                             "Hymenoptera", "Bombus"],
+                  common="Yellow-faced Bumble Bee")
+    plugin = make_plugin({
+        "/observations/777": observation(obs_id=777, community=other),
+        "/observations/999": observation(obs_id=999, community=DAMSELFLY),
+    })
+    bee = plugin.new_photo(inat_observation_id="777")
+    fly = plugin.new_photo(inat_observation_id="999")
+    plugin.set_target_photos([bee, fly])
+
+    run_sync(plugin)
+
+    assert names_on(bee) == ["Bombus vosnesenskii"]
+    assert names_on(fly) == ["Ischnura cervula"]
+
+
+def test_a_photo_with_no_observation_id_costs_no_request():
+    plugin, seen = counting_plugin({})
+    plugin.set_target_photos([plugin.new_photo(), plugin.new_photo()])
+
+    run_sync(plugin)
+
+    assert [url for url in seen if "/observations" in url] == []
+    assert "Skipped (no ID): 2" in plugin.dialogs[-1]["message"]
+
+
+# ---------------------------------------------------------------------------
+# A refused keyword must not strand the rest of the lineage at the top level
+#
+# Lightroom hands back nil from createKeyword under conditions the SDK does not
+# document. The loop used to assign that nil to parentKw, and a nil parent
+# means "top of the catalog" -- so a lineage that broke at Insecta went on to
+# create Odonata, Ischnura and the species as new top-level keywords, outside
+# the iNaturalist tree. Deleting iNaturalist does not remove them, because they
+# were never in it, and the SDK cannot delete a keyword at all.
+# ---------------------------------------------------------------------------
+
+
+def test_a_refused_keyword_leaves_nothing_at_the_top_level():
+    plugin = make_plugin({"/observations/999": observation(community=DAMSELFLY)})
+    plugin.refuse_keyword("Insecta")
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="999")])
+
+    run_sync(plugin)
+
+    stranded = [k["name"] for k in plugin.keywords
+                if k["parent"] is None and k["name"] != "iNaturalist"]
+    assert stranded == []
+
+
+def test_a_refused_keyword_stops_the_path_rather_than_finishing_it():
+    plugin = make_plugin({"/observations/999": observation(community=DAMSELFLY)})
+    plugin.refuse_keyword("Insecta")
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="999")])
+
+    run_sync(plugin)
+
+    made = [k["name"] for k in plugin.keywords]
+    assert "Arthropoda" in made          # everything above the break is fine
+    assert "Odonata" not in made         # everything below it is not written
+    assert "Ischnura cervula" not in made
+
+
+def test_a_refused_keyword_applies_no_keyword_to_the_photo():
+    plugin = make_plugin({"/observations/999": observation(community=DAMSELFLY)})
+    plugin.refuse_keyword("Insecta")
+    photo = plugin.new_photo(inat_observation_id="999")
+    plugin.set_target_photos([photo])
+
+    run_sync(plugin)
+
+    assert names_on(photo) == []
+
+
+def test_a_refused_keyword_still_writes_the_taxon_fields():
+    """The fields are right either way, and a later run reads them to repair."""
+    plugin = make_plugin({"/observations/999": observation(community=DAMSELFLY)})
+    plugin.refuse_keyword("Insecta")
+    photo = plugin.new_photo(inat_observation_id="999")
+    plugin.set_target_photos([photo])
+
+    run_sync(plugin)
+
+    assert photo._props["inat_taxon_name"] == "Ischnura cervula"
+
+
+def test_a_refused_keyword_says_which_one_in_the_log():
+    plugin = make_plugin({"/observations/999": observation(community=DAMSELFLY)})
+    plugin.refuse_keyword("Insecta")
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="999")])
+
+    run_sync(plugin)
+
+    assert any("Insecta" in line and "Could not create or find" in line
+               for line in plugin.log_lines)
+
+
+def test_a_refusal_falls_back_to_the_keyword_already_there():
+    """createKeyword refusing is not a reason to abandon an existing branch.
+
+    Aborting outright would refuse that lineage for good. The keyword the call
+    declined to create is usually already sitting under the parent.
+    """
+    plugin = make_plugin({"/observations/999": observation(community=DAMSELFLY)})
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="999")])
+    run_sync(plugin)                      # builds the tree the ordinary way
+
+    plugin.refuse_keyword("Insecta")      # now Lightroom declines mid-path
+    photo = plugin.new_photo(inat_observation_id="999")
+    plugin.set_target_photos([photo])
+    run_sync(plugin)
+
+    assert names_on(photo) == ["Ischnura cervula"]
+    stranded = [k["name"] for k in plugin.keywords
+                if k["parent"] is None and k["name"] != "iNaturalist"]
+    assert stranded == []
+
+
+# ---------------------------------------------------------------------------
+# Fetching species in batches
+#
+# Once observations came in one request, the taxon lookups were the whole
+# remaining cost of a sync: 158 requests at a paced second each.
+# ---------------------------------------------------------------------------
+
+
+def test_species_are_fetched_together_not_one_per_photo():
+    """Observations carry a taxon with no ancestors, so each needs a lookup."""
+    bare = {"id": 12345, "name": "Ischnura cervula", "rank": "species"}
+    routes = {f"/observations/{i}": observation(obs_id=i, community=bare)
+              for i in range(1000, 1030)}
+    routes["/taxa"] = {"results": [DAMSELFLY]}
+    plugin, seen = counting_plugin(routes)
+    plugin.set_target_photos(
+        [plugin.new_photo(inat_observation_id=str(i))
+         for i in range(1000, 1030)])
+
+    run_sync(plugin)
+
+    assert [url for url in seen if "/taxa/" in url] == []
+    assert len([url for url in seen if "/taxa?" in url]) == 1
+
+
+def test_a_prefetched_species_still_gets_its_full_hierarchy():
+    bare = {"id": 12345, "name": "Ischnura cervula", "rank": "species"}
+    plugin = make_plugin({
+        "/observations/999": observation(community=bare),
+        "/taxa": {"results": [DAMSELFLY]},
+    })
+    photo = plugin.new_photo(inat_observation_id="999")
+    plugin.set_target_photos([photo])
+
+    run_sync(plugin)
+
+    made = [k["name"] for k in plugin.keywords]
+    assert "Odonata" in made
+    assert names_on(photo) == ["Ischnura cervula"]
+
+
+def test_a_failed_prefetch_falls_back_to_asking_one_at_a_time():
+    """A batch that fails must not cost the sync its keywords."""
+    bare = {"id": 12345, "name": "Ischnura cervula", "rank": "species"}
+    plugin = make_refusing_plugin({
+        "/observations/999": observation(community=bare),
+        "/taxa/12345": {"results": [DAMSELFLY]},
+    }, refuse="/taxa?")
+    photo = plugin.new_photo(inat_observation_id="999")
+    plugin.set_target_photos([photo])
+
+    run_sync(plugin)
+
+    assert names_on(photo) == ["Ischnura cervula"]
+
+
+def test_a_species_without_a_lineage_is_not_cached_from_a_batch():
+    """Caching one would stop the slow path ever asking properly."""
+    bare = {"id": 12345, "name": "Ischnura cervula", "rank": "species"}
+    plugin = make_plugin({
+        "/observations/999": observation(community=bare),
+        "/taxa?": {"results": [bare]},     # batch answers without ancestors
+        "/taxa/12345": {"results": [DAMSELFLY]},
+    })
+    photo = plugin.new_photo(inat_observation_id="999")
+    plugin.set_target_photos([photo])
+
+    run_sync(plugin)
+
+    assert names_on(photo) == ["Ischnura cervula"]
+    assert "Odonata" in [k["name"] for k in plugin.keywords]
+
+
+# ---------------------------------------------------------------------------
+# The list endpoint does not return ancestors
+#
+# /v1/taxa?id=... answers with ancestor_ids and no ancestors, so a first pass
+# at prefetching cached nothing and all 158 slow lookups happened anyway. The
+# lineage is assembled from the ids instead, verified against the live API:
+# ancestors == ancestor_ids minus the leading Life (48460) and minus the
+# taxon's own id at the end.
+# ---------------------------------------------------------------------------
+
+LIFE = 48460
+
+
+def listed(taxon_id, name, rank, chain, common=None):
+    """A taxon as the *list* endpoint returns it: ancestor_ids, no ancestors."""
+    entry = {"id": taxon_id, "name": name, "rank": rank,
+             "ancestor_ids": [LIFE] + chain + [taxon_id]}
+    if common:
+        entry["preferred_common_name"] = common
+    return entry
+
+
+DAMSELFLY_CHAIN = [1, 47120, 47158, 47792, 52520]
+DAMSELFLY_NAMES = {1: ("Animalia", "kingdom"), 47120: ("Arthropoda", "phylum"),
+                   47158: ("Insecta", "class"), 47792: ("Odonata", "order"),
+                   52520: ("Ischnura", "genus")}
+
+
+def taxa_endpoint(*leaves):
+    """Answer /taxa?id=... for the leaves and every ancestor they name."""
+    known = {}
+    for leaf in leaves:
+        known[leaf["id"]] = leaf
+    for taxon_id, (name, rank) in DAMSELFLY_NAMES.items():
+        chain = DAMSELFLY_CHAIN[:DAMSELFLY_CHAIN.index(taxon_id)]
+        known[taxon_id] = listed(taxon_id, name, rank, chain)
+
+    def handler(url):
+        wanted = urllib.parse.unquote(url.split("id=", 1)[1].split("&")[0])
+        return {"results": [known[int(one)] for one in wanted.split(",")
+                            if int(one) in known]}
+
+    return handler
+
+
+def taxa_plugin(observation_routes):
+    """A plugin whose /taxa?id= answers the way the real list endpoint does."""
+    plugin = make_plugin(observation_routes)
+    inner = observation_handler(plugin, observation_routes)
+    leaf = listed(12345, "Ischnura cervula", "species", DAMSELFLY_CHAIN,
+                  common="Pacific Forktail")
+    answer = taxa_endpoint(leaf)
+    seen = []
+
+    def handler(method, url, body=None, headers=None):
+        seen.append(url)
+        if "/taxa?" in url:
+            return json.dumps(answer(url)), plugin.runtime.table_from(
+                {"status": 200})
+        return inner(method, url, body, headers)
+
+    plugin.set_http_handler(handler)
+    return plugin, seen
+
+
+def test_a_lineage_is_assembled_from_ancestor_ids():
+    bare = {"id": 12345, "name": "Ischnura cervula", "rank": "species"}
+    plugin, seen = taxa_plugin({"/observations/999": observation(community=bare)})
+    photo = plugin.new_photo(inat_observation_id="999")
+    plugin.set_target_photos([photo])
+
+    run_sync(plugin)
+
+    parents = {k["name"]: k["parent"] for k in plugin.keywords}
+    assert parents["Animalia"] == "iNaturalist"
+    assert parents["Arthropoda"] == "Animalia"
+    assert parents["Insecta"] == "Arthropoda"
+    assert parents["Odonata"] == "Insecta"
+    assert parents["Ischnura"] == "Odonata"
+    assert parents["Ischnura cervula"] == "Ischnura"
+
+
+def test_life_never_becomes_a_keyword():
+    """ancestor_ids leads with Life; the single endpoint's ancestors do not."""
+    bare = {"id": 12345, "name": "Ischnura cervula", "rank": "species"}
+    plugin, _ = taxa_plugin({"/observations/999": observation(community=bare)})
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="999")])
+
+    run_sync(plugin)
+
+    assert "Life" not in [k["name"] for k in plugin.keywords]
+    assert str(LIFE) not in [k["name"] for k in plugin.keywords]
+
+
+def test_the_assembled_lineage_costs_two_requests_not_one_each():
+    """One round for the species, one for the ancestors they name."""
+    bare = {"id": 12345, "name": "Ischnura cervula", "rank": "species"}
+    routes = {f"/observations/{i}": observation(obs_id=i, community=bare)
+              for i in range(1000, 1030)}
+    plugin, seen = taxa_plugin(routes)
+    plugin.set_target_photos(
+        [plugin.new_photo(inat_observation_id=str(i))
+         for i in range(1000, 1030)])
+
+    run_sync(plugin)
+
+    assert [url for url in seen if "/taxa/" in url] == []
+    assert len([url for url in seen if "/taxa?" in url]) == 2
+
+
+def test_a_missing_ancestor_leaves_the_taxon_to_the_slow_path():
+    """A gap would drop a level out of the middle of the hierarchy."""
+    bare = {"id": 12345, "name": "Ischnura cervula", "rank": "species"}
+    plugin = make_plugin({
+        "/observations/999": observation(community=bare),
+        # The list endpoint names an ancestor it then declines to describe.
+        "/taxa?": {"results": [listed(12345, "Ischnura cervula", "species",
+                                      DAMSELFLY_CHAIN)]},
+        "/taxa/12345": {"results": [DAMSELFLY]},
+    })
+    photo = plugin.new_photo(inat_observation_id="999")
+    plugin.set_target_photos([photo])
+
+    run_sync(plugin)
+
+    # Fell back and got the real hierarchy rather than a truncated one.
+    assert names_on(photo) == ["Ischnura cervula"]
+    assert "Odonata" in [k["name"] for k in plugin.keywords]

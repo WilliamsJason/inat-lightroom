@@ -29,12 +29,25 @@
       local obs     = api:getObservation(12345678)
 --]]
 
+local LrDate   = import "LrDate"
 local LrHttp   = import "LrHttp"
+local LrTasks  = import "LrTasks"
 
 local json   = require "json"
 local logger = require "Log"
 
 local API_V1   = "https://api.inaturalist.org/v1"
+
+-- Declared here rather than beside its constructor because the request verbs
+-- above read the rate-limit settings off it.
+local InatAPI = {}
+InatAPI.__index = InatAPI
+
+-- v2 is used for exactly one call: listing observations. It is the only
+-- endpoint here that returns thousands of rows, and the only one where v2's
+-- `fields` parameter is worth the difference in response shape. See
+-- LIST_FIELDS.
+local API_V2   = "https://api.inaturalist.org/v2"
 local WWW_BASE = "https://www.inaturalist.org"
 
 local USER_AGENT = "inat-lightroom/0.1 (+https://github.com/WilliamsJason/inat-lightroom)"
@@ -142,14 +155,87 @@ local function firstResult(payload)
 end
 
 --------------------------------------------------------------------------------
+-- Staying inside the rate limit
+--------------------------------------------------------------------------------
+
+--- Seconds to leave between requests.
+--
+-- iNaturalist asks for no more than 60 requests a minute and refuses above
+-- roughly 100. A sync loop makes one or two requests per photo and nothing
+-- paces it, so a few hundred photos hit the ceiling within seconds: a real run
+-- took 346 of 654 taxon lookups to HTTP 429.
+--
+-- That mattered far more than a failed request usually does, because the code
+-- that asks for a taxon wants its ancestors, and a taxon without ancestors
+-- still looks like a taxon. Every 429 wrote a species keyword directly under
+-- "iNaturalist" instead of under its lineage, so throttling quietly flattened
+-- a third of the user's keyword tree.
+InatAPI.MIN_INTERVAL = 1.0
+
+--- How many times to retry a request the server refused for rate.
+InatAPI.MAX_RETRIES = 4
+
+local lastRequestAt = nil
+
+--- Wait until the next request is allowed.
+--
+-- MUST be called from inside a task. LrTasks.sleep yields, and the whole API
+-- is task-only already.
+local function pace()
+  if lastRequestAt then
+    local since = LrDate.currentTime() - lastRequestAt
+    local wait  = InatAPI.MIN_INTERVAL - since
+    -- Guarded against a negative wait and against a clock that has gone
+    -- backwards, which would otherwise sleep for most of a day.
+    if wait > 0 and wait <= InatAPI.MIN_INTERVAL then
+      LrTasks.sleep(wait)
+    end
+  end
+  lastRequestAt = LrDate.currentTime()
+end
+
+--- True when the server refused this request for rate rather than for content.
+local function throttled(err)
+  return type(err) == "string" and err:find("HTTP 429", 1, true) ~= nil
+end
+
+--- Run one request, pacing it and retrying while the server says 429.
+--
+-- Backoff doubles from a second. A 429 means the window is already full, so
+-- retrying at the same rate spends the whole allowance on refusals.
+local function paced(send)
+  local delay = 1.0
+
+  for attempt = 1, InatAPI.MAX_RETRIES + 1 do
+    pace()
+    local payload, err = send()
+    if payload or not throttled(err) then return payload, err end
+
+    if attempt <= InatAPI.MAX_RETRIES then
+      logger:warn(string.format(
+        "Rate limited by iNaturalist; waiting %.0fs (attempt %d of %d)",
+        delay, attempt, InatAPI.MAX_RETRIES))
+      LrTasks.sleep(delay)
+      delay = delay * 2
+    end
+  end
+
+  return nil, "iNaturalist is rate limiting this plugin; try again shortly."
+end
+
+InatAPI._paced = paced
+
+--------------------------------------------------------------------------------
 -- Request verbs
 --------------------------------------------------------------------------------
 
 local function apiGet(url, params, token)
   local fullUrl = url .. buildQuery(params)
   logger:debug("GET " .. fullUrl)
-  local body, respHeaders = LrHttp.get(fullUrl, jsonHeaders(token))
-  return handleResponse("GET", fullUrl, body, respHeaders)
+  return paced(function()
+    local body, respHeaders = LrHttp.get(fullUrl, jsonHeaders(token))
+    return handleResponse("GET", fullUrl, body, respHeaders)
+  end)
 end
 
 local function apiSend(method, url, payload, token)
@@ -231,9 +317,6 @@ end
 -- InatAPI class
 --------------------------------------------------------------------------------
 
-local InatAPI = {}
-InatAPI.__index = InatAPI
-
 --- Create a new API client.
 -- @param token  A JWT from InatAuth.getToken(). NOT a bare OAuth token.
 function InatAPI.new(token)
@@ -256,15 +339,178 @@ function InatAPI:autocompleteTaxon(query, rank)
 end
 
 --- GET /taxa/{id} -- full taxon including the ancestors array.
+--
+-- Memoised on the client, because the callers ask the same question over and
+-- over: a sync of 654 photos was 654 lookups covering a few hundred species,
+-- and one taxon id appeared dozens of times. A taxon's lineage cannot change
+-- while Lightroom is open, so the second answer is always the first one.
+--
+-- Only successes are kept. Caching a failure would turn one refused request
+-- into a permanently wrong keyword for every photo of that species in the run.
 function InatAPI:getTaxon(taxonId)
-  local payload, err = apiGet(API_V1 .. "/taxa/" .. tostring(taxonId), nil, self.token)
+  local key = tostring(taxonId)
+  self._taxa = self._taxa or {}
+  if self._taxa[key] then return self._taxa[key], nil end
+
+  local payload, err = apiGet(API_V1 .. "/taxa/" .. key, nil, self.token)
   if not payload then return nil, err end
 
   local taxon = firstResult(payload)
   if not taxon then
-    return nil, "Taxon " .. tostring(taxonId) .. " not found"
+    return nil, "Taxon " .. key .. " not found"
   end
+
+  self._taxa[key] = taxon
   return taxon, nil
+end
+
+--- Life, the root iNaturalist hangs every kingdom off.
+--
+-- It appears in `ancestor_ids` and never in `ancestors`, so assembling one
+-- from the other has to drop it or every keyword path would gain a "Life"
+-- level that the one-at-a-time path does not produce. Two code paths building
+-- two different hierarchies for the same species is worse than either.
+local LIFE_TAXON_ID = 48460
+
+--- Turn a taxon's `ancestor_ids` into the `ancestors` array the rest of the
+--- plugin expects, using names already fetched.
+--
+-- Verified against the API rather than assumed: for Aeshna umbrosa the single
+-- endpoint's `ancestors` is exactly `ancestor_ids` minus the leading Life and
+-- minus the taxon's own id at the end. Kingdoms check out too -- Plantae has
+-- `ancestor_ids = {Life, Plantae}` and `ancestors = {}`.
+--
+-- @param known  { [idString] = taxon }
+-- @return the ancestors array, or nil when any name is missing
+local function assembleAncestors(taxon, known)
+  local ancestors = {}
+
+  for _, id in ipairs(taxon.ancestor_ids or {}) do
+    if id ~= LIFE_TAXON_ID and id ~= taxon.id then
+      local ancestor = known[tostring(id)]
+      -- A gap would silently drop a level out of the middle of the hierarchy,
+      -- so the whole taxon goes back to the slow path instead.
+      if not ancestor then return nil end
+      ancestors[#ancestors + 1] = {
+        id   = ancestor.id,
+        name = ancestor.name,
+        rank = ancestor.rank,
+      }
+    end
+  end
+
+  return ancestors
+end
+
+--- Fetch taxa by id, in batches, without assembling anything.
+-- @return { [idString] = taxon }, which may be missing ids that did not answer
+function InatAPI:_fetchTaxa(ids)
+  local found = {}
+  local BATCH = 200
+  local index = 1
+
+  while index <= #ids do
+    local last = math.min(index + BATCH - 1, #ids)
+    local batch = {}
+    for position = index, last do
+      batch[#batch + 1] = tostring(ids[position])
+    end
+
+    local payload, err = apiGet(API_V1 .. "/taxa", {
+      id       = table.concat(batch, ","),
+      per_page = BATCH,
+    }, self.token)
+
+    if payload then
+      for _, taxon in ipairs(payload.results or {}) do
+        if taxon.id ~= nil then found[tostring(taxon.id)] = taxon end
+      end
+    else
+      logger:warn("Could not prefetch taxa: " .. (err or "unknown")
+        .. "; falling back to one request each")
+    end
+
+    index = last + 1
+  end
+
+  return found
+end
+
+--- GET /taxa?id=1,2,3 -- fill the taxon cache in bulk.
+--
+-- Nothing is returned. This exists purely so that the getTaxon calls that
+-- follow are answered from memory: after batching the observation fetches, the
+-- taxon lookups were the entire remaining cost of a sync -- 158 requests at a
+-- paced second each, against one request for all 169 observations.
+--
+-- Takes two rounds, because the list endpoint does not return `ancestors` --
+-- only `ancestor_ids`. The first round fetches the species, the second fetches
+-- every distinct ancestor named in their id lists, and the lineages are then
+-- assembled locally. Roughly four requests where there were 158.
+--
+-- Best effort by design. Anything that cannot be assembled completely is left
+-- out of the cache and getTaxon asks for it the slow way. Reporting an error
+-- here would make a partial answer look like a failed sync when the sync is
+-- about to succeed.
+--
+-- MUST be called from inside a task.
+function InatAPI:prefetchTaxa(ids)
+  if type(ids) ~= "table" or #ids == 0 then return end
+
+  self._taxa = self._taxa or {}
+
+  local wanted, seen = {}, {}
+  for _, id in ipairs(ids) do
+    local key = tostring(id)
+    if not self._taxa[key] and not seen[key] then
+      seen[key] = true
+      wanted[#wanted + 1] = key
+    end
+  end
+  if #wanted == 0 then return end
+
+  local known = self:_fetchTaxa(wanted)
+
+  -- Round two: the ancestors, which are taxa in their own right.
+  local missing, asked = {}, {}
+  for _, taxon in pairs(known) do
+    for _, id in ipairs(taxon.ancestor_ids or {}) do
+      local key = tostring(id)
+      if id ~= LIFE_TAXON_ID and not known[key] and not asked[key] then
+        asked[key] = true
+        missing[#missing + 1] = key
+      end
+    end
+  end
+
+  if #missing > 0 then
+    for key, taxon in pairs(self:_fetchTaxa(missing)) do
+      known[key] = taxon
+    end
+  end
+
+  local cached = 0
+  for key, taxon in pairs(known) do
+    -- A response that already carries its lineage is used as it stands. One
+    -- that carries only ids gets it assembled. One that has neither is not
+    -- cached at all: assembling nothing yields an empty ancestors list, which
+    -- does not mean "unknown" -- it means "kingdom", and caching that would
+    -- file a species directly under the root and stop getTaxon ever asking
+    -- properly.
+    local ancestors = taxon.ancestors
+    if ancestors == nil and taxon.ancestor_ids ~= nil then
+      ancestors = assembleAncestors(taxon, known)
+    end
+
+    if ancestors then
+      taxon.ancestors = ancestors
+      self._taxa[key] = taxon
+      cached = cached + 1
+    end
+  end
+
+  logger:info(string.format("Prefetched %d taxa (%d asked for)",
+    cached, #wanted))
 end
 
 --- Build the Lightroom keyword path for a taxon: kingdom down to the taxon,
@@ -276,6 +522,34 @@ function InatAPI.buildKeywordPath(taxon, root)
   end
   path[#path + 1] = taxon.name
   return path
+end
+
+--------------------------------------------------------------------------------
+-- Who we are
+--------------------------------------------------------------------------------
+
+--- GET /users/me -- the account the stored token belongs to.
+--
+-- Needed because the search endpoints have no notion of "me". `user_id=me`
+-- looks like it ought to work, and every other API this plugin talks to would
+-- accept it; iNaturalist answers HTTP 422 `Unknown user_id me`, because
+-- user_id there is an index filter and the index holds numbers, not pronouns.
+--
+-- Cached on the client. The answer cannot change while a token is in use, and
+-- the alternative is an extra round trip in front of every search.
+function InatAPI:currentUser()
+  if self._currentUser then return self._currentUser, nil end
+
+  local payload, err = apiGet(API_V1 .. "/users/me", nil, self.token)
+  if not payload then return nil, err end
+
+  local user = firstResult(payload)
+  if not user or not user.id then
+    return nil, "iNaturalist did not say which account this token belongs to."
+  end
+
+  self._currentUser = user
+  return user, nil
 end
 
 --------------------------------------------------------------------------------
@@ -296,6 +570,53 @@ function InatAPI:getObservation(observationId)
     return nil, "Observation " .. tostring(observationId) .. " not found"
   end
   return observation, nil
+end
+
+--- GET /observations?id=a,b,c -- many observations in one request.
+--
+-- The endpoint takes up to 200 ids at a time, which is the difference between
+-- a sync of 654 photos costing 654 requests and costing four. That mattered
+-- little until requests were paced a second apart to stay inside the rate
+-- limit; now it is the difference between eleven minutes and a few seconds.
+--
+-- Returned as a table keyed by id, because the API is under no obligation to
+-- answer in the order asked and an observation that has been deleted on the
+-- website simply does not come back. Callers look each one up rather than
+-- zipping two lists together, which would silently shift every photo after a
+-- missing one onto the wrong observation.
+--
+-- @param ids array of observation ids
+-- @return { [id] = observation }, or nil plus an error message
+function InatAPI:getObservations(ids)
+  local found = {}
+  if type(ids) ~= "table" or #ids == 0 then return found, nil end
+
+  local BATCH = 200
+  local index = 1
+
+  while index <= #ids do
+    local last  = math.min(index + BATCH - 1, #ids)
+    local batch = {}
+    for position = index, last do
+      batch[#batch + 1] = tostring(ids[position])
+    end
+
+    local payload, err = apiGet(API_V1 .. "/observations", {
+      id       = table.concat(batch, ","),
+      per_page = BATCH,
+    }, self.token)
+    if not payload then return nil, err end
+
+    for _, observation in ipairs(payload.results or {}) do
+      if observation.id ~= nil then
+        found[tostring(observation.id)] = observation
+      end
+    end
+
+    index = last + 1
+  end
+
+  return found, nil
 end
 
 --- GET /observations?uuid=... -- find an observation by its UUID.
@@ -323,6 +644,110 @@ function InatAPI:findObservationByUuid(uuid)
   end
 
   return results[1], nil
+end
+
+--- What a listed observation needs to carry.
+--
+-- v1 has no way to ask for less than everything, and everything is enormous:
+-- one page of 200 observations is about 15 MB, nearly all of it identifications,
+-- comments, photo URLs in six sizes, and the observer's profile repeated 200
+-- times. Asking v2 for these fields instead brings the same page back in about
+-- 95 KB -- a hundred and sixty times smaller, on every page, for an account
+-- that may have tens of them.
+--
+-- Anything the matching or linking code reads has to be listed here, because v2
+-- returns precisely what was asked for and nothing else. A field left out does
+-- not error; it simply arrives nil, which is how a missing time_observed_at
+-- would quietly become "this observation cannot be matched".
+local LIST_FIELDS = table.concat({
+  "id", "uuid",
+  "observed_on", "observed_on_string", "time_observed_at", "observed_time_zone",
+  "location", "private_location", "obscured", "geoprivacy",
+  "positional_accuracy", "public_positional_accuracy",
+  "quality_grade",
+  "taxon.id", "taxon.name", "taxon.rank", "taxon.preferred_common_name",
+  "community_taxon.id", "community_taxon.name", "community_taxon.rank",
+  "community_taxon.preferred_common_name",
+  -- The review list draws the iNaturalist photo beside the catalog one, so the
+  -- user can confirm a match by looking rather than by trusting a timestamp.
+  -- `photos.url` is the 75px square; ThumbCache rewrites it for a bigger size.
+  "photos.id", "photos.url",
+}, ",")
+
+InatAPI.LIST_FIELDS = LIST_FIELDS
+
+--- GET /observations?user_id=... -- every observation of yours, in id order.
+--
+-- The id is looked up rather than assumed: see currentUser, which exists
+-- because "me" is not a user id.
+--
+-- Cursor pagination, not page numbers. `page` × `per_page` is capped at 10,000
+-- by the API, so a user with more observations than that simply cannot reach
+-- the end by asking for page 51: the request fails rather than paging on.
+-- `id_above` has no such ceiling, because it asks the index to resume rather
+-- than to count.
+--
+-- That makes ordering load-bearing: `order_by = "id"` ascending is what lets
+-- the last id of one page become the cursor for the next. Any other ordering
+-- silently repeats or skips observations.
+--
+-- @param options.perPage    results per request (default 200, the API maximum)
+-- @param options.fields     comma-separated field list, to keep pages small
+-- @param options.onPage     called with (fetchedSoFar, totalResults) per page
+-- @param options.shouldStop called between pages; return true to stop early
+-- @return array of observations, or nil plus an error message
+function InatAPI:listObservations(options)
+  options = options or {}
+
+  local user, userErr = self:currentUser()
+  if not user then return nil, userErr end
+
+  local perPage    = options.perPage or 200
+  local observations = {}
+  local idAbove   = 0
+  local total     = nil
+
+  while true do
+    local params = {
+      user_id  = user.id,
+      order_by = "id",
+      order    = "asc",
+      per_page = perPage,
+      id_above = idAbove,
+      fields   = options.fields or LIST_FIELDS,
+    }
+
+    local payload, err = apiGet(API_V2 .. "/observations", params, self.token)
+    if not payload then return nil, err end
+
+    local results = payload.results
+    if type(results) ~= "table" or #results == 0 then
+      break
+    end
+
+    total = total or payload.total_results
+
+    for _, observation in ipairs(results) do
+      observations[#observations + 1] = observation
+      -- The cursor has to advance even if a later page is abandoned, so it is
+      -- taken from every row rather than from the last one after the loop.
+      if type(observation.id) == "number" and observation.id > idAbove then
+        idAbove = observation.id
+      end
+    end
+
+    if options.onPage then
+      options.onPage(#observations, total or #observations)
+    end
+
+    -- A short page means the end of the results, and asking again would cost a
+    -- request against a rate limit of 100/minute to be told the same thing.
+    if #results < perPage then break end
+
+    if options.shouldStop and options.shouldStop() then break end
+  end
+
+  return observations, nil
 end
 
 --- POST /observations -- returns the created observation (with .id).

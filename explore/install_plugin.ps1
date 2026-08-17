@@ -28,17 +28,30 @@
   looks exactly like the install having failed. Pass this when deliberately
   testing the staging and swap path.
 
+.PARAMETER IncludeProbe
+  Also install explore/probes/sdkprobe.lrplugin, beside the real plugin.
+
+  The probes have the same problem this script exists to solve, and worse: they
+  are only ever run from a worktree, so pointing Lightroom straight at one means
+  re-adding them on every branch switch. They go to a fixed folder for the same
+  reason the plugin does. Separate switch rather than always, because a probe
+  reads the whole catalog and does not belong in a normal install.
+
 .EXAMPLE
   .\install_plugin.ps1
 
 .EXAMPLE
   .\install_plugin.ps1 -Destination D:\LrPlugins\inat.lrplugin
+
+.EXAMPLE
+  .\install_plugin.ps1 -IncludeProbe
 #>
 
 [CmdletBinding()]
 param(
   [string] $Destination = (Join-Path $HOME "Documents\LrPlugins\inat.lrplugin"),
-  [switch] $KeepStaged
+  [switch] $KeepStaged,
+  [switch] $IncludeProbe
 )
 
 Set-StrictMode -Version Latest
@@ -87,6 +100,30 @@ if ($hadStaged -and -not $KeepStaged) {
   Remove-Item -Recurse -Force $staging
 }
 
+# The probe plugin, when asked for.
+#
+# It goes beside the real one rather than inside it: it declares its own
+# LrToolkitIdentifier so both can be added to Lightroom at once, and a plugin
+# folder nested inside another plugin folder would be mirrored away by the /MIR
+# above on the next run.
+if ($IncludeProbe) {
+  $probeSource = Join-Path $repoRoot "explore\probes\sdkprobe.lrplugin"
+
+  if (-not (Test-Path (Join-Path $probeSource "Info.lua"))) {
+    [Console]::Error.WriteLine("No probe plugin found at $probeSource")
+    exit 1
+  }
+
+  $probeDestination = Join-Path (Split-Path -Parent $Destination) "sdkprobe.lrplugin"
+
+  & robocopy $probeSource $probeDestination "/MIR" "/NFL" "/NDL" "/NJH" "/NJS" "/NP" | Out-Null
+
+  if ($LASTEXITCODE -ge 8) {
+    [Console]::Error.WriteLine("robocopy failed for the probe with exit code $LASTEXITCODE")
+    exit 1
+  }
+}
+
 $files = (Get-ChildItem $Destination -Recurse -File |
   Where-Object { $_.FullName -notlike "$staging*" }).Count
 
@@ -96,6 +133,12 @@ $version = (Select-String -Path (Join-Path $Destination "Info.lua") `
 Write-Output "Installed $version ($files files)"
 Write-Output "  from  $source"
 Write-Output "  to    $Destination"
+
+if ($IncludeProbe) {
+  $probeFiles = (Get-ChildItem $probeDestination -Recurse -File).Count
+  Write-Output "  plus  sdkprobe.lrplugin ($probeFiles files) at $probeDestination"
+  Write-Output "        add it once in the Plug-in Manager; it has its own identifier"
+}
 
 if ($hadStaged) {
   if ($KeepStaged) {

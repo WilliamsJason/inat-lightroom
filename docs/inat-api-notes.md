@@ -585,3 +585,228 @@ Two things this does **not** establish:
 Both vision endpoints require authentication — an unauthenticated call returns
 `{"error":"Unauthorized","status":401}` — so neither can be probed without a
 token, and neither appears in `/v1/swagger.json`.
+
+## `user_id=me` is not a thing
+
+The search endpoints take `user_id` as an index filter, and the index holds
+numbers. Passing `me` is not ignored and does not fall back to the token's
+owner -- it fails the whole request:
+
+    GET /v1/observations?user_id=me&id_above=0
+    HTTP 422 {"error":"Unknown user_id me","status":422}
+
+Which is the good outcome. The bad one is the near miss: a query built with an
+absent user id drops the parameter and searches *everybody's* observations,
+returning a plausible first page of results belonging to strangers.
+
+So the id has to be looked up: `GET /v1/users/me` returns the account in the
+usual `results` array, and `InatAPI:currentUser` caches it on the client. It
+cannot change while a token is in use, and without the cache every search pays
+an extra round trip against a limit of 100 requests a minute.
+
+Note this is only true of the *search* endpoints. Elsewhere in the API `me`
+does work -- which is what makes it look safe.
+
+## One page of v1 observations is fifteen megabytes
+
+`GET /v1/observations?user_id=N&per_page=200` returns 15.3 MB. Measured, not
+estimated: 200 observations, 76 KB each. Almost none of it is the observation.
+Each row carries every identification with the full taxon record and the
+identifier's profile, every comment, six URLs per photo, the project
+memberships, the annotations, and the observer's own profile -- repeated in all
+200 rows.
+
+v1 has no way to ask for less. v2 does:
+
+    GET /v2/observations?user_id=N&per_page=200&fields=id,uuid,observed_on,...
+
+Same 200 observations, **95 KB** -- 160x smaller. Same query parameters, same
+`total_results`/`results` envelope, and `id_above` cursor pagination works
+identically, so only the URL and the `fields` parameter change.
+
+The catch is that v2 returns *precisely* what was asked for. A field left off
+the list does not error; it arrives `nil`. Leaving out `time_observed_at` would
+not fail -- every observation would simply become unmatchable, which looks like
+"the feature found nothing" rather than like a bug. `InatAPI.LIST_FIELDS` is
+therefore checked field by field in the tests against what the matching and
+linking code actually reads.
+
+`private_location` is in the list and only comes back when the request is
+authenticated and the observation is yours, which is exactly when the plugin
+needs it: an obscured observation's public `location` is randomised within a
+0.2-degree cell, and matching a photo against it would be matching against
+noise.
+
+## Fifteen megabytes is also too much for a Lua JSON parser
+
+Worth recording next to the above, because the two together are what made the
+first reverse sync look like a Lightroom crash rather than slow code.
+
+`json.lua`'s `parse_number` did `str:sub(i):match(...)` -- copying the entire
+remaining document to read one number. On a 15 MB page with a few hundred
+thousand numbers that is quadratic, and it does not finish. `parse_string`
+separately walked one character at a time, allocating a Lua string per
+character.
+
+Neither shows up on the small payloads every other endpoint returns, and
+nothing is logged while it happens: Lightroom stops redrawing while a task is
+inside a single Lua call, so the window greys out and Windows offers to close
+it. Decoding the same 15 MB page after both were fixed: 1.3 seconds.
+
+## Rate limiting corrupts data, it does not just fail
+
+iNaturalist asks for no more than 60 requests a minute and starts answering
+HTTP 429 above roughly 100. Nothing in the plugin paced its requests, and a
+sync sends one or two per photo, so a real run of 654 photos took **346 taxon
+lookups to 429** -- more than half.
+
+The damage was not the failed requests. A taxon on an observation arrives with
+a name and a rank but no `ancestors`, and the ancestors are the entire keyword
+hierarchy, so the plugin fetches the full taxon. When that fetch failed the
+code fell back to the taxon it already had, on the reasoning that a keyword
+under the wrong parent beats no keyword at all. That reasoning was wrong. The
+fallback still looks like a taxon, `buildKeywordPath` still returns a path, and
+the path it returns is `{"iNaturalist", "Bombus"}` -- so 346 species, genera
+and families were filed directly beside the kingdoms, in the user's own
+catalog, with nothing in the UI saying anything had gone wrong.
+
+Three things came out of it:
+
+- **Pace requests.** One second between them, which is exactly the 60/minute
+  they ask for, plus retry on 429 with a doubling backoff. A 429 means the
+  window is already full, so retrying at the same rate spends the rest of the
+  allowance on refusals.
+- **Cache what does not change.** `getTaxon` is memoised on the client. 654
+  photos were a few hundred species and one taxon id appeared dozens of times;
+  people photograph the same bee all summer. Only successes are cached --
+  caching a refusal turns one throttled request into every photo of that
+  species being filed wrong for the rest of the run.
+- **Never degrade a write.** A request that fails costs a re-run. A wrong
+  keyword written into someone's catalog costs a cleanup, and they may not
+  notice for weeks. `SyncCore.hasLineage` now gates keyword creation, and a
+  taxon whose lineage never loaded gets its fields written and no keyword.
+  Presence, not length: a kingdom legitimately has `ancestors = []`, and
+  reading that as failure would refuse to file anything at kingdom rank.
+
+The cost is that pacing makes a full sync slow -- one request per photo per
+second. Fetching observations in batches by id is the way out of that, not a
+faster rate.
+
+## Ask for many observations at once
+
+`GET /v1/observations?id=1,2,3&per_page=200` returns up to 200 observations in
+one request, which is what `InatAPI:getObservations` uses. A sync of 654 linked
+photos went from 654 requests to four -- from about eleven minutes of pacing to
+a few seconds.
+
+Two things the batched form demands that the single form did not:
+
+- **Key the answers by id, never zip two lists.** The API is under no
+  obligation to answer in the order asked, and an observation deleted on the
+  website simply is not in the results. Pairing the response list against the
+  request list positionally would shift every photo after a missing one onto
+  the wrong observation -- silently, and into their catalog.
+- **Absent means gone, so say so.** `SyncCore.syncPhoto` takes the observation
+  as a third argument where `nil` means "nobody has looked" and `false` means
+  "the batch asked and it did not come back". Without that distinction the
+  fallback fetch fires once per missing id, at a paced second each, to
+  rediscover what the batch already established.
+
+The comma between ids arrives percent-encoded as `%2C`. That is correct and the
+API decodes it; test stubs matching on the URL have to decode it too.
+
+## Batch the species too
+
+With observations down to one request, the taxon lookups were the entire
+remaining cost of a sync: a real run of 264 photos made **one** observation
+request and **158** `/taxa/{id}` requests, and at a paced second each that was
+all but a few seconds of the two minutes forty-four it took.
+
+`/v1/taxa?id=1,2,3` takes the same batching. `InatAPI:prefetchTaxa` fills the
+same cache `getTaxon` already reads, so nothing downstream changes -- the
+lookups inside the photo loop simply stop making requests.
+
+Two rules it follows:
+
+- **Best effort, no error returned.** A batch that fails leaves the cache
+  without those ids and `getTaxon` asks the slow way. Reporting an error would
+  make a partial answer look like a failed sync.
+- **Only cache a taxon that knows its lineage.** A batch answering without
+  `ancestors` must not be cached, or the cached answer stops `getTaxon` ever
+  asking properly -- the same trap that made a throttled run write 346 wrong
+  keywords.
+
+### The list endpoint does not return ancestors
+
+`/v1/taxa?id=…` answers with `ancestor_ids` and **no** `ancestors`; so does
+`/v2/taxa` even when `ancestors` is asked for in `fields`. Only `/v1/taxa/{id}`
+returns the array. The first attempt at prefetching therefore cached nothing --
+correctly, because of the rule above -- and all 158 slow lookups still happened.
+
+The lineage is assembled from the ids instead, which takes two rounds: one for
+the species, one for every distinct ancestor they name. Ancestors are taxa, so
+the second round is the same call. Four requests where there were 158.
+
+Checked against the live API rather than assumed:
+
+```
+/v1/taxa/67727   ancestors    =           1,47120,372739,…,52520
+/v1/taxa?id=67727 ancestor_ids = 48460,   1,47120,372739,…,52520,67727
+```
+
+`ancestors` is `ancestor_ids` minus the leading **Life** (48460) and minus the
+taxon's own id at the end. Kingdoms confirm it: Plantae has
+`ancestor_ids = {48460, 47126}` and `ancestors = {}`.
+
+Both edges matter. Keeping Life would add a level the one-at-a-time path does
+not produce, and two code paths building two different hierarchies for one
+species is worse than either alone. A gap anywhere in the middle means the
+taxon is not cached at all, so it falls back rather than losing a rank.
+
+### The web uploader truncates the seconds off an observation
+
+`/v1/observations/288642140` reads `"time_observed_at":"2025-05-30T20:03:00-06:00"`
+with `"observed_on_string":"2025/05/30 8:03 PM"`. The photo it was made from,
+`DSC00045.ARW`, has an EXIF `DateTimeOriginal` of **20:03:41**. The seconds are
+gone, and a two second match window around 20:03:00 never sees the photo.
+
+This is the single biggest cause of missed reverse-sync matches. On a real
+770-observation account, **495 (64%) end in `:00`** where chance would give ~13.
+
+It is truncation, not rounding, and that is traceable to iNaturalist's source
+rather than inferred. The web uploader formats EXIF through moment.js:
+
+```js
+// app/webpack/observations/uploader/models/util.js
+export const DATETIME_12_HOUR = "YYYY/MM/DD h:mm A";
+export const DATETIME_24_HOUR = "YYYY/MM/DD HH:mm";
+```
+
+No `ss` token, so `format()` simply drops the seconds -- `20:03:41` and
+`20:03:59` both render `8:03 PM`. Server-side, `munge_observed_on_with_chronic`
+parses that with Chronic, which fills seconds in as zero.
+
+**So the true capture time is in `[mm:00, mm:59]` -- at or after the recorded
+time, never before it.** Widening backwards as well would double the candidates
+for nothing.
+
+Not every path loses them. A string matching `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}`
+takes a fast path through `DateTime.parse` and keeps its seconds exactly, which
+is what the mobile app and direct API callers send. So seconds that were
+written down are believed even when they are zero; only a source that never
+wrote them is treated as minute-precision.
+
+### Send observations a time, not a date
+
+The plugin sent `observed_on_string` as `%Y-%m-%d`. iNaturalist then stores
+`observed_on` and leaves `time_observed_at` **null**, so the observation can
+never afterwards be matched back to the photo it came from. Observation
+389900654 went up carrying `"2026-07-10"` and nothing else.
+
+Uploading the photo does not rescue it -- reading EXIF is the uploader's job,
+not the server's, and an explicit `observed_on_string` wins regardless.
+
+Now sent as ISO-8601 with seconds (`2026-05-23T13:09:27`) to hit the fast path
+above. No zone offset, matching what iNaturalist's own apps send: capture time
+is wall-clock camera time, and attaching this machine's offset would assert
+something about where the photo was taken that Lightroom never said.

@@ -80,7 +80,39 @@ The fifth argument (`returnExistingIfAny`) is what makes the call idempotent —
 without it, creating a keyword that already exists is an error, so every sync
 after the first would fail.
 
-## A function context ends when its owning function returns
+## The catalog queries a plugin gets, and the date vocabulary they accept
+
+`LibraryToolkit.dll` exposes a `SdkLrCatalogQueries` set — the plugin-facing one
+— which includes the three calls any whole-catalog operation needs:
+
+| Call | Why it matters |
+|---|---|
+| `catalog:findPhotos{ searchDesc = ..., sort = ..., ascending = ... }` | narrows the catalog before anything is read |
+| `catalog:batchGetRawMetadata(photos, keys)` | one call instead of a `getRawMetadata` loop |
+| `catalog:batchGetPropertyForPlugin(photos, ...)` | the same for this plugin's own fields |
+
+`findPhotos` asserts its arguments, and the assertion strings say exactly what it
+wants: *"must be called with named arguments syntax"*, *"searchDesc must be a
+table or nil"*, *"sort must be a string or nil"*, *"ascending must be a boolean
+or nil"*, and — easy to miss — *"must be called from within an LrTask"*.
+
+The date operations are a fixed list, sitting next to `import AgDate`:
+
+```
+== != > < inLast notInLast in today yesterday thisWeek thisMonth
+thisYear pastYear lastYear anytime thisWeekUntilToday range ...
+```
+
+So a capture-time range is `operation = "in"` with `value` and `value2`, and
+`criteria = "captureTime"` is real — `Library.lrmodule` ships the "Past Month"
+smart collection as plain Lua using `criteria = "captureTime", operation =
+"inLast", value = 1, value_units = "months"`, which is where the criteria name
+and the `value_units` key can be read off directly.
+
+**What the binaries cannot say is how long any of it takes.** That needs a real
+catalog, which is what `explore/probes/sdkprobe.lrplugin` is for.
+
+
 
 This looks reasonable and is wrong:
 
@@ -104,7 +136,260 @@ end)
 The exception is a modal dialog, which blocks and so keeps its context alive
 for anything started underneath it.
 
-## `exportSession:renditions()` is an iterator
+## An SDK call that never returns usually means a bad argument
+
+Not slow work. Two independent cases, both found by a probe that appeared to
+hang:
+
+```lua
+-- operation the date vocabulary does not list: never returns
+catalog:findPhotos { searchDesc = {
+  { criteria = "captureTime", operation = ">=", value = "2000-01-01" },
+  combine = "intersect" } }
+
+-- _PLUGIN where a plugin id string belongs: never returns
+catalog:batchGetPropertyForPlugin(photos, keys, _PLUGIN)
+```
+
+Neither raises, neither times out, and Lightroom stays responsive enough that
+the plugin looks busy rather than stuck. The rule that follows: build search
+descriptors and argument lists from fixed tables of known-good values, never by
+assembling strings, because a typo costs a hang rather than an error.
+
+Contrast the *good* failures, which are precise enough to reverse-engineer a
+signature from. `batchGetPropertyForPlugin` complained about a different
+argument each time it was moved:
+
+```
+(photos, {keys})      -> bad argument #1 to 'ipairs' (table expected, got nil)
+(photos, {keys}, id)  -> bad argument #1 to 'ipairs' (table expected, got string)
+```
+
+What it iterates is the *third* argument, so the keys go last:
+
+```lua
+-- 500 photos, one key, 36 ms; result keyed by photo object
+catalog:batchGetPropertyForPlugin(photos, "com.example.plugin", { "my_key" })
+```
+
+## `captureTime` searches honour seconds, but only in one date format
+
+`LrDate.timeToW3CDate` produces `2017-04-29T17:22:25.000+00:00`, and
+`findPhotos` matches **nothing** against it. No error — an empty result, which
+is indistinguishable from a window that genuinely holds no photo. Measured on
+one photo's own capture time:
+
+| value format | matches |
+| --- | --- |
+| `timeToW3CDate` | 0 |
+| `%Y-%m-%dT%H:%M:%S` | 1 |
+| `%Y-%m-%d` | 1 |
+
+So build the value with `LrDate.timeToUserFormat(when, "%Y-%m-%dT%H:%M:%S")`.
+
+The time part is really compared, rather than rounded away to the day. A
+±2 second window against the whole day containing it, on a day holding several
+photos:
+
+```
+±2 s = 2 vs whole day = 5
+```
+
+Which makes a narrow window query the cheap way to ask "what did I shoot at
+this instant":
+
+```lua
+catalog:findPhotos { searchDesc = {
+  { criteria = "captureTime", operation = "in", value = from, value2 = to },
+  combine = "intersect" } }
+```
+
+Measured at **1.7 ms** average over 25 windows on a 6,591 photo catalog, and
+the cost is Lightroom's own index rather than anything proportional to the
+result. That is what makes matching scale by the number of things being looked
+up rather than by the size of the catalog.
+
+## `batchGetRawMetadata` is worth it, and one bad key fails all of them
+
+Over a 500 photo sample:
+
+| call | keys | time |
+| --- | --- | --- |
+| `batchGetRawMetadata` | 8 | 107 ms |
+| `getRawMetadata` loop | 2 | 377 ms |
+
+Roughly ten times cheaper per key, and the result is keyed by the photo object,
+not by index:
+
+```lua
+local rows = catalog:batchGetRawMetadata(photos, { "dateTimeOriginal", "gps" })
+local when = rows[photo].dateTimeOriginal
+```
+
+But the call is all-or-nothing. Asking for one key it does not know throws away
+every other column:
+
+```
+Unknown key: "fileName"
+```
+
+`fileName` is *formatted* metadata, not raw. Keys confirmed to work:
+`dateTimeOriginal`, `dateTimeOriginalISO8601`, `captureTime`, `gps`,
+`gpsAltitude`, `path`, `uuid`, `isVirtualCopy`. Validate a key list once
+against a single photo before running it over a catalog, so an unknown key
+costs one call rather than the whole read.
+
+## A plain `pcall` around an SDK call silently breaks it
+
+`pcall` stops the code inside it from yielding, and most of the interesting SDK
+is asynchronous underneath. What comes back is not "you used pcall wrong", it is
+one of these:
+
+```
+Yielding is not allowed within a C or metamethod call
+LrCatalog:findPhotos: must be called from within an LrTask
+```
+
+The second is the cruel one. It is reported while running inside a perfectly
+good `postAsyncTaskWithContext`, because what the SDK actually tests is whether
+yielding is possible *right now* — and inside a `pcall` it is not. Chasing the
+message leads to auditing task creation, which is not where the problem is.
+
+`getAllPhotos` was quieter still: wrapped in a `pcall` it returned an **empty
+list** rather than raising, which reads as an empty catalog.
+
+`LrTasks` exports a replacement. The full export list, from `LightroomSDK.dll`:
+
+```
+startAsyncTask startAsyncTaskWithoutErrorHandler pcall canYield
+canYieldToScheduler sleep yield yieldToScheduler execute executeWithRunAsVerb
+```
+
+So use `LrTasks.pcall(f, ...)`, which has `pcall`'s signature and lets what it
+calls yield. Plain `pcall` remains correct for things that genuinely cannot
+yield — `string.format`, `io`, reading a field off a table. Note that indexing
+is beyond rescue either way: Lua cannot yield across a metamethod at all.
+
+### The second symptom, which reads as a different bug
+
+The message above is what you get when the SDK notices in advance. The other
+one arrives from Lua itself, after the call has already started:
+
+```
+Yielding is not allowed within a C or metamethod call
+```
+
+It names neither `pcall` nor the call that yielded, and it is what
+`catalog:createKeyword` produces when it runs inside a plain `pcall`.
+
+This cost a whole Reverse Sync run. Each row was wrapped in a plain `pcall` so
+that one bad observation could not abandon the other ninety-nine — and every
+row then failed, because linking creates the taxon's keyword path. The failures
+were caught and counted exactly as designed, so the result was "Linked 0
+photo(s), 1 could not be linked": a report that reads as a matching problem
+rather than a Lua one. A defensive `pcall` is precisely where this hides,
+because its whole purpose is to turn an error into a count.
+
+The harness models the rule now: it replaces `pcall` with one that records that
+a plain `pcall` is on the stack, leaves `LrTasks.pcall` alone, and makes the
+stubs for `createKeyword`, `withWriteAccessDo` and `LrHttp` refuse to run while
+one is. Reverting the fix makes the test fail with the same error Lightroom
+gave, which is the only way to know the guard guards anything.
+
+## `f:static_text` drops a word rather than clipping it
+
+Given a fixed `width`, a `static_text` whose contents do not fit does not
+truncate mid-word or add an ellipsis. The word that does not fit is simply not
+drawn.
+
+In the Reverse Sync review list each row was one control holding
+`species — folder/file.jpg`. Rows with short species names looked perfect.
+Rows with long ones drew the species, the separator, and then nothing at all:
+
+```
+Narrow-collared Snail-eating Beetle (Scaphinotus angusticollis)  —
+```
+
+The filename is a single unbreakable 31-character token, so once the species
+name had eaten the width there was nowhere to put it and it disappeared whole.
+Nothing about the row said it had been shortened, so it read as a match with no
+file behind it -- a data problem rather than a layout one, which is where the
+first hour went. Adding scientific names lengthened every title at once and
+turned one bad row into many, which is what finally identified it.
+
+Two lessons. Give each piece of information its own control, so the thing that
+overflows is the thing that is too long. And when text goes missing, suspect the
+layout before the string -- the bytes were checked first here, and they were
+fine.
+
+## A bound `visible` does not hide a row
+
+`visible` is documented as a view property and is accepted on an `f:row`
+without complaint:
+
+```lua
+f:row {
+  bind_to_object = props,
+  visible = LrView.bind("visible" .. row),
+  ...
+}
+```
+
+It binds, the property changes, and the row keeps drawing. Setting it false
+left nine rows on the last page of the Reverse Sync review list showing an
+empty checkbox beside a placeholder tile -- which reads as nine matches the
+feature failed to describe, rather than as nine rows that should not be there.
+
+Combined with the view tree being fixed once a dialog is presented -- rows
+cannot be added or removed -- the only thing a paged list can control is which
+data its rows point at. So the last page is padded backwards: it ends on the
+last item and begins a full page before it, overlapping the previous page,
+rather than being left short. That is only safe because selection is keyed by
+item index rather than held in the widgets, so an item shown on two pages is
+one answer seen twice.
+
+Not established: whether `visible` works on other view types, or only fails to
+collapse layout while still hiding content. Neither was worth another probe
+once the padding removed the need for it.
+
+## A `scrolled_view` cannot be scrolled from code
+
+There is no scroll position to read or write. `f:scrolled_view` takes
+`width`, `height` and its scroller flags, and the view it returns carries
+nothing that moves it; the SDK exposes no `scrollTo`, no bindable offset, and
+no way to bring a child into view. Adobe's own forums have the question
+outstanding with no answer.
+
+This shows up the moment a scrolled list is paged. The Reverse Sync review
+list draws twenty-five rows about 100pt tall inside a 460pt viewport, so
+roughly four and a half are visible at a time. Turning to the next page
+repoints those rows at new data but leaves the scroller exactly where it was,
+so a user who read to the bottom of one page arrives at the bottom of the next
+and has to scroll back up to see the twenty rows above it.
+
+The only real fix is to stop scrolling: size the page to what the window shows
+so every page turn lands on a whole page, because there is no position to be
+away from. That trades rows per page for pages -- at the current thumbnail
+size roughly eight rows against twenty-five -- and was offered and declined, on
+the grounds that scrolling a big page beats clicking through three times as
+many small ones. Recorded so the next person reaches for the page size rather
+than for an API that is not there.
+
+## `f:edit_text` is Mac-only
+In `ui.dll`'s factory constant list it sits directly behind a `MAC_ENV` guard:
+
+```
+... color_well edit_field MAC_ENV edit_text combo_box password_field ...
+```
+
+On Windows `f:edit_text` is simply `nil`, and the failure is
+`attempt to call method 'edit_text' (a nil value)` at the moment the view is
+built. Use `f:edit_field` with `height_in_lines` for multi-line text.
+
+Worth checking any control against that list before relying on it — `MAC_ENV`
+appears 161 times in `ui.dll`, so this is unlikely to be the only one.
+
+
 
 Calling it directly hands back the loop *index* first, so `renditions()()` is a
 number, not a rendition:
@@ -119,6 +404,37 @@ To look at the photos without disturbing the rendition queue, use
 Measured for `LrExportSession` too, not only for the `exportContext` an export
 provider is handed: a probe in Lightroom Classic 14 reported `first=number 1`,
 `second=table`, so both take the same shape.
+
+## `f:simple_list` scales; hand-built scrolled rows do not
+
+A review list of a few thousand rows can be built either way. Only one of them
+survives it. Timings are open-plus-dismiss, so roughly 2.2 s of every figure is
+human reaction time, present in all of them:
+
+| rows | `scrolled_view` of built rows | `simple_list` |
+| --- | --- | --- |
+| 250 | 4.2 s | — |
+| 500 | 5.2 s | 4.3 s |
+| 1000 | **14.9 s** | — |
+| 5000 | — | **7.1 s** |
+
+Hand-built rows degrade faster than linearly and are unusable by a thousand.
+`simple_list` takes ten times the items for less than half the cost, because it
+wraps a native `table_view` rather than instantiating a view per row.
+
+Building the list is never the slow part — 5000 items assemble in about 5 ms.
+The cost is in realising the views.
+
+With `allows_multiple_selection`, its `value` is a table of selected indexes,
+so "everything selected, deselect what you do not want" is the natural default:
+
+```lua
+f:simple_list {
+  items = labels,
+  allows_multiple_selection = true,
+  value = LrView.bind("selection"),   -- a table, not a number
+}
+```
 
 ## `export_destinationType = "tempFolder"` needs an export service provider
 
@@ -965,3 +1281,49 @@ same whitelist with the same message for exactly that reason.
 Not established by this: whether a write is rejected for a photo whose file is
 offline, and whether it round-trips to the file immediately or waits for a
 metadata save.
+
+## A nil keyword is not "no parent"
+
+`catalog:createKeyword(name, synonyms, includeOnExport, parent, returnExisting)`
+returns nil under conditions the SDK does not spell out. The obvious loop --
+
+```lua
+for _, name in ipairs(path) do
+  parentKw = catalog:createKeyword(name, {}, true, parentKw, true)
+end
+```
+
+-- treats that nil as the parent for the next level, and a nil parent means
+*the top of the catalog*. So a lineage that broke partway through carried on
+creating the rest of itself as brand new **top-level** keywords, beside the
+user's own vocabulary and outside the plugin's root keyword entirely.
+
+Three things make that much worse than it sounds:
+
+- Deleting the root keyword does not clean it up. Lightroom's delete does
+  cascade to children -- but these were never children of anything.
+- **There is no SDK call to delete a keyword.** The plugin cannot offer to
+  repair what it created; the user has to do it by hand in the Keyword List.
+- It is silent. The keyword count looks right and the leaf gets applied.
+
+`ensureKeywordPath` now abandons the whole path on the first refusal and logs
+the level that failed. Nothing written is a re-run; something wrong written is
+a cleanup somebody else has to do.
+
+### It compounds
+
+Confirmed against a real catalog. The fragments were rooted at the level
+*after* the break -- `Aculeata` where the path broke at `Apocrita`, `Adephaga`
+where it broke at `Coleoptera` -- and those parents were themselves stranded
+roots from earlier runs.
+
+That is the nasty part: the stranded `Aculeata` is a *second* keyword of that
+name, which makes the next run's `createKeyword` refuse one level deeper, which
+strands `Apoidea`, and so on down the lineage. One refusal became dozens of
+top-level fragments across a handful of lineages.
+
+So refusing the path outright is not enough either -- that would decline the
+lineage for good. On nil, `ensureKeywordPath` now looks for the keyword among
+the parent's `getChildren()` (or `catalog:getKeywords()` at the top level) and
+carries on with it. Only when it is neither creatable nor findable is the path
+abandoned.

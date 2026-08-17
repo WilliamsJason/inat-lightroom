@@ -24,10 +24,12 @@ local LrBinding         = import "LrBinding"
 local LrDialogs         = import "LrDialogs"
 local LrFunctionContext = import "LrFunctionContext"
 local LrHttp            = import "LrHttp"
+local LrProgressScope   = import "LrProgressScope"
 local LrTasks           = import "LrTasks"
 local LrView            = import "LrView"
 
 local InatAuth = require "InatAuth"
+local Jobs     = require "Jobs"
 local Settings = require "Settings"
 local logger   = require "Log"
 
@@ -218,8 +220,35 @@ local function observationsTab(f, props, actions)
         height_in_lines = 2,
       },
       f:push_button {
-        title  = "Sync All Linked Photos",
-        action = actions.syncAll,
+        title   = "Sync All Linked Photos",
+        action  = actions.syncAll,
+        enabled = LrView.bind("idle"),
+      },
+
+      f:spacer { height = 10 },
+      f:separator { fill_horizontal = 1 },
+      f:spacer { height = 6 },
+
+      f:static_text { title = "Observations not linked", font = "<system/bold>" },
+      f:static_text {
+        title = "Looks through your iNaturalist observations for ones where the\n"
+          .. "matching photo in your catalog does not have the linked\n"
+          .. "iNaturalist metadata. You choose what gets linked before\n"
+          .. "anything is written.",
+        width           = 500,
+        height_in_lines = 4,
+      },
+      f:push_button {
+        title   = "Find Unlinked Observations…",
+        action  = actions.reverseSync,
+        enabled = LrView.bind("idle"),
+      },
+      f:static_text {
+        title   = LrView.bind("busyLabel"),
+        width   = 500,
+        visible = LrView.bind { key = "idle", transform = function(idle)
+          return not idle
+        end },
       },
     },
   }
@@ -366,14 +395,118 @@ function SettingsDialog.syncAll(context)
   local photos  = SettingsDialog.linkedPhotos(catalog)
 
   if #photos == 0 then
-    LrDialogs.message("iNaturalist Sync",
+    LrDialogs.message("Pinned Sync",
       "No photos in this catalog are linked to an observation yet.", "info")
     return 0
   end
 
   logger:info("Sync All: " .. #photos .. " linked photo(s)")
-  require("SyncCore").syncPhotos(context, photos)
+  require("SyncCore").syncPhotos(context, photos,
+    { label = "Syncing all linked photos" })
   return #photos
+end
+
+--- Find observations whose photo is in the catalog but not linked to them.
+--
+-- Two phases with different shapes: fetching is bounded by iNaturalist's page
+-- size and the network, matching by the number of observations. Both report
+-- through one progress scope so the user sees continuous movement rather than
+-- a bar that fills, resets, and fills again.
+function SettingsDialog.reverseSync(context)
+  return Jobs.runOrReport("Finding unlinked observations", function()
+    SettingsDialog.reverseSyncNow(context)
+  end)
+end
+
+--- The reverse sync itself, without the lock.
+function SettingsDialog.reverseSyncNow(context)
+  local UploadCore  = require "UploadCore"
+  local ReverseSync = require "ReverseSync"
+
+  local api, err = UploadCore.requireAPI()
+  if not api then
+    InatAuth.reportMissingCredentials(err)
+    return
+  end
+
+  local progress = LrProgressScope {
+    title           = "Pinned Reverse Sync",
+    caption         = "Fetching your observations…",
+    functionContext = context,
+  }
+  progress:setCancelable(true)
+
+  local matches, summary = ReverseSync.prepare(api, {
+    shouldStop = function() return progress:isCanceled() end,
+
+    onFetch = function(fetched, total)
+      -- The total is unknown until the first page comes back, and a bar that
+      -- sits at zero looks identical to one that has hung.
+      progress:setCaption(string.format("Fetched %d of %d observations…",
+        fetched, total or fetched))
+      if total and total > 0 then
+        progress:setPortionComplete(fetched, total * 2)
+      end
+    end,
+
+    onProgress = function(done, total)
+      progress:setCaption(string.format("Checking observation %d of %d…",
+        done, total))
+      progress:setPortionComplete(total + done, total * 2)
+    end,
+  })
+
+  progress:done()
+
+  if not matches then
+    LrDialogs.message("Pinned Reverse Sync",
+      "Could not fetch your observations: " .. tostring(summary), "warning")
+    return
+  end
+  if summary.stopped and #matches == 0 then return end
+
+  local reviewed = require("ReverseSyncDialog").show(context, matches, summary)
+  if not reviewed then return end
+
+  -- A second scope: the review dialog sits between the two phases for as long
+  -- as the user takes over it, and a progress bar left up behind a modal looks
+  -- like work still happening.
+  local linking = LrProgressScope {
+    title           = "Pinned Reverse Sync",
+    caption         = "Linking…",
+    functionContext = context,
+  }
+
+  local linked, failures = ReverseSync.apply(LrApplication.activeCatalog(),
+    reviewed, {
+      -- Passing the API is what turns a link into a sync: keywords, quality
+      -- grade and location get written in the same transaction, so a photo is
+      -- never left linked to an observation it knows nothing else about.
+      api = api,
+      onProgress = function(done, total)
+        linking:setCaption(string.format("Linked %d of %d…", done, total))
+        linking:setPortionComplete(done, total)
+      end,
+    })
+
+  linking:done()
+
+  local message = string.format(
+    "Linked %d photo(s) to observations, with their keywords and location.",
+    linked)
+  if #failures > 0 then
+    message = message .. string.format("\n%d could not be linked.", #failures)
+    -- One reason, verbatim. A count on its own tells the user that something
+    -- went wrong and gives them nowhere to go with it; the message at least
+    -- names the observation and what the catalog objected to. The rest are in
+    -- the log, which is where a list of them belongs.
+    local first = failures[1]
+    if first and first.message then
+      message = message .. string.format("\n\nFirst failure (observation %s):\n%s",
+        tostring(first.observation), tostring(first.message))
+    end
+  end
+  LrDialogs.message("Pinned Reverse Sync", message, "info")
 end
 
 --------------------------------------------------------------------------------
@@ -408,6 +541,20 @@ function SettingsDialog.show()
       props[key] = value
     end
 
+    -- Follows the lock rather than the buttons, so the dialog is right about
+    -- what is running even when it was not the one that started it: opened
+    -- during a sync launched from the menu, the buttons come up already greyed.
+    --
+    -- The property table dies with this dialog while the job carries on, so
+    -- the update is guarded. It is a plain field write, which cannot yield, so
+    -- an ordinary pcall is the right one here.
+    Jobs.watch(props, function(running)
+      pcall(function()
+        props.idle      = (running == nil)
+        props.busyLabel = running and (tostring(running) .. "…") or ""
+      end)
+    end)
+
     local actions = {
       syncAll = function()
         -- Its own task and its own context: the sync outlives this dialog, and
@@ -416,6 +563,17 @@ function SettingsDialog.show()
         LrFunctionContext.postAsyncTaskWithContext("inat_sync_all",
           function(syncContext)
             SettingsDialog.syncAll(syncContext)
+          end)
+      end,
+
+      reverseSync = function()
+        -- Same reasoning as syncAll: this outlives the settings dialog, and
+        -- its progress scope must not be tied to a context that ends when the
+        -- dialog is dismissed. It also opens a dialog of its own, which cannot
+        -- be done from inside this one's action.
+        LrFunctionContext.postAsyncTaskWithContext("inat_reverse_sync",
+          function(syncContext)
+            SettingsDialog.reverseSync(syncContext)
           end)
       end,
     }

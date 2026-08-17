@@ -42,6 +42,7 @@
   use) lives in LrPrefs.
 --]]
 
+local LrDialogs = import "LrDialogs"
 local LrHttp    = import "LrHttp"
 local LrPasswords = import "LrPasswords"
 local LrPrefs   = import "LrPrefs"
@@ -234,6 +235,24 @@ function InatAuth.getToken(forceRefresh) -- luacheck: ignore forceRefresh
 
   return nil, "iNaturalist credentials are not set up.\n\n"
     .. "Use File > Plug-in Extras > Pinned Settings…."
+end
+
+--- Tell the user their credentials are missing or expired.
+--
+-- One dialog for every feature that needs a token, because it is one problem
+-- with one fix, and it is not about the feature that happened to hit it. Four
+-- call sites had drifted into three different titles and two severities, so
+-- the same sentence looked like a different fault depending on which button
+-- had been pressed.
+--
+-- Titled "Pinned" rather than after the caller for the same reason, and shown
+-- as a warning rather than an error because not having set the plugin up yet is
+-- a state everyone starts in, not something that went wrong.
+function InatAuth.reportMissingCredentials(message)
+  LrDialogs.message("Pinned",
+    message or "iNaturalist credentials are not set up.\n\n"
+      .. "Use File > Plug-in Extras > Pinned Settings….",
+    "warning")
 end
 
 --- Verify a token by fetching the authenticated user.

@@ -40,6 +40,7 @@ local LrHttp            = import "LrHttp"
 local LrTasks           = import "LrTasks"
 local LrView            = import "LrView"
 
+local InatAuth   = require "InatAuth"
 local PanelCore  = require "PanelCore"
 local Settings   = require "Settings"
 local UploadCore = require "UploadCore"
@@ -514,7 +515,7 @@ function ObservationPanel.uploadOrUpdate(props)
 
   local api, authErr = UploadCore.requireAPI()
   if not api then
-    LrDialogs.message("Pinned", authErr, "critical")
+    InatAuth.reportMissingCredentials(authErr)
     return
   end
 
@@ -594,7 +595,7 @@ function ObservationPanel.uploadOrUpdate(props)
   })
 
   if not observationId then
-    LrDialogs.message("iNaturalist Upload",
+    LrDialogs.message("Pinned Upload",
       errors[1] or "The upload failed.", "critical")
     props.suggestionStatus = ""
     return
@@ -611,7 +612,7 @@ function ObservationPanel.uploadOrUpdate(props)
   end
 
   if #errors > 0 then
-    LrDialogs.message("iNaturalist Upload",
+    LrDialogs.message("Pinned Upload",
       "Uploaded as observation " .. tostring(observationId)
       .. ", but some things did not work:\n\n" .. table.concat(errors, "\n"),
       "warning")
@@ -640,7 +641,7 @@ function ObservationPanel.applyLocally(props)
 
   local api, authErr = UploadCore.requireAPI()
   if not api then
-    LrDialogs.message("Pinned", authErr, "critical")
+    InatAuth.reportMissingCredentials(authErr)
     return
   end
 
