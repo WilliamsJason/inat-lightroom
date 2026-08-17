@@ -316,6 +316,30 @@ a stub that hands back a table cannot refuse. `SettingsDialog.show` posts a task
 now, and the harness's `getKeywords` refuses outside one, so opening the dialog
 the way the menu does is a test rather than a thing you find in the host.
 
+### The second failure is worse than the first, because it is silent
+
+Posting the task did not fix the dialog. It moved the failure: the walk also
+asks each keyword its name, and `LrKeyword:getName` and `getChildren` need
+**read access**, because a keyword is a handle into the catalog rather than a
+value copied out of it. So the next error was raised *inside* the task — and an
+error raised there is not reported anywhere. No dialog, no log line. The menu
+item did nothing at all when clicked, which is a worse bug report than the
+error dialog was.
+
+The walk belongs in one `catalog:withReadAccessDo` for the whole tree, not one
+per keyword: it is a lock, and a tree that is not changing does not need it
+taken thousands of times. Note that a **write** block is read access too, which
+is why `SyncCore` has never needed one of its own — and why the harness's guard
+trips only the code that reads without either.
+
+Two habits come out of this, both about the silence rather than the API:
+
+- **Log the entry point of any task a user action starts.** "Did it even try"
+  is otherwise unanswerable, and it is the first question.
+- **Guard the optional part.** The picker is a convenience; the dialog holds
+  every setting in the plugin, including the credentials. A failed catalog read
+  should cost the popup, not the window.
+
 The general shape: **the pieces of a dialog can be unit tested individually and
 still fail together**, because what breaks is the context they are assembled in.
 Something has to open it the way the user does.

@@ -171,6 +171,10 @@ SettingsDialog.KEYWORD_ROOT_PICK_LIMIT = 500
 --
 -- Depth-first so children follow their parent, which keeps a tree readable in
 -- a flat list. Exposed for testing: walking a catalog needs no dialog.
+--
+-- Must be called from a task. A keyword is a handle into the catalog rather
+-- than a value copied out of it, so getName and getChildren need read access
+-- just as getKeywords does -- and the read block needs a task around it.
 function SettingsDialog.keywordRootItems(catalog)
   local items = {
     { title = SettingsDialog.KEYWORD_ROOT_PICK_PROMPT, value = "" },
@@ -195,7 +199,13 @@ function SettingsDialog.keywordRootItems(catalog)
     end
   end
 
-  walk(catalog:getKeywords(), "")
+  -- One read block around the whole walk rather than one per keyword: it is a
+  -- lock, and taking it thousands of times for a tree that is not changing
+  -- costs more than holding it once.
+  catalog:withReadAccessDo(function()
+    walk(catalog:getKeywords(), "")
+  end)
+
   return items
 end
 
@@ -678,6 +688,10 @@ function SettingsDialog.show()
   -- returned, which is the same reason syncAll and reverseSync below post their
   -- own. A modal dialog is fine inside a task; reverseSync already opens one.
   LrFunctionContext.postAsyncTaskWithContext("inat_settings", function(context)
+    -- Logged because this task is the only place a failure can be seen from.
+    -- Nothing it raises reaches the user, so "did the dialog even try to open"
+    -- is otherwise unanswerable.
+    logger:trace("Settings: opening")
 
     local f     = LrView.osFactory()
     local props = LrBinding.makePropertyTable(context)
@@ -688,8 +702,26 @@ function SettingsDialog.show()
     -- The picker is a way of typing into the field, not a second setting: it
     -- has no entry in Settings.DEFAULTS, so savePreferences ignores it.
     props.sync_keyword_root_pick = ""
-    props.keywordRootItems =
-      SettingsDialog.keywordRootItems(LrApplication.activeCatalog())
+
+    -- Guarded, because the picker is a convenience and the dialog is not.
+    -- Reading the catalog is the only thing here that can fail, and an error
+    -- raised inside this task is not shown to anyone -- the first version of
+    -- this bug reached users as a menu item that did nothing when clicked.
+    -- Losing the popup costs a convenience; losing the dialog costs every
+    -- setting in the plugin, including the credentials.
+    --
+    -- LrTasks.pcall rather than Lua's: the catalog read yields.
+    local ok, itemsOrErr =
+      LrTasks.pcall(SettingsDialog.keywordRootItems, LrApplication.activeCatalog())
+    if ok then
+      props.keywordRootItems = itemsOrErr
+    else
+      logger:warn("Settings: could not list keywords for the picker: "
+        .. tostring(itemsOrErr))
+      props.keywordRootItems = {
+        { title = SettingsDialog.KEYWORD_ROOT_PICK_PROMPT, value = "" },
+      }
+    end
 
     for key, value in pairs(Settings.all()) do
       props[key] = value
