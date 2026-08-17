@@ -15,7 +15,7 @@ target; see [Why there is no publish service](#why-there-is-no-publish-service).
 ## Plugin files
 
 ```
-inat.lrplugin/
+pinned.lrplugin/
 ├── Info.lua                   # Plugin identity, SDK version, menu, tagsets, URL handler
 ├── ObservationPanelMenu.lua   # Menu script: opens the floating panel
 ├── ObservationPanel.lua       # The panel's window: view and wiring
@@ -133,11 +133,14 @@ why `RenderPhoto.lua` manages its own temporary directory.
 
 ### The Metadata panel — data only
 
-A preset named `iNaturalist` in the Metadata panel dropdown shows this plugin's
-fields and the file name, and nothing else.
+A preset named `Pinned for iNaturalist` in the Metadata panel dropdown shows
+this plugin's fields and the file name, and nothing else. The full name rather
+than just `Pinned`: it sits among Default, EXIF and IPTC, which all describe
+what they contain, so a bare product name there says nothing about what
+selecting it would do.
 
 A preset *replaces* the panel's contents rather than adding to it, so selecting
-`iNaturalist` costs the user their ordinary metadata view. An earlier version
+it costs the user their ordinary metadata view. An earlier version
 shipped a second `iNaturalist + Default` preset to avoid that. It was dropped:
 Default is one dropdown away, and a copy of Default is a second thing to keep
 in step with Lightroom for no real gain.
