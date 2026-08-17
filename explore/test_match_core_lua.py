@@ -421,3 +421,95 @@ def test_ranking_leaves_no_bookkeeping_on_the_rows(plugin, match):
 
     assert ranked[1]._score is None
     assert ranked[1]._index is None
+
+
+# ------------------------------------------------------- minute precision
+#
+# iNaturalist's web uploader formats EXIF through moment.js as
+# "YYYY/MM/DD h:mm A" -- no seconds token -- and Chronic parses that back
+# with the seconds zeroed. Confirmed against a real photo: DSC00045.ARW was
+# shot at 20:03:41 and the observation reads 20:03:00. Two thirds of a real
+# account arrived this way, and every one of them was invisible to a two
+# second window.
+
+
+def truncated(plugin, **extra):
+    """An observation as the web uploader leaves it: no seconds anywhere."""
+    fields = {"time_observed_at": "2025-05-30T20:03:00-06:00",
+              "observed_on_string": "2025/05/30 8:03 PM"}
+    fields.update(extra)
+    return observation(plugin, **fields)
+
+
+def exact(plugin, **extra):
+    """An observation as the mobile app leaves it: seconds all the way down."""
+    fields = {"time_observed_at": "2025-05-30T20:03:41-06:00",
+              "observed_on_string": "2025-05-30T20:03:41"}
+    fields.update(extra)
+    return observation(plugin, **fields)
+
+
+def test_a_truncated_time_is_recognised_as_minute_precision(match, plugin):
+    assert match.isMinutePrecision(truncated(plugin)) is True
+
+
+def test_seconds_written_down_are_believed_even_when_zero(match, plugin):
+    """The mobile app sends ISO-8601; :00 from it is a real :00."""
+    obs = observation(plugin, time_observed_at="2025-05-30T20:03:00-06:00",
+                      observed_on_string="2025-05-30T20:03:00")
+    assert match.isMinutePrecision(obs) is False
+
+
+def test_a_time_with_seconds_is_not_minute_precision(match, plugin):
+    assert match.isMinutePrecision(exact(plugin)) is False
+
+
+def test_the_window_covers_the_whole_minute_after_a_truncated_time(match, plugin):
+    """DSC00045.ARW sits at :41 and has to fall inside."""
+    start, finish = match.windowFor(truncated(plugin), 2)
+    assert start == "2025-05-30T20:02:58"
+    assert finish == "2025-05-30T20:04:01"
+
+
+def test_the_window_does_not_widen_backwards(match, plugin):
+    """Truncation only ever loses time forwards, so :00 is the earliest."""
+    start, _ = match.windowFor(truncated(plugin), 0)
+    assert start == "2025-05-30T20:03:00"
+
+
+def test_an_exact_time_keeps_its_tight_window(match, plugin):
+    start, finish = match.windowFor(exact(plugin), 2)
+    assert start == "2025-05-30T20:03:39"
+    assert finish == "2025-05-30T20:03:43"
+
+
+def test_a_photo_inside_the_minute_is_not_reported_as_seconds_out(match, plugin):
+    """Every frame in the minute fits what iNaturalist actually recorded."""
+    seconds = match.toSeconds(match.parseTimestamp("2025-05-30T20:03:41-06:00"))
+    _, _, apart = match.rate(truncated(plugin),
+                             plugin.runtime.table_from({"seconds": seconds}))
+    assert apart == 0
+
+
+def test_a_photo_outside_the_minute_is_measured_from_the_minute(match, plugin):
+    seconds = match.toSeconds(match.parseTimestamp("2025-05-30T20:04:04-06:00"))
+    _, _, apart = match.rate(truncated(plugin),
+                             plugin.runtime.table_from({"seconds": seconds}))
+    assert apart == 5
+
+
+def test_frames_across_a_truncated_minute_rank_by_position_not_by_second(
+        match, plugin):
+    """None of them is closer to the truth than another, so order is stable."""
+    def at(text):
+        return {"seconds": match.toSeconds(match.parseTimestamp(text)),
+                "path": text}
+
+    candidates = plugin.runtime.table_from([
+        plugin.runtime.table_from(at("2025-05-30T20:03:52-06:00")),
+        plugin.runtime.table_from(at("2025-05-30T20:03:03-06:00")),
+    ])
+    ranked = match.rankMatches(truncated(plugin), candidates)
+
+    assert [ranked[1].secondsApart, ranked[2].secondsApart] == [0, 0]
+    assert ranked[1].path == "2025-05-30T20:03:52-06:00"

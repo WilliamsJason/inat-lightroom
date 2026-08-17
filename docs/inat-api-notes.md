@@ -762,3 +762,51 @@ Both edges matter. Keeping Life would add a level the one-at-a-time path does
 not produce, and two code paths building two different hierarchies for one
 species is worse than either alone. A gap anywhere in the middle means the
 taxon is not cached at all, so it falls back rather than losing a rank.
+
+### The web uploader truncates the seconds off an observation
+
+`/v1/observations/288642140` reads `"time_observed_at":"2025-05-30T20:03:00-06:00"`
+with `"observed_on_string":"2025/05/30 8:03 PM"`. The photo it was made from,
+`DSC00045.ARW`, has an EXIF `DateTimeOriginal` of **20:03:41**. The seconds are
+gone, and a two second match window around 20:03:00 never sees the photo.
+
+This is the single biggest cause of missed reverse-sync matches. On a real
+770-observation account, **495 (64%) end in `:00`** where chance would give ~13.
+
+It is truncation, not rounding, and that is traceable to iNaturalist's source
+rather than inferred. The web uploader formats EXIF through moment.js:
+
+```js
+// app/webpack/observations/uploader/models/util.js
+export const DATETIME_12_HOUR = "YYYY/MM/DD h:mm A";
+export const DATETIME_24_HOUR = "YYYY/MM/DD HH:mm";
+```
+
+No `ss` token, so `format()` simply drops the seconds -- `20:03:41` and
+`20:03:59` both render `8:03 PM`. Server-side, `munge_observed_on_with_chronic`
+parses that with Chronic, which fills seconds in as zero.
+
+**So the true capture time is in `[mm:00, mm:59]` -- at or after the recorded
+time, never before it.** Widening backwards as well would double the candidates
+for nothing.
+
+Not every path loses them. A string matching `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}`
+takes a fast path through `DateTime.parse` and keeps its seconds exactly, which
+is what the mobile app and direct API callers send. So seconds that were
+written down are believed even when they are zero; only a source that never
+wrote them is treated as minute-precision.
+
+### Send observations a time, not a date
+
+The plugin sent `observed_on_string` as `%Y-%m-%d`. iNaturalist then stores
+`observed_on` and leaves `time_observed_at` **null**, so the observation can
+never afterwards be matched back to the photo it came from. Observation
+389900654 went up carrying `"2026-07-10"` and nothing else.
+
+Uploading the photo does not rescue it -- reading EXIF is the uploader's job,
+not the server's, and an explicit `observed_on_string` wins regardless.
+
+Now sent as ISO-8601 with seconds (`2026-05-23T13:09:27`) to hit the fast path
+above. No zone offset, matching what iNaturalist's own apps send: capture time
+is wall-clock camera time, and attaching this machine's offset would assert
+something about where the photo was taken that Lightroom never said.

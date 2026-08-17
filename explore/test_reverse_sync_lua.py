@@ -561,3 +561,55 @@ def test_linking_creates_keywords_without_yielding_inside_a_plain_pcall(
     assert linked == 1
     assert photo._props["inat_observation_id"] == "15845541"
     assert photo._props["inat_taxon_name"] == "Agulla"
+
+
+# ------------------------------------------- the web uploader drops seconds
+#
+# The regression that started this: observation 288642140 reads 20:03:00
+# because iNaturalist's uploader formatted the EXIF through a moment.js
+# pattern with no seconds token. The photo it was made from, DSC00045.ARW,
+# was shot at 20:03:41, so a two second window never saw it.
+
+
+def truncated_observation(plugin, obs_id, when_minute):
+    """As the web uploader leaves it: :00 seconds and a string without any."""
+    return observation(plugin, obs_id, when_minute + ":00+00:00",
+                       observed_on_string="2025/05/30 8:03 PM")
+
+
+def test_a_photo_later_in_a_truncated_minute_is_still_found(plugin, sync):
+    photo = photo_at(plugin, "2025-05-30T20:03:41", path="/DSC00045.ARW")
+    plugin.set_all_photos([photo])
+
+    found = sync["candidatesFor"](plugin.catalog,
+        truncated_observation(plugin, 1, "2025-05-30T20:03"), 2,
+        plugin.runtime.table_from({}))
+
+    assert len(found) == 1
+    assert found[1].path == "/DSC00045.ARW"
+
+
+def test_the_next_minute_is_still_out_of_reach(plugin, sync):
+    """Widening to the minute must not quietly become a two minute window."""
+    photo = photo_at(plugin, "2025-05-30T20:04:30")
+    plugin.set_all_photos([photo])
+
+    found = sync["candidatesFor"](plugin.catalog,
+        truncated_observation(plugin, 1, "2025-05-30T20:03"), 2,
+        plugin.runtime.table_from({}))
+
+    assert len(found) == 0
+
+
+def test_every_frame_in_a_truncated_minute_is_offered(plugin, sync):
+    """One observation, several plausible frames -- the user picks by eye."""
+    early = photo_at(plugin, "2025-05-30T20:03:05", path="/early.ARW")
+    late = photo_at(plugin, "2025-05-30T20:03:55", path="/late.ARW")
+    plugin.set_all_photos([early, late])
+
+    found = sync["candidatesFor"](plugin.catalog,
+        truncated_observation(plugin, 1, "2025-05-30T20:03"), 2,
+        plugin.runtime.table_from({}))
+
+    assert sorted(found[i].path for i in range(1, len(found) + 1)) == [
+        "/early.ARW", "/late.ARW"]

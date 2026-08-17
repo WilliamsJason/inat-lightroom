@@ -190,17 +190,66 @@ function MatchCore.observedAt(observation)
   return MatchCore.parseTimestamp(observation.observed_on_string)
 end
 
---- The capture-time window to search for one observation.
--- @return fromValue, toValue -- strings for findPhotos, or nil when undatable
-function MatchCore.windowFor(observation, toleranceSeconds)
+--- Whether an observation's time is only known to the minute.
+--
+-- iNaturalist's web uploader reads the photo's EXIF time and formats it
+-- through moment.js as "YYYY/MM/DD h:mm A" -- a format string with no seconds
+-- token -- and the server parses that back with Chronic, which fills the
+-- seconds in as zero. A frame shot at 20:03:41 is therefore recorded as
+-- 20:03:00, and a two second window around it finds nothing at all. This is
+-- not an edge case: on a real 770-observation account, 495 of them arrived
+-- this way, against the ~13 that chance would put on an exact minute.
+--
+-- The loss is a truncation and not a rounding -- every second from :00 to :59
+-- formats to the same string -- so the true time is at or after the recorded
+-- one and never before it. That asymmetry is the whole point: widening
+-- backwards as well would double the candidates for no reason.
+--
+-- Observations from the mobile app and from direct API calls send a full
+-- ISO-8601 string and keep their seconds, so this must not fire for them. A
+-- source that recorded seconds says so by writing them down, even when they
+-- happen to be zero.
+function MatchCore.isMinutePrecision(observation)
+  local parts = MatchCore.observedAt(observation)
+  if not parts or parts.sec ~= 0 then return false end
+
+  local text = observation.observed_on_string
+  if type(text) == "string" and text:match("%d:%d%d:%d%d") then
+    return false
+  end
+
+  return true
+end
+
+--- The span of wall-clock seconds an observation could have been made in.
+--
+-- A point for a source that recorded seconds, and the whole minute for one
+-- that did not. Everything that reasons about time works from this rather
+-- than from a single instant, so that widening the search and judging how
+-- close a photo is stay two views of one decision instead of drifting apart.
+--
+-- @return fromSeconds, toSeconds -- both nil when the observation has no time
+function MatchCore.observedSpan(observation)
   local parts = MatchCore.observedAt(observation)
   if not parts then return nil, nil end
 
   local centre = MatchCore.toSeconds(parts)
-  local slack  = toleranceSeconds or 2
+  if MatchCore.isMinutePrecision(observation) then
+    return centre, centre + 59
+  end
+  return centre, centre
+end
 
-  return MatchCore.formatSearchValue(MatchCore.fromSeconds(centre - slack)),
-         MatchCore.formatSearchValue(MatchCore.fromSeconds(centre + slack))
+--- The capture-time window to search for one observation.
+-- @return fromValue, toValue -- strings for findPhotos, or nil when undatable
+function MatchCore.windowFor(observation, toleranceSeconds)
+  local from, to = MatchCore.observedSpan(observation)
+  if not from then return nil, nil end
+
+  local slack = toleranceSeconds or 2
+
+  return MatchCore.formatSearchValue(MatchCore.fromSeconds(from - slack)),
+         MatchCore.formatSearchValue(MatchCore.fromSeconds(to + slack))
 end
 
 --------------------------------------------------------------------------------
@@ -263,10 +312,21 @@ end
 -- @param photoInfo { seconds = wall-clock seconds, latitude = , longitude = }
 -- @return tier, distanceMetres, secondsApart
 function MatchCore.rate(observation, photoInfo)
-  local parts = MatchCore.observedAt(observation)
+  local from, to = MatchCore.observedSpan(observation)
   local apart = nil
-  if parts and photoInfo.seconds then
-    apart = math.abs(photoInfo.seconds - MatchCore.toSeconds(parts))
+  if from and photoInfo.seconds then
+    -- Distance to the span, not to its start. A minute-precision observation
+    -- is equally consistent with every frame inside its minute, so calling a
+    -- photo at :41 "41 seconds out" would both rank it last and tell the user
+    -- it barely matched, when it is in fact a perfect fit for what iNaturalist
+    -- actually recorded.
+    if photoInfo.seconds < from then
+      apart = from - photoInfo.seconds
+    elseif photoInfo.seconds > to then
+      apart = photoInfo.seconds - to
+    else
+      apart = 0
+    end
   end
 
   local obsLat, obsLon = MatchCore.coordinatesFrom(observation)

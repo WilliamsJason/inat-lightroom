@@ -61,10 +61,38 @@ UploadCore.pluginField = pluginField
 --
 -- Lightroom counts seconds from 2001-01-01, not the Unix epoch, so os.date
 -- would be 31 years out. LrDate knows the difference.
+--
+-- Date only, which is what the vision endpoint's `observed_on` wants. To
+-- create an observation use observedAtFor instead -- a date on its own throws
+-- the time away.
 function UploadCore.observedOnFor(photo)
   local captured = photo:getRawMetadata("dateTimeOriginal")
   if not captured then return nil end
   return LrDate.timeToUserFormat(captured, "%Y-%m-%d")
+end
+
+--- The full capture instant for one photo, for creating an observation.
+--
+-- Sending a bare date here loses the time entirely: iNaturalist stores
+-- observed_on and leaves time_observed_at null, so the observation can never
+-- afterwards be matched back to the photo it came from. The plugin was doing
+-- exactly that -- observation 389900654 went up carrying "2026-07-10" and
+-- nothing else.
+--
+-- ISO-8601 with seconds is deliberate. iNaturalist parses observed_on_string
+-- with Chronic, which zeroes the seconds of anything it has to guess at, but
+-- a string matching ^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2} takes a fast path
+-- through DateTime.parse and keeps them exactly. That is the difference
+-- between an observation Reverse Sync can find later and one it cannot.
+--
+-- No zone offset, matching the timestamps iNaturalist's own apps send: the
+-- capture time is wall-clock camera time, and iNaturalist reads it against
+-- the account's timezone. Attaching this machine's offset would be asserting
+-- something about where the photo was taken that Lightroom never said.
+function UploadCore.observedAtFor(photo)
+  local captured = photo:getRawMetadata("dateTimeOriginal")
+  if not captured then return nil end
+  return LrDate.timeToUserFormat(captured, "%Y-%m-%dT%H:%M:%S")
 end
 
 --- Read a photo's coordinates, if it has any.
@@ -97,7 +125,7 @@ function UploadCore.observationParamsFor(settings, photo, options)
     geoprivacy = settings.inat_geoprivacy or "open",
   }
 
-  local observedOn = UploadCore.observedOnFor(photo)
+  local observedOn = UploadCore.observedAtFor(photo)
   if observedOn then
     params.observed_on_string = observedOn
   end

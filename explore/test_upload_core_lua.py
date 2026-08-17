@@ -474,3 +474,30 @@ def test_a_nonsense_stored_accuracy_is_not_sent(plugin, upload):
     params = upload["observationParamsFor"](settings(plugin), photo)
 
     assert params["positional_accuracy"] is None
+
+
+def test_the_capture_instant_keeps_its_seconds(plugin, upload):
+    """iNaturalist's Chronic parser zeroes the seconds of anything it has to
+    guess at, but takes a fast path through DateTime.parse for a full ISO-8601
+    string and keeps them exactly. Those seconds are what lets Reverse Sync
+    find the photo again."""
+    photo = plugin.new_photo(raw={"dateTimeOriginal": 801234567})
+
+    assert upload["observedAtFor"](photo) == "2026-05-23T13:09:27"
+
+
+def test_no_instant_when_the_photo_has_no_capture_time(plugin, upload):
+    assert upload["observedAtFor"](plugin.new_photo()) is None
+
+
+def test_the_observation_is_sent_with_a_time_not_just_a_date(plugin, upload):
+    """A bare date makes iNaturalist store observed_on and leave
+    time_observed_at null, and an observation with no time can never be matched
+    back to the photo it came from. The plugin shipped one that way --
+    observation 389900654 went up carrying "2026-07-10" and nothing else."""
+    photo = plugin.new_photo(raw={"dateTimeOriginal": 801234567})
+
+    params = upload["observationParamsFor"](settings(plugin), photo)
+
+    assert params["observed_on_string"] == "2026-05-23T13:09:27"
+
