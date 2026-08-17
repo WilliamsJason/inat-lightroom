@@ -735,3 +735,30 @@ Two rules it follows:
   `ancestors` must not be cached, or the cached answer stops `getTaxon` ever
   asking properly -- the same trap that made a throttled run write 346 wrong
   keywords.
+
+### The list endpoint does not return ancestors
+
+`/v1/taxa?id=…` answers with `ancestor_ids` and **no** `ancestors`; so does
+`/v2/taxa` even when `ancestors` is asked for in `fields`. Only `/v1/taxa/{id}`
+returns the array. The first attempt at prefetching therefore cached nothing --
+correctly, because of the rule above -- and all 158 slow lookups still happened.
+
+The lineage is assembled from the ids instead, which takes two rounds: one for
+the species, one for every distinct ancestor they name. Ancestors are taxa, so
+the second round is the same call. Four requests where there were 158.
+
+Checked against the live API rather than assumed:
+
+```
+/v1/taxa/67727   ancestors    =           1,47120,372739,…,52520
+/v1/taxa?id=67727 ancestor_ids = 48460,   1,47120,372739,…,52520,67727
+```
+
+`ancestors` is `ancestor_ids` minus the leading **Life** (48460) and minus the
+taxon's own id at the end. Kingdoms confirm it: Plantae has
+`ancestor_ids = {48460, 47126}` and `ancestors = {}`.
+
+Both edges matter. Keeping Life would add a level the one-at-a-time path does
+not produce, and two code paths building two different hierarchies for one
+species is worse than either alone. A gap anywhere in the middle means the
+taxon is not cached at all, so it falls back rather than losing a rank.

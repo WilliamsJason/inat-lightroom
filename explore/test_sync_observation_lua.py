@@ -843,3 +843,133 @@ def test_a_species_without_a_lineage_is_not_cached_from_a_batch():
 
     assert names_on(photo) == ["Ischnura cervula"]
     assert "Odonata" in [k["name"] for k in plugin.keywords]
+
+
+# ---------------------------------------------------------------------------
+# The list endpoint does not return ancestors
+#
+# /v1/taxa?id=... answers with ancestor_ids and no ancestors, so a first pass
+# at prefetching cached nothing and all 158 slow lookups happened anyway. The
+# lineage is assembled from the ids instead, verified against the live API:
+# ancestors == ancestor_ids minus the leading Life (48460) and minus the
+# taxon's own id at the end.
+# ---------------------------------------------------------------------------
+
+LIFE = 48460
+
+
+def listed(taxon_id, name, rank, chain, common=None):
+    """A taxon as the *list* endpoint returns it: ancestor_ids, no ancestors."""
+    entry = {"id": taxon_id, "name": name, "rank": rank,
+             "ancestor_ids": [LIFE] + chain + [taxon_id]}
+    if common:
+        entry["preferred_common_name"] = common
+    return entry
+
+
+DAMSELFLY_CHAIN = [1, 47120, 47158, 47792, 52520]
+DAMSELFLY_NAMES = {1: ("Animalia", "kingdom"), 47120: ("Arthropoda", "phylum"),
+                   47158: ("Insecta", "class"), 47792: ("Odonata", "order"),
+                   52520: ("Ischnura", "genus")}
+
+
+def taxa_endpoint(*leaves):
+    """Answer /taxa?id=... for the leaves and every ancestor they name."""
+    known = {}
+    for leaf in leaves:
+        known[leaf["id"]] = leaf
+    for taxon_id, (name, rank) in DAMSELFLY_NAMES.items():
+        chain = DAMSELFLY_CHAIN[:DAMSELFLY_CHAIN.index(taxon_id)]
+        known[taxon_id] = listed(taxon_id, name, rank, chain)
+
+    def handler(url):
+        wanted = urllib.parse.unquote(url.split("id=", 1)[1].split("&")[0])
+        return {"results": [known[int(one)] for one in wanted.split(",")
+                            if int(one) in known]}
+
+    return handler
+
+
+def taxa_plugin(observation_routes):
+    """A plugin whose /taxa?id= answers the way the real list endpoint does."""
+    plugin = make_plugin(observation_routes)
+    inner = observation_handler(plugin, observation_routes)
+    leaf = listed(12345, "Ischnura cervula", "species", DAMSELFLY_CHAIN,
+                  common="Pacific Forktail")
+    answer = taxa_endpoint(leaf)
+    seen = []
+
+    def handler(method, url, body=None, headers=None):
+        seen.append(url)
+        if "/taxa?" in url:
+            return json.dumps(answer(url)), plugin.runtime.table_from(
+                {"status": 200})
+        return inner(method, url, body, headers)
+
+    plugin.set_http_handler(handler)
+    return plugin, seen
+
+
+def test_a_lineage_is_assembled_from_ancestor_ids():
+    bare = {"id": 12345, "name": "Ischnura cervula", "rank": "species"}
+    plugin, seen = taxa_plugin({"/observations/999": observation(community=bare)})
+    photo = plugin.new_photo(inat_observation_id="999")
+    plugin.set_target_photos([photo])
+
+    run_sync(plugin)
+
+    parents = {k["name"]: k["parent"] for k in plugin.keywords}
+    assert parents["Animalia"] == "iNaturalist"
+    assert parents["Arthropoda"] == "Animalia"
+    assert parents["Insecta"] == "Arthropoda"
+    assert parents["Odonata"] == "Insecta"
+    assert parents["Ischnura"] == "Odonata"
+    assert parents["Ischnura cervula"] == "Ischnura"
+
+
+def test_life_never_becomes_a_keyword():
+    """ancestor_ids leads with Life; the single endpoint's ancestors do not."""
+    bare = {"id": 12345, "name": "Ischnura cervula", "rank": "species"}
+    plugin, _ = taxa_plugin({"/observations/999": observation(community=bare)})
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="999")])
+
+    run_sync(plugin)
+
+    assert "Life" not in [k["name"] for k in plugin.keywords]
+    assert str(LIFE) not in [k["name"] for k in plugin.keywords]
+
+
+def test_the_assembled_lineage_costs_two_requests_not_one_each():
+    """One round for the species, one for the ancestors they name."""
+    bare = {"id": 12345, "name": "Ischnura cervula", "rank": "species"}
+    routes = {f"/observations/{i}": observation(obs_id=i, community=bare)
+              for i in range(1000, 1030)}
+    plugin, seen = taxa_plugin(routes)
+    plugin.set_target_photos(
+        [plugin.new_photo(inat_observation_id=str(i))
+         for i in range(1000, 1030)])
+
+    run_sync(plugin)
+
+    assert [url for url in seen if "/taxa/" in url] == []
+    assert len([url for url in seen if "/taxa?" in url]) == 2
+
+
+def test_a_missing_ancestor_leaves_the_taxon_to_the_slow_path():
+    """A gap would drop a level out of the middle of the hierarchy."""
+    bare = {"id": 12345, "name": "Ischnura cervula", "rank": "species"}
+    plugin = make_plugin({
+        "/observations/999": observation(community=bare),
+        # The list endpoint names an ancestor it then declines to describe.
+        "/taxa?": {"results": [listed(12345, "Ischnura cervula", "species",
+                                      DAMSELFLY_CHAIN)]},
+        "/taxa/12345": {"results": [DAMSELFLY]},
+    })
+    photo = plugin.new_photo(inat_observation_id="999")
+    plugin.set_target_photos([photo])
+
+    run_sync(plugin)
+
+    # Fell back and got the real hierarchy rather than a truncated one.
+    assert names_on(photo) == ["Ischnura cervula"]
+    assert "Odonata" in [k["name"] for k in plugin.keywords]

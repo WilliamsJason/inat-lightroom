@@ -364,41 +364,56 @@ function InatAPI:getTaxon(taxonId)
   return taxon, nil
 end
 
---- GET /taxa?id=1,2,3 -- fill the taxon cache in bulk.
+--- Life, the root iNaturalist hangs every kingdom off.
 --
--- Nothing is returned. This exists purely so that the getTaxon calls that
--- follow are answered from memory: after batching the observation fetches, the
--- taxon lookups were the entire remaining cost of a sync -- 158 requests at a
--- paced second each, against one request for all 169 observations.
---
--- Best effort by design. An id that does not come back, or a whole batch that
--- fails, simply leaves the cache without it, and getTaxon asks for it the slow
--- way. Reporting an error here would make a partial answer look like a failed
--- sync when the sync is about to succeed.
---
--- MUST be called from inside a task.
-function InatAPI:prefetchTaxa(ids)
-  if type(ids) ~= "table" or #ids == 0 then return end
+-- It appears in `ancestor_ids` and never in `ancestors`, so assembling one
+-- from the other has to drop it or every keyword path would gain a "Life"
+-- level that the one-at-a-time path does not produce. Two code paths building
+-- two different hierarchies for the same species is worse than either.
+local LIFE_TAXON_ID = 48460
 
-  self._taxa = self._taxa or {}
+--- Turn a taxon's `ancestor_ids` into the `ancestors` array the rest of the
+--- plugin expects, using names already fetched.
+--
+-- Verified against the API rather than assumed: for Aeshna umbrosa the single
+-- endpoint's `ancestors` is exactly `ancestor_ids` minus the leading Life and
+-- minus the taxon's own id at the end. Kingdoms check out too -- Plantae has
+-- `ancestor_ids = {Life, Plantae}` and `ancestors = {}`.
+--
+-- @param known  { [idString] = taxon }
+-- @return the ancestors array, or nil when any name is missing
+local function assembleAncestors(taxon, known)
+  local ancestors = {}
 
-  local BATCH = 200
-  local wanted = {}
-  local seen = {}
-  for _, id in ipairs(ids) do
-    local key = tostring(id)
-    if not self._taxa[key] and not seen[key] then
-      seen[key] = true
-      wanted[#wanted + 1] = key
+  for _, id in ipairs(taxon.ancestor_ids or {}) do
+    if id ~= LIFE_TAXON_ID and id ~= taxon.id then
+      local ancestor = known[tostring(id)]
+      -- A gap would silently drop a level out of the middle of the hierarchy,
+      -- so the whole taxon goes back to the slow path instead.
+      if not ancestor then return nil end
+      ancestors[#ancestors + 1] = {
+        id   = ancestor.id,
+        name = ancestor.name,
+        rank = ancestor.rank,
+      }
     end
   end
 
+  return ancestors
+end
+
+--- Fetch taxa by id, in batches, without assembling anything.
+-- @return { [idString] = taxon }, which may be missing ids that did not answer
+function InatAPI:_fetchTaxa(ids)
+  local found = {}
+  local BATCH = 200
   local index = 1
-  while index <= #wanted do
-    local last = math.min(index + BATCH - 1, #wanted)
+
+  while index <= #ids do
+    local last = math.min(index + BATCH - 1, #ids)
     local batch = {}
     for position = index, last do
-      batch[#batch + 1] = wanted[position]
+      batch[#batch + 1] = tostring(ids[position])
     end
 
     local payload, err = apiGet(API_V1 .. "/taxa", {
@@ -408,12 +423,7 @@ function InatAPI:prefetchTaxa(ids)
 
     if payload then
       for _, taxon in ipairs(payload.results or {}) do
-        -- Only a taxon that knows its own lineage is worth caching. One
-        -- without ancestors would be a cached answer that stops getTaxon ever
-        -- asking properly, and the lineage is the whole keyword hierarchy.
-        if taxon.id ~= nil and taxon.ancestors ~= nil then
-          self._taxa[tostring(taxon.id)] = taxon
-        end
+        if taxon.id ~= nil then found[tostring(taxon.id)] = taxon end
       end
     else
       logger:warn("Could not prefetch taxa: " .. (err or "unknown")
@@ -422,6 +432,85 @@ function InatAPI:prefetchTaxa(ids)
 
     index = last + 1
   end
+
+  return found
+end
+
+--- GET /taxa?id=1,2,3 -- fill the taxon cache in bulk.
+--
+-- Nothing is returned. This exists purely so that the getTaxon calls that
+-- follow are answered from memory: after batching the observation fetches, the
+-- taxon lookups were the entire remaining cost of a sync -- 158 requests at a
+-- paced second each, against one request for all 169 observations.
+--
+-- Takes two rounds, because the list endpoint does not return `ancestors` --
+-- only `ancestor_ids`. The first round fetches the species, the second fetches
+-- every distinct ancestor named in their id lists, and the lineages are then
+-- assembled locally. Roughly four requests where there were 158.
+--
+-- Best effort by design. Anything that cannot be assembled completely is left
+-- out of the cache and getTaxon asks for it the slow way. Reporting an error
+-- here would make a partial answer look like a failed sync when the sync is
+-- about to succeed.
+--
+-- MUST be called from inside a task.
+function InatAPI:prefetchTaxa(ids)
+  if type(ids) ~= "table" or #ids == 0 then return end
+
+  self._taxa = self._taxa or {}
+
+  local wanted, seen = {}, {}
+  for _, id in ipairs(ids) do
+    local key = tostring(id)
+    if not self._taxa[key] and not seen[key] then
+      seen[key] = true
+      wanted[#wanted + 1] = key
+    end
+  end
+  if #wanted == 0 then return end
+
+  local known = self:_fetchTaxa(wanted)
+
+  -- Round two: the ancestors, which are taxa in their own right.
+  local missing, asked = {}, {}
+  for _, taxon in pairs(known) do
+    for _, id in ipairs(taxon.ancestor_ids or {}) do
+      local key = tostring(id)
+      if id ~= LIFE_TAXON_ID and not known[key] and not asked[key] then
+        asked[key] = true
+        missing[#missing + 1] = key
+      end
+    end
+  end
+
+  if #missing > 0 then
+    for key, taxon in pairs(self:_fetchTaxa(missing)) do
+      known[key] = taxon
+    end
+  end
+
+  local cached = 0
+  for key, taxon in pairs(known) do
+    -- A response that already carries its lineage is used as it stands. One
+    -- that carries only ids gets it assembled. One that has neither is not
+    -- cached at all: assembling nothing yields an empty ancestors list, which
+    -- does not mean "unknown" -- it means "kingdom", and caching that would
+    -- file a species directly under the root and stop getTaxon ever asking
+    -- properly.
+    local ancestors = taxon.ancestors
+    if ancestors == nil and taxon.ancestor_ids ~= nil then
+      ancestors = assembleAncestors(taxon, known)
+    end
+
+    if ancestors then
+      taxon.ancestors = ancestors
+      self._taxa[key] = taxon
+      cached = cached + 1
+    end
+  end
+
+  logger:info(string.format("Prefetched %d taxa (%d asked for)",
+    cached, #wanted))
 end
 
 --- Build the Lightroom keyword path for a taxon: kingdom down to the taxon,
