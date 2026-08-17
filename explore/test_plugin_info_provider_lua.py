@@ -31,6 +31,7 @@ pytest.importorskip("lupa.lua51", reason="lupa is not installed")
 import lupa.lua51 as lupa51  # noqa: E402
 
 from lua_harness import LuaPlugin  # noqa: E402
+from plugin_version import number_string, read_version  # noqa: E402
 
 
 @pytest.fixture
@@ -116,9 +117,11 @@ def test_the_installed_version_is_shown(plugin, provider):
     p = props(plugin)
     provider["initialise"](p, PLUGIN_PATH)
 
-    assert p["installedVersion"] == "0.1.0", (
+    assert p["installedVersion"] == number_string(read_version()), (
         "The Plug-in Manager should show the version from Info.lua. Reading it "
-        "is the one thing this section must do even with no network."
+        "is the one thing this section must do even with no network. Expected "
+        "is read from Info.lua rather than written out, so bumping the version "
+        "for a release does not fail a test about where the number comes from."
     )
 
 
