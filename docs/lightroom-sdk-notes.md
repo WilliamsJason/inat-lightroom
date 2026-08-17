@@ -344,6 +344,73 @@ The general shape: **the pieces of a dialog can be unit tested individually and
 still fail together**, because what breaks is the context they are assembled in.
 Something has to open it the way the user does.
 
+### The third failure: `table.sort` is a C call too
+
+The guard above worked. It was also the only thing standing between the user and
+a picker that offered nothing, because the walk still failed — three releases
+running, in the same twenty lines:
+
+```
+Settings: could not list keywords for the picker:
+Yielding is not allowed within a C or metamethod call
+```
+
+The message is the `pcall` one, and there was no `pcall`. The culprit was the
+comparator:
+
+```lua
+table.sort(sorted, function(a, b) return a:getName() < b:getName() end)
+```
+
+`table.sort` is a C function that calls back into Lua, so the comparator runs
+across the same C boundary a `pcall` puts up — and `getName` yields. Nothing in
+the shape of the line says "SDK call inside a C call", which is exactly the
+thing to look for. The fix is to read every name *before* sorting, and sort on
+the values:
+
+```lua
+for _, kw in ipairs(keywords or {}) do
+  sorted[#sorted + 1] = { keyword = kw, name = kw:getName() }
+end
+table.sort(sorted, function(a, b) return a.name < b.name end)
+```
+
+Generalised: **read the catalog into plain values before handing anything to a
+C function that calls your code back** — `table.sort` is the common one, and
+any `__index`/`__lt` metamethod is the same trap.
+
+Two things about how this survived so long:
+
+- The harness counted only `pcall`, so its stubs happily yielded inside a
+  comparator. It now wraps `table.sort` on the same counter, and `getName`,
+  `getChildren` and `getKeywords` announce that they yield. Reverting the
+  comparator fails two tests with Lightroom's own message.
+- **A guard that logs is a place bugs go to live.** Every direct test of
+  `keywordRootItems` passed, because the harness let the sort work; in the host,
+  the failure was swallowed by the very `LrTasks.pcall` that keeps the dialog
+  open, and surfaced only as a popup with one row in it. Where a fallback
+  exists, assert that it was *not* taken — the dialog's test now fails if the
+  warning is logged at all.
+
+## A `popup_menu` does not cope with a long list -- so do not build one
+
+`f:popup_menu` puts every item on screen at once. Given a few hundred it draws
+a menu the height and width of the display, with the longest title setting the
+width and a scroll arrow at each end. There is no `max_visible`, no filtering,
+and no truncation.
+
+The keyword-root picker hit this the moment it worked: it listed the catalog's
+whole keyword tree, and on a synced catalog that tree is mostly the plugin's
+own taxonomy -- five hundred rows of `iNaturalist > Animalia > Arthropoda > …`
+covering the screen. The item cap that was supposed to protect against this was
+doing its job perfectly; five hundred items is still unusable.
+
+A cap on **quantity** is not the same as a cap on **relevance**. The list is
+two levels deep now, which is where roots actually live, and the cap stayed as
+a backstop for a catalog that is wide rather than deep. When a control cannot
+show a big list, the answer is a smaller question, not a bigger control -- and
+in a dialog with a free-text field beside it, "type the rest" is a real answer.
+
 ## `f:static_text` drops a word rather than clipping it
 
 Given a fixed `width`, a `static_text` whose contents do not fit does not

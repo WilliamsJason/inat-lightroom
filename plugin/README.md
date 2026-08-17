@@ -335,9 +335,12 @@ observation's UUID, URL and quality grade.
 **Keyword root** on the Observations tab of settings decides where the tree
 hangs. It is a keyword path, written the way Lightroom writes one: `Nature >
 iNaturalist` nests the tree two levels down, inside a keyword you already have.
-The popup beside the field lists the keywords in your catalog so you can pick
-one instead of typing it. Clear the field and the kingdoms are created at the
-top level of your keyword list.
+The popup beside the field lists your catalog's top two levels of keywords so
+you can pick one instead of typing it. It stops at two on purpose: a sync
+writes a keyword per taxon under the root, so a deeper list would be mostly
+this plugin's own output. Anything further down is quicker to type than to find
+— the field takes a path of any depth. Clear the field and the kingdoms are
+created at the top level of your keyword list.
 
 Changing it does not move the keywords already written; the next sync builds
 the tree in the new place and leaves the old one where it is.

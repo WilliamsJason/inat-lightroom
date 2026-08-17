@@ -234,7 +234,7 @@ def test_an_emptied_root_is_stored_as_empty(plugin, dialog, settings):
     assert settings["get"]("sync_keyword_root") == ""
 
 
-def test_the_picker_offers_every_keyword_in_the_catalog(plugin, dialog):
+def test_the_picker_offers_the_catalogs_top_two_levels(plugin, dialog):
     plugin.add_keyword("Nature")
     plugin.add_keyword("Places")
     plugin.add_keyword("Wildlife", "Nature")
@@ -243,6 +243,41 @@ def test_the_picker_offers_every_keyword_in_the_catalog(plugin, dialog):
     values = [items[i]["value"] for i in range(1, len(items) + 1)]
 
     assert values == ["", "Nature", "Nature > Wildlife", "Places"]
+
+
+def test_the_picker_does_not_offer_the_taxonomy_it_writes_itself(plugin, dialog):
+    """The list used to be the whole tree, which meant the plugin's own output.
+
+    A synced catalog holds a keyword per taxon under the root, so the popup
+    filled with hundreds of rows of "iNaturalist > Animalia > Arthropoda > …"
+    -- covering the screen, and every one of them an answer nobody wants to the
+    question of where the taxonomy should go.
+    """
+    plugin.add_keyword("iNaturalist")
+    plugin.add_keyword("Animalia", "iNaturalist")
+    plugin.add_keyword("Arthropoda", "Animalia")
+    plugin.add_keyword("Insecta", "Arthropoda")
+
+    items = plugin.in_task(dialog["keywordRootItems"], plugin.catalog)
+    values = [items[i]["value"] for i in range(1, len(items) + 1)]
+
+    assert values == ["", "iNaturalist", "iNaturalist > Animalia"]
+
+
+def test_the_picker_does_not_read_below_what_it_lists(plugin, dialog):
+    """Reading a level to discard it is the expensive half of the walk on
+    exactly the catalogs that made this necessary -- a taxonomy tree is deep,
+    and every level of it is a catalog read."""
+    plugin.add_keyword("iNaturalist")
+    plugin.add_keyword("Animalia", "iNaturalist")
+    plugin.add_keyword("Arthropoda", "Animalia")
+
+    plugin.in_task(dialog["keywordRootItems"], plugin.catalog)
+
+    assert "Animalia" not in plugin.keyword_children_read, (
+        "The children of a keyword at the deepest listed level were read and "
+        "then thrown away."
+    )
 
 
 def test_the_pickers_first_item_chooses_nothing(plugin, dialog):
@@ -267,8 +302,9 @@ def test_a_child_is_offered_as_a_full_path(plugin, dialog):
 
 
 def test_the_picker_stops_before_it_lists_a_whole_catalog(plugin, dialog):
-    """This plugin creates a keyword per taxon, so a heavy user's catalog can
-    hold tens of thousands. The edit field still takes any path."""
+    """Depth keeps the list short on a synced catalog; this is the backstop for
+    the other shape, a catalog wide at the top. The edit field still takes any
+    path."""
     limit = int(dialog["KEYWORD_ROOT_PICK_LIMIT"])
     for i in range(limit + 50):
         plugin.add_keyword(f"kw{i:05d}")
@@ -295,6 +331,29 @@ def test_opening_the_dialog_reads_the_catalog_from_inside_a_task(plugin, dialog)
 
     dialog["show"]()
     plugin.run_pending_tasks()
+
+
+def test_opening_the_dialog_leaves_the_picker_with_the_catalogs_keywords(
+    plugin, dialog
+):
+    """The failure that reached a user was not a missing dialog but an empty
+    popup: it opened, listed only "Choose an existing keyword…", and looked
+    like a catalog with no keywords in it.
+
+    Building the list is guarded, so anything raised in there is swallowed and
+    only logged -- which means the tests that call keywordRootItems directly
+    can pass while the dialog's own popup holds nothing. The warning is the
+    only evidence, so this asserts on its absence.
+    """
+    plugin.add_keyword("Nature")
+    plugin.add_keyword("Wildlife", "Nature")
+
+    dialog["show"]()
+    plugin.run_pending_tasks()
+
+    assert not any("could not list keywords" in line for line in plugin.log_lines), (
+        "The picker fell back to its prompt: " + "; ".join(plugin.log_lines)
+    )
 
 
 def test_the_dialog_opens_even_when_the_keywords_cannot_be_read(plugin, dialog):
