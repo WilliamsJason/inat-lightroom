@@ -296,6 +296,30 @@ stubs for `createKeyword`, `withWriteAccessDo` and `LrHttp` refuse to run while
 one is. Reverting the fix makes the test fail with the same error Lightroom
 gave, which is the only way to know the guard guards anything.
 
+## A menu item does not run in a task, and a dialog built from one can raise
+
+`LrFunctionContext.callWithContext` does not create a task. Neither does the
+script Lightroom runs when a **Plug-in Extras** item is clicked. So a dialog
+whose *construction* touches the catalog raises before it can appear:
+
+```
+An internal error has occurred: We can only wait from within a task
+```
+
+Unlike the `pcall` messages above, this one is shown to the user, and it names
+neither the call nor the module. The window simply never opens.
+
+`catalog:getKeywords()` is one such call. The settings dialog began walking it
+to build the keyword-root picker, which turned "Pinned Settings…" into that
+dialog for every user — while all 37 tests for the module still passed, because
+a stub that hands back a table cannot refuse. `SettingsDialog.show` posts a task
+now, and the harness's `getKeywords` refuses outside one, so opening the dialog
+the way the menu does is a test rather than a thing you find in the host.
+
+The general shape: **the pieces of a dialog can be unit tested individually and
+still fail together**, because what breaks is the context they are assembled in.
+Something has to open it the way the user does.
+
 ## `f:static_text` drops a word rather than clipping it
 
 Given a fixed `width`, a `static_text` whose contents do not fit does not

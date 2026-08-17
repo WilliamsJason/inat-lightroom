@@ -648,7 +648,6 @@ end
 -- Showing it
 --------------------------------------------------------------------------------
 
---- Open the settings dialog. Modal, so it blocks until dismissed.
 --- Build the tab views.
 --
 -- Exposed so their identifiers can be checked without opening a modal dialog.
@@ -664,8 +663,22 @@ function SettingsDialog.tabs(f, props, actions)
   }
 end
 
+--- Open the settings dialog.
+--
+-- Returns as soon as the task is queued; the dialog itself is modal, so it
+-- blocks that task until dismissed.
 function SettingsDialog.show()
-  LrFunctionContext.callWithContext("inat_settings", function(context)
+  -- A task, not a plain context. The keyword-root picker walks the catalog to
+  -- build its list, and catalog:getKeywords refuses outside a task -- Lightroom
+  -- reports it as "An internal error has occurred: We can only wait from within
+  -- a task", names nothing, and the settings window simply never opens. A menu
+  -- item's script does not run in a task, so this has to make one.
+  --
+  -- The context belongs to the task rather than to a caller that has already
+  -- returned, which is the same reason syncAll and reverseSync below post their
+  -- own. A modal dialog is fine inside a task; reverseSync already opens one.
+  LrFunctionContext.postAsyncTaskWithContext("inat_settings", function(context)
+
     local f     = LrView.osFactory()
     local props = LrBinding.makePropertyTable(context)
 

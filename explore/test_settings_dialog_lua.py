@@ -239,7 +239,7 @@ def test_the_picker_offers_every_keyword_in_the_catalog(plugin, dialog):
     plugin.add_keyword("Places")
     plugin.add_keyword("Wildlife", "Nature")
 
-    items = dialog["keywordRootItems"](plugin.catalog)
+    items = plugin.in_task(dialog["keywordRootItems"], plugin.catalog)
     values = [items[i]["value"] for i in range(1, len(items) + 1)]
 
     assert values == ["", "Nature", "Nature > Wildlife", "Places"]
@@ -248,7 +248,7 @@ def test_the_picker_offers_every_keyword_in_the_catalog(plugin, dialog):
 def test_the_pickers_first_item_chooses_nothing(plugin, dialog):
     """Selecting it must not empty the field -- it is the popup's resting
     state, not a keyword."""
-    items = dialog["keywordRootItems"](plugin.catalog)
+    items = plugin.in_task(dialog["keywordRootItems"], plugin.catalog)
 
     assert items[1]["title"] == dialog["KEYWORD_ROOT_PICK_PROMPT"]
     assert items[1]["value"] == ""
@@ -260,7 +260,7 @@ def test_a_child_is_offered_as_a_full_path(plugin, dialog):
     plugin.add_keyword("Nature")
     plugin.add_keyword("Insects", "Nature")
 
-    items = dialog["keywordRootItems"](plugin.catalog)
+    items = plugin.in_task(dialog["keywordRootItems"], plugin.catalog)
     titles = [items[i]["title"] for i in range(1, len(items) + 1)]
 
     assert "Nature > Insects" in titles
@@ -273,9 +273,24 @@ def test_the_picker_stops_before_it_lists_a_whole_catalog(plugin, dialog):
     for i in range(limit + 50):
         plugin.add_keyword(f"kw{i:05d}")
 
-    items = dialog["keywordRootItems"](plugin.catalog)
+    items = plugin.in_task(dialog["keywordRootItems"], plugin.catalog)
 
     assert len(items) <= limit + 1
+
+
+def test_opening_the_dialog_reads_the_catalog_from_inside_a_task(plugin, dialog):
+    """The picker walks catalog:getKeywords, which refuses outside a task.
+
+    A menu item's script does not run in one, and neither does
+    callWithContext, so building the dialog there raised before it could
+    appear: "An internal error has occurred: We can only wait from within a
+    task", naming nothing. Every other test here calls the pieces directly,
+    so only opening it the way the menu does can catch this.
+    """
+    plugin.add_keyword("Nature")
+
+    dialog["show"]()
+    plugin.run_pending_tasks()
 
 
 def bindable(plugin):
