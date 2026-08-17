@@ -39,7 +39,7 @@ def new_cache(plugin, cache_module, folder="/tmp/thumbs", write=None):
 
     cache = cache_module["new"](plugin.runtime.table_from({
         "folder": folder,
-        "placeholder": "/plugins/inat.lrplugin/no-photo.png",
+        "placeholder": "/plugins/pinned.lrplugin/no-photo.png",
         "write": write or record,
     }))
     return cache, written

@@ -84,14 +84,22 @@ try {
     Fail "Could not unpack the archive: $_" 3
 }
 
-# The archive is built with inat.lrplugin at its root. Checking for the one file
-# Lightroom cannot load a plugin without is what stops a wrongly shaped archive
-# from ever reaching the installed copy.
-$info = Join-Path $Destination 'inat.lrplugin\Info.lua'
-if (-not (Test-Path -LiteralPath $info -PathType Leaf)) {
+# The archive is built with one <name>.lrplugin folder at its root. The name is
+# discovered rather than hardcoded: this script is the *installed* copy, one
+# release older than the archive it is checking, so a literal name here is a
+# name no later release could change without this rejecting it. Checking for
+# the one file Lightroom cannot load a plugin without is what stops a wrongly
+# shaped archive from ever reaching the installed copy.
+$candidates = @(Get-ChildItem -LiteralPath $Destination -Directory -Filter '*.lrplugin' -ErrorAction SilentlyContinue |
+    Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'Info.lua') -PathType Leaf })
+
+if ($candidates.Count -ne 1) {
     # Leave nothing behind that a later run could mistake for a staged update.
     Remove-Item -LiteralPath $Destination -Recurse -Force -ErrorAction SilentlyContinue
-    Fail "Unpacked archive has no inat.lrplugin\Info.lua" 4
+    if ($candidates.Count -eq 0) {
+        Fail "Unpacked archive has no *.lrplugin folder containing Info.lua" 4
+    }
+    Fail "Unpacked archive has $($candidates.Count) *.lrplugin folders; expected one" 4
 }
 
 exit 0

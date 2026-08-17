@@ -5,7 +5,7 @@
   the Lightroom SDK which cannot be answered by dumping binaries.
 
   Deliberately a separate plugin rather than a menu item bolted onto
-  inat.lrplugin. It reads the catalog and builds dialogs; nothing it does
+  pinned.lrplugin. It reads the catalog and builds dialogs; nothing it does
   should ever be able to ship by accident, and installing it does not disturb
   the copy of the real plugin Lightroom already points at.
 

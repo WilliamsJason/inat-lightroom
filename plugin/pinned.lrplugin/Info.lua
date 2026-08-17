@@ -1,7 +1,7 @@
 --[[
   Info.lua
   --------
-  Plugin identity and manifest for inat.lrplugin.
+  Plugin identity and manifest for pinned.lrplugin.
 
   Required by Lightroom; this file is read before any other Lua in the plugin.
   See: https://www.adobe.io/apis/creativecloud/lightroomsdk.html

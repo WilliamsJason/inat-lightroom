@@ -415,7 +415,7 @@ def test_no_user_facing_string_points_at_the_wrong_menu(plugin):
     Credentials" item that had been gone for two redesigns."""
     from pathlib import Path
 
-    plugin_dir = Path(__file__).resolve().parent.parent / "plugin" / "inat.lrplugin"
+    plugin_dir = Path(__file__).resolve().parent.parent / "plugin" / "pinned.lrplugin"
     for path in sorted(plugin_dir.glob("*.lua")):
         for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if "Plug-in Extras" not in line:
@@ -478,7 +478,7 @@ def test_menu_scripts_are_never_required_by_other_modules():
     unreachable from anywhere but the menu."""
     from pathlib import Path
 
-    plugin_dir = Path(__file__).resolve().parent.parent / "plugin" / "inat.lrplugin"
+    plugin_dir = Path(__file__).resolve().parent.parent / "plugin" / "pinned.lrplugin"
     declared = {
         item["file"]
         for item in lua_list(LuaPlugin().require("Info")["LrExportMenuItems"])

@@ -31,7 +31,7 @@ except ImportError:
         "It bundles a real Lua 5.1, which is what Lightroom runs."
     )
 
-PLUGIN_DIR = Path(__file__).resolve().parent.parent / "plugin" / "inat.lrplugin"
+PLUGIN_DIR = Path(__file__).resolve().parent.parent / "plugin" / "pinned.lrplugin"
 
 
 def check(path: Path, runtime) -> str | None:

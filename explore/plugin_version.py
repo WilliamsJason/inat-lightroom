@@ -27,7 +27,7 @@ from pathlib import Path
 from lupa import lua51
 
 INFO_LUA = (
-    Path(__file__).resolve().parent.parent / "plugin" / "inat.lrplugin" / "Info.lua"
+    Path(__file__).resolve().parent.parent / "plugin" / "pinned.lrplugin" / "Info.lua"
 )
 
 # Info.lua calls LOC at load time for the plugin and menu names. The real one

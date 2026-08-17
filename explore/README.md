@@ -183,7 +183,7 @@ Lightroom is pointed at, so that switching branch does not mean re-adding the
 plugin in the Plug-in Manager:
 
 ```powershell
-.\install_plugin.ps1        # → ~\Documents\LrPlugins\inat.lrplugin
+.\install_plugin.ps1        # → ~\Documents\LrPlugins\pinned.lrplugin
 ```
 
 See [plugin/README.md](../plugin/README.md#installing-a-working-tree) for why

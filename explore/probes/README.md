@@ -10,7 +10,7 @@ are strings in `LibraryToolkit.dll` or `ui.dll`. It cannot answer "how slow is
 it", which needs a real catalog and a real window.
 
 `sdkprobe.lrplugin` is a separate plugin, not a menu item added to
-`inat.lrplugin`. It has its own `LrToolkitIdentifier`, so both can be installed
+`pinned.lrplugin`. It has its own `LrToolkitIdentifier`, so both can be installed
 at once, and nothing it does can ship by accident.
 
 ## Installing

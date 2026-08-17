@@ -29,14 +29,18 @@ local prefix = "com.github.inat-lightroom."
 
 return {
   -- The title is what the Metadata panel's preset dropdown shows, alongside
-  -- Lightroom's own Default / EXIF / IPTC entries.
+  -- Lightroom's own Default / EXIF / IPTC entries. Those are all descriptions
+  -- of what the preset contains, so a bare product name in that list says
+  -- nothing about what selecting it would do -- hence the full name here, even
+  -- though the window and the menu items get away with just "Pinned".
   --
   -- The id is not shown anywhere; it is how Lightroom remembers which preset
   -- was selected, and it shares a namespace with every other installed
   -- plugin's tagsets. It was "iNaturalist", which is the name another plugin
   -- for this site would reach for first. Renaming it costs one reselect of the
-  -- preset -- do not rename it again once anyone else is installing this.
-  title = LOC "$$$/iNatLightroom/Tagset/Only=Pinned",
+  -- preset -- do not rename it again once anyone else is installing this. The
+  -- title above is free to change at any time; only the id is not.
+  title = LOC "$$$/iNatLightroom/Tagset/Only=Pinned for iNaturalist",
   id    = "pinnedForInaturalist",
 
   items = {

@@ -75,8 +75,8 @@ close to a panel as a plugin gets. On Windows it is nudged into behaving like
 one: a small helper hands the window to Lightroom so it stays above Lightroom,
 and only Lightroom, instead of the whole desktop.
 
-The **Metadata panel** carries an iNaturalist preset, but it is display only.
-It shows what the observation says; it does not change it.
+The **Metadata panel** carries a **Pinned for iNaturalist** preset, but it is
+display only. It shows what the observation says; it does not change it.
 
 There was a Publish Service and an ordinary Export target. Both are gone. A
 publish service gives you Lightroom's new/modified/published bookkeeping, but
@@ -102,7 +102,7 @@ deliberate no-op.
 
 Download `inat-lightroom-<version>.zip` from the
 [latest release](https://github.com/WilliamsJason/inat-lightroom/releases/latest),
-unzip it, and point **File → Plug-in Manager → Add** at the `inat.lrplugin`
+unzip it, and point **File → Plug-in Manager → Add** at the `pinned.lrplugin`
 folder. Keep it somewhere permanent that you can write to — the plugin updates
 itself in place, and Lightroom remembers it by path.
 
@@ -154,7 +154,7 @@ inat-lightroom/
 │
 └── plugin/                      # Adobe Lightroom Classic plugin (Lua)
     ├── README.md
-    └── inat.lrplugin/
+    └── pinned.lrplugin/
         ├── Info.lua             # Plugin identity, version, menu, tagsets, URL handler
         ├── ObservationPanelMenu.lua  # Plug-in Extras entry: opens the panel
         ├── ObservationPanel.lua # The panel's window: view and wiring
@@ -222,7 +222,7 @@ See [`plugin/README.md`](plugin/README.md) for installation and development inst
 Releases are built by GitHub Actions from a tag, and the tag is the source of
 truth for the version:
 
-1. Bump `VERSION` in `plugin/inat.lrplugin/Info.lua`, and commit it.
+1. Bump `VERSION` in `plugin/pinned.lrplugin/Info.lua`, and commit it.
 2. Tag the commit `vX.Y.Z` — matching those numbers exactly — and push the tag.
 
 The workflow then parses the Lua under 5.1, runs the tests, refuses to continue

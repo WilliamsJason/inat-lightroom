@@ -1,6 +1,6 @@
 # Lightroom Plugin
 
-This directory contains **Pinned for iNaturalist**, the `inat.lrplugin` Adobe
+This directory contains **Pinned for iNaturalist**, the `pinned.lrplugin` Adobe
 Lightroom Classic plugin.
 
 ---
@@ -12,9 +12,9 @@ The plugin is an unofficial, community-built project — see the
 
 1. Download `inat-lightroom-<version>.zip` from the
    [latest release](https://github.com/WilliamsJason/inat-lightroom/releases/latest)
-   and unzip it. You will get a folder called `inat.lrplugin`.
+   and unzip it. You will get a folder called `pinned.lrplugin`.
 2. In Lightroom Classic, open **File → Plug-in Manager**.
-3. Click **Add**, select the `inat.lrplugin` folder, and click **Add Plug-in**.
+3. Click **Add**, select the `pinned.lrplugin` folder, and click **Add Plug-in**.
 4. The plugin appears in the list as **Pinned for iNaturalist**; ensure it is
    checked (enabled).
 
@@ -26,7 +26,7 @@ Lightroom remembers it by path.
 ### The standard plugin location
 
 Lightroom Classic has a standard folder for plugins, and anything in it is
-loaded automatically at start-up — so if you put `inat.lrplugin` there, steps 2
+loaded automatically at start-up — so if you put `pinned.lrplugin` there, steps 2
 and 3 above are unnecessary.
 
 - **Windows** — `C:\Users\<username>\AppData\Roaming\Adobe\Lightroom\Modules`
@@ -40,7 +40,7 @@ own user folder, so the updater can write to them. (Thanks to
 documenting these paths clearly.)
 
 To run from a clone of this repository instead, point step 3 at
-`plugin/inat.lrplugin`.
+`plugin/pinned.lrplugin`.
 
 ---
 
@@ -357,11 +357,12 @@ when convenient. Removing a photo from it no longer detaches anything — use
 
 ---
 
-## The iNaturalist metadata preset
+## The Pinned for iNaturalist metadata preset
 
 The plugin's fields live in the **Metadata** panel. Open the drop-down at the
-top left of that panel and choose **iNaturalist**. The panel then shows the file
-name and every iNaturalist field, with a line at the top pointing at the panel.
+top left of that panel and choose **Pinned for iNaturalist**. The panel then
+shows the file name and every iNaturalist field, with a line at the top
+pointing at the panel.
 
 Switching back to **Default** gets your usual metadata fields back — the two
 presets are one drop-down apart, so use whichever suits what you are doing.
@@ -401,7 +402,7 @@ The plugin is written in **Lua** using the [Lightroom Classic SDK](https://www.a
 ### File structure
 
 ```
-inat.lrplugin/
+pinned.lrplugin/
 ├── Info.lua                   # Plugin identity, version, menu, tagsets, URL handler
 ├── ObservationPanelMenu.lua   # Plug-in Extras entry: opens the panel
 ├── ObservationPanel.lua       # The panel's window: view and wiring
@@ -459,7 +460,7 @@ it from whichever branch or worktree you are working in:
 
 ```powershell
 cd explore
-.\install_plugin.ps1        # → ~\Documents\LrPlugins\inat.lrplugin
+.\install_plugin.ps1        # → ~\Documents\LrPlugins\pinned.lrplugin
 ```
 
 The source is taken from wherever the script lives, so running it from a

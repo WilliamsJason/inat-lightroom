@@ -66,8 +66,18 @@ else
     exit 3
 fi
 
-if [ ! -f "$destination/inat.lrplugin/Info.lua" ]; then
-    echo "Unpacked archive has no inat.lrplugin/Info.lua" >&2
+# The archive is built with one <name>.lrplugin folder at its root. The name is
+# discovered rather than hardcoded: this script is the installed copy, one
+# release older than the archive it is checking, so a literal name here is a
+# name no later release could change without this rejecting it.
+count=0
+for candidate in "$destination"/*.lrplugin; do
+    [ -f "$candidate/Info.lua" ] && count=$((count + 1))
+done
+
+if [ "$count" -ne 1 ]; then
+    rm -rf "$destination"
+    echo "Unpacked archive has $count *.lrplugin folders containing Info.lua; expected one" >&2
     exit 4
 fi
 

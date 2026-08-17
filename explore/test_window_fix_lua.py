@@ -42,13 +42,13 @@ def test_the_helper_script_is_shipped_with_the_plugin(fix):
 
 
 def test_the_script_path_is_resolved_against_the_plugin_folder(plugin, fix):
-    path = fix.scriptPath("/somewhere/inat.lrplugin")
-    assert path == "/somewhere/inat.lrplugin/" + fix.SCRIPT_NAME
+    path = fix.scriptPath("/somewhere/pinned.lrplugin")
+    assert path == "/somewhere/pinned.lrplugin/" + fix.SCRIPT_NAME
 
 
 def test_the_command_quotes_the_script_path(fix):
-    command = fix.command("C:/Program Files/inat.lrplugin/fix.ps1", "iNaturalist")
-    assert '-File "C:/Program Files/inat.lrplugin/fix.ps1"' in command, (
+    command = fix.command("C:/Program Files/pinned.lrplugin/fix.ps1", "iNaturalist")
+    assert '-File "C:/Program Files/pinned.lrplugin/fix.ps1"' in command, (
         "an unquoted path breaks on the first space, and plugin folders live "
         "under Program Files and user names with spaces in them"
     )
