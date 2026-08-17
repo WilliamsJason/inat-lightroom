@@ -194,6 +194,140 @@ def test_sync_all_says_so_when_nothing_is_linked(plugin, dialog):
     assert "No photos" in plugin.dialogs[0]["message"]
 
 
+# ---------------------------------------------------------------------------
+# The keyword root
+#
+# Configurable because rcloran's lr-inaturalist-publish -- the other plugin
+# with this workflow -- syncs taxonomy keywords under a root the user picks and
+# prunes anything under it that it considers non-equivalent. Two plugins
+# pointed at one keyword means whichever syncs last strips the other's
+# keywords off the photo, silently.
+# ---------------------------------------------------------------------------
+
+
+def test_the_root_still_defaults_to_inaturalist(settings):
+    """The root is provenance, not branding: keywords leave Lightroom as XMP
+    subject tags, where "iNaturalist > Animalia > …" says where the
+    identification came from."""
+    assert settings["DEFAULTS"]["sync_keyword_root"] == "iNaturalist"
+
+
+def test_saving_stores_the_keyword_root(plugin, dialog, settings):
+    dialog["savePreferences"](props(plugin, sync_keyword_root="Nature > iNat"))
+
+    assert settings["get"]("sync_keyword_root") == "Nature > iNat"
+
+
+def test_saving_tidies_a_typed_root(plugin, dialog, settings):
+    """A trailing separator would otherwise become an empty keyword level,
+    which the sync refuses -- so the whole lineage would go unwritten."""
+    dialog["savePreferences"](props(plugin, sync_keyword_root="  Nature >  "))
+
+    assert settings["get"]("sync_keyword_root") == "Nature"
+
+
+def test_an_emptied_root_is_stored_as_empty(plugin, dialog, settings):
+    """Empty means the top level of the catalog, which is a choice and not an
+    absence -- it must not fall back to the default."""
+    dialog["savePreferences"](props(plugin, sync_keyword_root=""))
+
+    assert settings["get"]("sync_keyword_root") == ""
+
+
+def test_the_picker_offers_every_keyword_in_the_catalog(plugin, dialog):
+    plugin.add_keyword("Nature")
+    plugin.add_keyword("Places")
+    plugin.add_keyword("Wildlife", "Nature")
+
+    items = dialog["keywordRootItems"](plugin.catalog)
+    values = [items[i]["value"] for i in range(1, len(items) + 1)]
+
+    assert values == ["", "Nature", "Nature > Wildlife", "Places"]
+
+
+def test_the_pickers_first_item_chooses_nothing(plugin, dialog):
+    """Selecting it must not empty the field -- it is the popup's resting
+    state, not a keyword."""
+    items = dialog["keywordRootItems"](plugin.catalog)
+
+    assert items[1]["title"] == dialog["KEYWORD_ROOT_PICK_PROMPT"]
+    assert items[1]["value"] == ""
+
+
+def test_a_child_is_offered_as_a_full_path(plugin, dialog):
+    """Bare names would be ambiguous: two different parents can each have a
+    child called Insects, and the setting has to say which."""
+    plugin.add_keyword("Nature")
+    plugin.add_keyword("Insects", "Nature")
+
+    items = dialog["keywordRootItems"](plugin.catalog)
+    titles = [items[i]["title"] for i in range(1, len(items) + 1)]
+
+    assert "Nature > Insects" in titles
+
+
+def test_the_picker_stops_before_it_lists_a_whole_catalog(plugin, dialog):
+    """This plugin creates a keyword per taxon, so a heavy user's catalog can
+    hold tens of thousands. The edit field still takes any path."""
+    limit = int(dialog["KEYWORD_ROOT_PICK_LIMIT"])
+    for i in range(limit + 50):
+        plugin.add_keyword(f"kw{i:05d}")
+
+    items = dialog["keywordRootItems"](plugin.catalog)
+
+    assert len(items) <= limit + 1
+
+
+def bindable(plugin):
+    """A property table of the kind the dialog builds, which notifies."""
+    return plugin.env["stubs"]["LrBinding"]["makePropertyTable"]()
+
+
+def test_picking_a_keyword_fills_in_the_field(plugin, dialog):
+    props = bindable(plugin)
+    props["sync_keyword_root"] = "iNaturalist"
+    dialog["watchKeywordRootPicker"](props)
+
+    props["sync_keyword_root_pick"] = "Nature > Wildlife"
+
+    assert props["sync_keyword_root"] == "Nature > Wildlife"
+
+
+def test_the_picker_returns_to_its_prompt(plugin, dialog):
+    """Otherwise choosing the same keyword a second time is a write of the
+    value already there, which Lightroom does not notify for."""
+    props = bindable(plugin)
+    dialog["watchKeywordRootPicker"](props)
+
+    props["sync_keyword_root_pick"] = "Nature"
+
+    assert props["sync_keyword_root_pick"] == ""
+
+
+def test_the_prompt_row_does_not_empty_the_field(plugin, dialog):
+    """The reset above fires the observer again. Treating the prompt as a
+    value would wipe the root the user just chose."""
+    props = bindable(plugin)
+    props["sync_keyword_root"] = "iNaturalist"
+    dialog["watchKeywordRootPicker"](props)
+
+    props["sync_keyword_root_pick"] = ""
+
+    assert props["sync_keyword_root"] == "iNaturalist"
+
+
+def test_the_observations_tab_lets_the_root_be_edited(plugin, dialog):
+    """A setting nothing binds to cannot be changed without editing prefs by
+    hand, which is the state this replaced."""
+    from test_plugin_info_provider_lua import bound_keys, walk
+
+    observations = tabs(plugin, dialog)[1]
+    bound = [key for binding, _ in walk(observations)
+             for key in bound_keys(binding)]
+
+    assert "sync_keyword_root" in bound
+
+
 def _jwt() -> str:
     from lua_harness import make_jwt
 

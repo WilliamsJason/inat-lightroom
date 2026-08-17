@@ -321,14 +321,40 @@ on demand from the panel, or across the whole catalog from settings.
 
 A sync fetches the current community determination and:
 
-- creates or updates the taxonomic keyword hierarchy under an **iNaturalist**
-  root keyword, so searching any rank finds the photo;
+- creates or updates the taxonomic keyword hierarchy under a root keyword —
+  **iNaturalist** unless you moved it — so searching any rank finds the photo;
 - updates the custom metadata fields.
 
 A freshly created observation has no community taxon until somebody identifies
 it, so **Not identified yet** is the normal result for anything just uploaded.
 It is reported separately from errors, and the sync still records the
 observation's UUID, URL and quality grade.
+
+### Where the keywords go
+
+**Keyword root** on the Observations tab of settings decides where the tree
+hangs. It is a keyword path, written the way Lightroom writes one: `Nature >
+iNaturalist` nests the tree two levels down, inside a keyword you already have.
+The popup beside the field lists the keywords in your catalog so you can pick
+one instead of typing it. Clear the field and the kingdoms are created at the
+top level of your keyword list.
+
+Changing it does not move the keywords already written; the next sync builds
+the tree in the new place and leaves the old one where it is.
+
+It is configurable for a specific reason. rcloran's
+[lr-inaturalist-publish](https://github.com/rcloran/lr-inaturalist-publish) —
+the other plugin for this workflow, and one many people already run — also
+syncs taxonomy keywords under a root of the user's choosing, and its sync
+*prunes*: anything under that root it considers not to belong is removed from
+the photo. Its trees are not shaped like these ones, so pointing both plugins
+at the same keyword means whichever syncs last quietly strips the other's
+keywords. Give them separate roots and neither touches the other's.
+
+The default is still **iNaturalist** because the root is provenance rather than
+branding: keywords leave Lightroom as XMP subject tags, where `iNaturalist >
+Animalia > …` says where the identification came from and this plugin's own
+name would mean nothing.
 
 ---
 

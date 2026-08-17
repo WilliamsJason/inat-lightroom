@@ -686,7 +686,7 @@ A thin `InatAPI.lua` module wraps these calls and handles JSON encode/decode (vi
 Lightroom keywords are hierarchical. The sync step creates/reuses:
 
 ```
-iNaturalist
+iNaturalist                     ← configurable root (Settings.sync_keyword_root)
 └── <kingdom>
     └── <phylum>
         └── <class>
@@ -698,6 +698,20 @@ iNaturalist
 ```
 
 Using `LrCatalog:createKeyword(name, synonyms, includeOnExport, parent, skipIfAlreadyExists)`.
+
+The root is a `>`-separated keyword *path* rather than a single name, so the
+tree can be nested inside a vocabulary the user already has (`Nature >
+iNaturalist`); an empty setting means the top level of the catalog.
+`InatAPI.keywordRootPath` turns the stored string into levels, and
+`SyncCore.buildKeywordPath` is the one place that reads the setting, so every
+caller that writes a taxon — sync, reverse sync, the panel's local apply —
+files it in the same place.
+
+It is configurable because rcloran's `lr-inaturalist-publish` syncs taxonomy
+keywords under a root of *its* user's choosing and prunes anything under that
+root it considers non-equivalent. Two plugins sharing one root means whichever
+syncs last removes the other's keywords from the photo, with nothing to say
+why. Renaming the default would dodge that only by coincidence.
 
 ---
 

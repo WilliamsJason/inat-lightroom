@@ -513,10 +513,45 @@ function InatAPI:prefetchTaxa(ids)
     cached, #wanted))
 end
 
+--- The keyword levels a configured root stands for.
+--
+-- The root is a keyword *path*, not a single name, so the tree can be nested
+-- inside a vocabulary the user already has: "Nature > iNaturalist" is two
+-- levels. Written with ">" because that is how Lightroom itself spells a
+-- keyword hierarchy in its own interface.
+--
+-- Three cases that are deliberately not the same thing:
+--   nil  -- nobody said, so the historical default applies
+--   ""   -- the user emptied the setting, meaning file at the top level
+--   {…}  -- already a list of level names; handed back as-is
+--
+-- @param root  nil, a ">"-separated string, or a list of names
+-- @return      list of level names, possibly empty
+function InatAPI.keywordRootPath(root)
+  if root == nil then return { "iNaturalist" } end
+
+  if type(root) == "table" then
+    local copy = {}
+    for _, name in ipairs(root) do
+      if type(name) == "string" and name:match("^%s*(.-)%s*$") ~= "" then
+        copy[#copy + 1] = name:match("^%s*(.-)%s*$")
+      end
+    end
+    return copy
+  end
+
+  local levels = {}
+  for piece in tostring(root):gmatch("[^>]+") do
+    local name = piece:match("^%s*(.-)%s*$")
+    if name ~= "" then levels[#levels + 1] = name end
+  end
+  return levels
+end
+
 --- Build the Lightroom keyword path for a taxon: kingdom down to the taxon,
--- nested under a single root keyword.
+-- nested under the configured root, which may be several levels or none.
 function InatAPI.buildKeywordPath(taxon, root)
-  local path = { root or "iNaturalist" }
+  local path = InatAPI.keywordRootPath(root)
   for _, ancestor in ipairs(taxon.ancestors or {}) do
     path[#path + 1] = ancestor.name
   end

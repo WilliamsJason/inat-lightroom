@@ -200,6 +200,80 @@ def test_the_leaf_keyword_is_applied_to_the_photo():
     assert applied == ["Ischnura cervula"]
 
 
+# ---------------------------------------------------------------------------
+# Where the tree hangs
+#
+# Configurable because another plugin with this workflow -- rcloran's
+# lr-inaturalist-publish -- syncs taxonomy keywords under a root the user
+# picks, and prunes anything under that root it thinks does not belong. Point
+# both at one keyword and whichever syncs last strips the other's keywords off
+# the photo, with nothing to say why.
+# ---------------------------------------------------------------------------
+
+
+def test_the_root_keyword_is_the_configured_one():
+    plugin = make_plugin(
+        {"/observations/999": observation(community=DAMSELFLY)}
+    )
+    plugin.prefs["sync_keyword_root"] = "Taxonomy"
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="999")])
+
+    run_sync(plugin)
+
+    parents = {k["name"]: k["parent"] for k in plugin.keywords}
+    assert parents["Taxonomy"] is None
+    assert parents["Animalia"] == "Taxonomy"
+    assert "iNaturalist" not in parents
+
+
+def test_the_root_can_nest_inside_a_keyword_the_user_already_has():
+    """The point of a path rather than a name: somebody who keeps everything
+    under Nature can put this tree there instead of beside it."""
+    plugin = make_plugin(
+        {"/observations/999": observation(community=DAMSELFLY)}
+    )
+    plugin.add_keyword("Nature")
+    plugin.prefs["sync_keyword_root"] = "Nature > iNaturalist"
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="999")])
+
+    run_sync(plugin)
+
+    parents = {k["name"]: k["parent"] for k in plugin.keywords}
+    assert parents["Nature"] is None
+    assert parents["iNaturalist"] == "Nature"
+    assert parents["Animalia"] == "iNaturalist"
+
+
+def test_an_empty_root_files_the_kingdoms_at_the_top_level():
+    """Matching what the other plugin means by a root of -1: no wrapper
+    keyword at all."""
+    plugin = make_plugin(
+        {"/observations/999": observation(community=DAMSELFLY)}
+    )
+    plugin.prefs["sync_keyword_root"] = ""
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="999")])
+
+    run_sync(plugin)
+
+    names = [k["name"] for k in plugin.keywords]
+    parents = {k["name"]: k["parent"] for k in plugin.keywords}
+    assert names[0] == "Animalia"
+    assert parents["Animalia"] is None
+    assert parents["Ischnura cervula"] == "Ischnura"
+
+
+def test_an_untouched_setting_still_says_inaturalist():
+    """Nobody's catalog changes shape because this became configurable."""
+    plugin = make_plugin(
+        {"/observations/999": observation(community=DAMSELFLY)}
+    )
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="999")])
+
+    run_sync(plugin)
+
+    assert plugin.keywords[0] == {"name": "iNaturalist", "parent": None}
+
+
 def test_metadata_is_written_back():
     plugin = make_plugin(
         {"/observations/999": observation(community=DAMSELFLY)}
