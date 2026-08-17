@@ -1028,6 +1028,52 @@ The consequence bites tests rather than the plugin: a tagset's `items` list is
 no longer all strings, so anything iterating it to check field IDs has to skip
 the tables first.
 
+## Removing a custom metadata field leaves it in the catalog
+
+Dropping a field from `LrMetadataProvider` and bumping `schemaVersion` does not
+remove it from catalogs that already have it. Both the field spec and every
+value written to it stay behind indefinitely.
+
+Verified against a catalog carried from v2 to v5: it still held specs *and*
+values for `inat_action_sync` and `inat_action_link` (removed at v3) and
+`inat_crop` (removed at v4) — three specs the plugin no longer declares at all.
+Reading `AgPhotoPropertySpec` shows 13 rows for `sourcePlugin =
+'com.github.inat-lightroom'` against the 10 fields the plugin declares.
+
+This matters because leftovers are not invisible. Lightroom's own **All
+Plug-in Metadata** preset lists every field a plugin ever registered, so stale
+values appear there, unlabelled by anything current and impossible to edit away.
+
+There is no SDK call that deletes a field spec, and the values cannot be cleared
+either. `setPropertyForPlugin` validates its key against the schema the plugin
+*currently* declares, so writing `nil` to a removed field is refused:
+
+```
+Attempt to access property "inat_action_sync" that's not declared in Info.lua
+```
+
+**Removing a field is a one-way door.** Everything it has ever held stays in the
+catalog and keeps appearing in All Plug-in Metadata. Be sure before adding one.
+
+Establishing that cost three schema versions, because a migration that returns
+is recorded as done and never runs again — `Adobe_variablesTable` holds the
+number under `AgSdkUpgradeFunctionSucceededForSchemaVersion_<toolkit id>`. Each
+failed attempt burns one.
+
+Two of those three failed *silently*, both worth knowing:
+
+- Wrapping the pass in a plain `pcall` made `getAllPhotos` return an empty list
+  (see the `pcall` note above), so it read a 6,591-photo catalog as empty and
+  reported success. `LrTasks.pcall` fixed that and revealed the real error.
+- The migration then logged `0 of 3 field(s) clearable` — which is the only
+  reason the rejection above was ever seen. Instrument the migration before
+  attempting a third guess; the catalog cannot tell you *why* nothing happened.
+
+Verifying any of this from outside Lightroom means copying `-wal` and `-shm`
+alongside the `.lrcat`. The catalog runs in WAL mode, so a copy of the main file
+alone is a stale snapshot that makes a migration which did run look like it
+did not.
+
 ## `LrLogger` writes nothing until it is enabled
 
 `LrLogger("name")` returns a logger that silently discards everything until
