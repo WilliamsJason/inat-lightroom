@@ -68,6 +68,29 @@ local function yieldsHere(what)
   end
 end
 
+-- Some of the SDK does not merely yield when it feels like it: it refuses
+-- outright unless a task is running, with the message Lightroom puts in front
+-- of the user --
+--
+--     An internal error has occurred: We can only wait from within a task
+--
+-- -- and no clue as to which call it was. A menu item's script does not run in
+-- a task, and neither does LrFunctionContext.callWithContext, so a dialog that
+-- reads the catalog while it is being built raises before it can appear.
+--
+-- That is exactly how the settings dialog broke: the keyword-root picker walks
+-- catalog:getKeywords() to fill its list. Every test passed, because a stub
+-- that just returns a table cannot refuse.
+local taskDepth = 0
+
+local function requiresTask(what)
+  if taskDepth == 0 then
+    error("We can only wait from within a task -- " .. tostring(what)
+      .. " must be called from inside one. Use LrTasks.startAsyncTask or "
+      .. "LrFunctionContext.postAsyncTaskWithContext.", 0)
+  end
+end
+
 -- Captures every logged line so tests can assert on them if useful.
 local logLines = {}
 
@@ -190,8 +213,23 @@ local function runPendingTasks(reverse)
     -- models that without needing real concurrency.
     local index = reverse and #pendingTasks or 1
     local fn = table.remove(pendingTasks, index)
-    fn()
+    taskDepth = taskDepth + 1
+    local ok, err = realPcall(fn)
+    taskDepth = taskDepth - 1
+    if not ok then error(err, 0) end
   end
+end
+
+--- Run something as though a task were already running.
+--
+-- For testing a function the plugin only ever calls from inside a task, without
+-- routing the call through the queue just to get its return value back.
+local function runInTask(fn, ...)
+  taskDepth = taskDepth + 1
+  local results = { realPcall(fn, ...) }
+  taskDepth = taskDepth - 1
+  if not results[1] then error(results[2], 0) end
+  return unpack(results, 2)
 end
 
 stubs.LrTasks = {
@@ -606,7 +644,11 @@ catalog = {
   end,
 
   --- The top level of the keyword list. Children hang off getChildren.
+  --
+  -- Refuses outside a task, as the real one does. This is the call that broke
+  -- the settings dialog: reachable from a menu item, which is not a task.
   getKeywords = function(_self)
+    requiresTask("LrCatalog:getKeywords")
     local top = {}
     for _, keyword in ipairs(createdKeywords) do
       if keyword.parent == nil then top[#top + 1] = keyword end
@@ -896,6 +938,7 @@ return {
     }
   end,
   runPendingTasks = runPendingTasks,
+  runInTask = runInTask,
   pendingTaskCount = function() return #pendingTasks end,
   resetHttp = function() httpCalls = {} end,
 }
@@ -1203,6 +1246,15 @@ class LuaPlugin:
     def pending_task_count(self) -> int:
         """How many async tasks are queued but not yet run."""
         return int(self.env["pendingTaskCount"]())
+
+    def in_task(self, fn, *args):
+        """Call a Lua function as though a task were already running.
+
+        Parts of the catalog API refuse outside one, and the harness models
+        that. Use this for a function the plugin only ever reaches from inside
+        a task but whose return value a test wants directly.
+        """
+        return self.env["runInTask"](fn, *args)
 
     @property
     def pending_tasks(self) -> int:
