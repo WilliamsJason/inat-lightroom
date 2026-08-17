@@ -279,18 +279,41 @@ def test_the_picker_stops_before_it_lists_a_whole_catalog(plugin, dialog):
 
 
 def test_opening_the_dialog_reads_the_catalog_from_inside_a_task(plugin, dialog):
-    """The picker walks catalog:getKeywords, which refuses outside a task.
+    """The picker walks catalog:getKeywords, which refuses outside a task, and
+    reads each keyword's name, which refuses outside a read block.
 
-    A menu item's script does not run in one, and neither does
-    callWithContext, so building the dialog there raised before it could
-    appear: "An internal error has occurred: We can only wait from within a
-    task", naming nothing. Every other test here calls the pieces directly,
-    so only opening it the way the menu does can catch this.
+    A menu item's script is neither, and neither is callWithContext, so
+    building the dialog there raised before it could appear. The two failures
+    read very differently to a user: the first arrived as "An internal error
+    has occurred: We can only wait from within a task", and the second, raised
+    inside the task that replaced it, as nothing whatsoever -- the menu item
+    simply did nothing. Every other test here calls the pieces directly, so
+    only opening it the way the menu does can catch either.
     """
     plugin.add_keyword("Nature")
+    plugin.add_keyword("Wildlife", "Nature")
 
     dialog["show"]()
     plugin.run_pending_tasks()
+
+
+def test_the_dialog_opens_even_when_the_keywords_cannot_be_read(plugin, dialog):
+    """The picker is a convenience; the dialog is not.
+
+    A failed catalog read must cost the popup and nothing else -- the field
+    beside it still takes any path typed in, and the other two tabs hold the
+    credentials. Losing the whole window over it is how one broken read made
+    every setting in the plugin unreachable.
+    """
+    plugin.set_keywords_fail(True)
+
+    dialog["show"]()
+    plugin.run_pending_tasks()
+
+    assert any("could not list keywords" in line for line in plugin.log_lines), (
+        "A read that fails behind a closed dialog is invisible unless it is "
+        "logged: nothing raised inside this task reaches the user."
+    )
 
 
 def bindable(plugin):

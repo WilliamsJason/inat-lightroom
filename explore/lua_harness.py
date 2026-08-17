@@ -521,6 +521,7 @@ end
 local catalogWrites = {}
 local createdKeywords = {}
 local refusedKeywords = {}
+local keywordsFail = false
 local targetPhotos = {}
 local allPhotos = {}
 local publishedCollections = {}
@@ -531,6 +532,17 @@ local catalog
 local function requireWriteAccess(what)
   if not catalog._writing then
     error(what .. ": must be called inside a withWriteAccessDo block", 0)
+  end
+end
+
+-- Reads are guarded too, and more quietly. Asking a keyword its name outside an
+-- access block raises in the host, and inside a task with no error handler that
+-- arrives as nothing at all: no dialog, no log line, a menu item that does
+-- nothing when clicked. A write block counts, because it can read what it is
+-- about to change -- which is why SyncCore has never needed one of its own.
+local function requireReadAccess(what)
+  if not (catalog._reading or catalog._writing) then
+    error(what .. ": must be called inside a withReadAccessDo block", 0)
   end
 end
 
@@ -579,6 +591,19 @@ end
 
 catalog = {
   _writing = false,
+  _reading = false,
+
+  -- Read access. Nests freely, unlike the write block: the real one is a lock
+  -- that reads share.
+  withReadAccessDo = function(self, fn)
+    yieldsHere("catalog:withReadAccessDo")
+    requiresTask("LrCatalog:withReadAccessDo")
+    local wasReading = self._reading
+    self._reading = true
+    local ok, err = realPcall(fn)
+    self._reading = wasReading
+    if not ok then error(err, 0) end
+  end,
 
   -- Nesting is rejected rather than quietly flattened. Lightroom will not open
   -- a write block inside a write block, and a stub that allowed it would let a
@@ -631,8 +656,15 @@ catalog = {
     local keyword = { name = name, parent = parentName }
     -- Real keywords answer questions about themselves. The plugin asks, when
     -- createKeyword refuses, whether the keyword it wanted is already there.
-    keyword.getName     = function(_kw) return name end
+    --
+    -- Both reads need access, exactly as the catalog's own do: a keyword is a
+    -- handle into the catalog, not a value that was copied out of it.
+    keyword.getName     = function(_kw)
+      requireReadAccess("LrKeyword:getName")
+      return name
+    end
     keyword.getChildren = function(_kw)
+      requireReadAccess("LrKeyword:getChildren")
       local children = {}
       for _, other in ipairs(createdKeywords) do
         if other.parent == name then children[#children + 1] = other end
@@ -645,10 +677,17 @@ catalog = {
 
   --- The top level of the keyword list. Children hang off getChildren.
   --
-  -- Refuses outside a task, as the real one does. This is the call that broke
-  -- the settings dialog: reachable from a menu item, which is not a task.
+  -- Refuses outside a task, and outside a read block, as the real one does.
+  -- This is the call that broke the settings dialog twice: it is reachable
+  -- from a menu item, which is neither.
   getKeywords = function(_self)
     requiresTask("LrCatalog:getKeywords")
+    requireReadAccess("LrCatalog:getKeywords")
+    -- A catalog read can fail for reasons the plugin cannot prevent. What
+    -- matters is what the caller does about it, so a test can ask for one.
+    if keywordsFail then
+      error("LrCatalog:getKeywords: the catalog is busy", 0)
+    end
     local top = {}
     for _, keyword in ipairs(createdKeywords) do
       if keyword.parent == nil then top[#top + 1] = keyword end
@@ -913,6 +952,7 @@ return {
   createdDirectories = createdDirectories,
   deletedPaths = deletedPaths,
   setDeleteFails = function(fails) deleteFails = fails end,
+  setKeywordsFail = function(fails) keywordsFail = fails end,
   setRenderFailure = function(message)
     -- Lightroom does not promise waitForRender supplies a message, so failing
     -- and having something to say about it are separate.
@@ -1225,6 +1265,10 @@ class LuaPlugin:
     def set_delete_fails(self, fails: bool = True) -> None:
         """Make LrFileUtils.delete raise, as a locked file would."""
         self.env["setDeleteFails"](fails)
+
+    def set_keywords_fail(self, fails: bool = True) -> None:
+        """Make catalog:getKeywords raise, as a busy catalog would."""
+        self.env["setKeywordsFail"](fails)
 
     def view_factory(self):
         """A view factory that records arguments instead of rendering.
