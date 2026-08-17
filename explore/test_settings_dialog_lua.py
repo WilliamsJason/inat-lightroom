@@ -297,6 +297,29 @@ def test_opening_the_dialog_reads_the_catalog_from_inside_a_task(plugin, dialog)
     plugin.run_pending_tasks()
 
 
+def test_opening_the_dialog_leaves_the_picker_with_the_catalogs_keywords(
+    plugin, dialog
+):
+    """The failure that reached a user was not a missing dialog but an empty
+    popup: it opened, listed only "Choose an existing keyword…", and looked
+    like a catalog with no keywords in it.
+
+    Building the list is guarded, so anything raised in there is swallowed and
+    only logged -- which means the tests that call keywordRootItems directly
+    can pass while the dialog's own popup holds nothing. The warning is the
+    only evidence, so this asserts on its absence.
+    """
+    plugin.add_keyword("Nature")
+    plugin.add_keyword("Wildlife", "Nature")
+
+    dialog["show"]()
+    plugin.run_pending_tasks()
+
+    assert not any("could not list keywords" in line for line in plugin.log_lines), (
+        "The picker fell back to its prompt: " + "; ".join(plugin.log_lines)
+    )
+
+
 def test_the_dialog_opens_even_when_the_keywords_cannot_be_read(plugin, dialog):
     """The picker is a convenience; the dialog is not.
 

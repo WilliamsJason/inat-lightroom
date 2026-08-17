@@ -344,6 +344,54 @@ The general shape: **the pieces of a dialog can be unit tested individually and
 still fail together**, because what breaks is the context they are assembled in.
 Something has to open it the way the user does.
 
+### The third failure: `table.sort` is a C call too
+
+The guard above worked. It was also the only thing standing between the user and
+a picker that offered nothing, because the walk still failed — three releases
+running, in the same twenty lines:
+
+```
+Settings: could not list keywords for the picker:
+Yielding is not allowed within a C or metamethod call
+```
+
+The message is the `pcall` one, and there was no `pcall`. The culprit was the
+comparator:
+
+```lua
+table.sort(sorted, function(a, b) return a:getName() < b:getName() end)
+```
+
+`table.sort` is a C function that calls back into Lua, so the comparator runs
+across the same C boundary a `pcall` puts up — and `getName` yields. Nothing in
+the shape of the line says "SDK call inside a C call", which is exactly the
+thing to look for. The fix is to read every name *before* sorting, and sort on
+the values:
+
+```lua
+for _, kw in ipairs(keywords or {}) do
+  sorted[#sorted + 1] = { keyword = kw, name = kw:getName() }
+end
+table.sort(sorted, function(a, b) return a.name < b.name end)
+```
+
+Generalised: **read the catalog into plain values before handing anything to a
+C function that calls your code back** — `table.sort` is the common one, and
+any `__index`/`__lt` metamethod is the same trap.
+
+Two things about how this survived so long:
+
+- The harness counted only `pcall`, so its stubs happily yielded inside a
+  comparator. It now wraps `table.sort` on the same counter, and `getName`,
+  `getChildren` and `getKeywords` announce that they yield. Reverting the
+  comparator fails two tests with Lightroom's own message.
+- **A guard that logs is a place bugs go to live.** Every direct test of
+  `keywordRootItems` passed, because the harness let the sort work; in the host,
+  the failure was swallowed by the very `LrTasks.pcall` that keeps the dialog
+  open, and surfaced only as a popup with one row in it. Where a fallback
+  exists, assert that it was *not* taken — the dialog's test now fails if the
+  warning is logged at all.
+
 ## `f:static_text` drops a word rather than clipping it
 
 Given a fixed `width`, a `static_text` whose contents do not fit does not

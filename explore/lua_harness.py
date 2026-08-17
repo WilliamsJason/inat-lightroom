@@ -59,12 +59,29 @@ function pcall(fn, ...)
   return unpack(results)
 end
 
+-- pcall is not the only C call the plugin runs its own code inside of.
+-- table.sort calls its comparator from C, so a comparator that reads the
+-- catalog hits the same wall -- and that is exactly how the keyword-root
+-- picker broke: it sorted keywords with `a:getName() < b:getName()`, which
+-- raised for every catalog and left the popup holding nothing but its prompt.
+--
+-- Same counter, different boundary, so the stubs need no extra check.
+local realSort = table.sort
+table.sort = function(list, comparator)
+  if comparator == nil then return realSort(list) end
+  plainPcallDepth = plainPcallDepth + 1
+  local ok, err = realPcall(realSort, list, comparator)
+  plainPcallDepth = plainPcallDepth - 1
+  if not ok then error(err, 0) end
+end
+
 --- Called by every stub that stands in for a call that yields in Lightroom.
 local function yieldsHere(what)
   if plainPcallDepth > 0 then
     error("Yielding is not allowed within a C or metamethod call -- "
-      .. tostring(what) .. " yields, and it is inside a plain pcall. "
-      .. "Use LrTasks.pcall.", 0)
+      .. tostring(what) .. " yields, and it is inside a C call (a plain pcall, "
+      .. "or a table.sort comparator). Use LrTasks.pcall, and read what you "
+      .. "need before sorting.", 0)
   end
 end
 
@@ -660,10 +677,12 @@ catalog = {
     -- Both reads need access, exactly as the catalog's own do: a keyword is a
     -- handle into the catalog, not a value that was copied out of it.
     keyword.getName     = function(_kw)
+      yieldsHere("LrKeyword:getName")
       requireReadAccess("LrKeyword:getName")
       return name
     end
     keyword.getChildren = function(_kw)
+      yieldsHere("LrKeyword:getChildren")
       requireReadAccess("LrKeyword:getChildren")
       local children = {}
       for _, other in ipairs(createdKeywords) do
@@ -681,6 +700,7 @@ catalog = {
   -- This is the call that broke the settings dialog twice: it is reachable
   -- from a menu item, which is neither.
   getKeywords = function(_self)
+    yieldsHere("LrCatalog:getKeywords")
     requiresTask("LrCatalog:getKeywords")
     requireReadAccess("LrCatalog:getKeywords")
     -- A catalog read can fail for reasons the plugin cannot prevent. What

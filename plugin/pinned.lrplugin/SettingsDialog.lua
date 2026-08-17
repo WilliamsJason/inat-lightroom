@@ -183,19 +183,27 @@ function SettingsDialog.keywordRootItems(catalog)
   local function walk(keywords, prefix)
     -- Sorting a copy: getChildren hands back the catalog's own ordering, and
     -- the list is read alphabetically whatever order it arrives in.
+    --
+    -- Every name is read *before* the sort, never from inside the comparator.
+    -- table.sort is a C function, getName yields, and Lua 5.1 cannot yield
+    -- across a C call: comparing keywords directly raised "Yielding is not
+    -- allowed within a C or metamethod call" for every catalog, which the
+    -- guard in show() turned into a picker offering nothing but its prompt.
     local sorted = {}
-    for _, kw in ipairs(keywords or {}) do sorted[#sorted + 1] = kw end
-    table.sort(sorted, function(a, b) return a:getName() < b:getName() end)
+    for _, kw in ipairs(keywords or {}) do
+      sorted[#sorted + 1] = { keyword = kw, name = kw:getName() }
+    end
+    table.sort(sorted, function(a, b) return a.name < b.name end)
 
-    for _, kw in ipairs(sorted) do
+    for _, entry in ipairs(sorted) do
       if #items > SettingsDialog.KEYWORD_ROOT_PICK_LIMIT then return end
 
       local path = prefix == ""
-        and kw:getName()
-        or (prefix .. SettingsDialog.KEYWORD_ROOT_SEPARATOR .. kw:getName())
+        and entry.name
+        or (prefix .. SettingsDialog.KEYWORD_ROOT_SEPARATOR .. entry.name)
 
       items[#items + 1] = { title = path, value = path }
-      walk(kw:getChildren(), path)
+      walk(entry.keyword:getChildren(), path)
     end
   end
 
