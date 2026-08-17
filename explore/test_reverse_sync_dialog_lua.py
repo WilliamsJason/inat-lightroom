@@ -469,3 +469,52 @@ def test_a_clean_run_says_nothing_else(plugin, dialog):
         {"matched": 5, "observations": 5}))
 
     assert line == "5 of 5 observations matched a photo."
+
+
+# ------------------------------------------------------ the summary overflows
+#
+# A real run drew "468 of 798 observations matched 1583 photos, 302 found no
+# photo, 28 had no time of day, 410 matched more than one photo, 108" and
+# stopped there. f:static_text drops the words that will not fit rather than
+# clipping them, so "were already taken" was not shortened, it was gone --
+# and nothing on screen said a clause was missing.
+
+REAL_RUN = {"observations": 798, "matched": 468, "photos": 1583,
+            "unmatched": 302, "undatable": 28, "ambiguous": 410,
+            "claimed": 108}
+
+
+def lines_for(plugin, dialog, summary, budget=None):
+    result = dialog["summaryLines"](plugin.runtime.table_from(summary), budget)
+    return [result[i] for i in range(1, len(result) + 1)]
+
+
+def test_no_summary_line_overflows(plugin, dialog):
+    for line in lines_for(plugin, dialog, REAL_RUN):
+        assert len(line) <= dialog["LINE_BUDGET"]
+
+
+def test_every_count_survives_the_break(plugin, dialog):
+    """The point of the exercise: nothing may be dropped on the way to a line."""
+    joined = " ".join(lines_for(plugin, dialog, REAL_RUN))
+
+    for count in ("468", "798", "1583", "302", "28", "410", "108"):
+        assert count in joined
+    assert "were already taken" in joined
+
+
+def test_the_lines_read_as_the_whole_sentence(plugin, dialog):
+    joined = " ".join(lines_for(plugin, dialog, REAL_RUN))
+
+    assert joined == dialog["summarise"](plugin.runtime.table_from(REAL_RUN))
+
+
+def test_a_short_summary_stays_on_one_line(plugin, dialog):
+    lines = lines_for(plugin, dialog, {"observations": 3, "matched": 3})
+
+    assert lines == ["3 of 3 observations matched a photo."]
+
+
+def test_breaks_fall_between_clauses_not_mid_sentence(plugin, dialog):
+    for line in lines_for(plugin, dialog, REAL_RUN):
+        assert line.endswith(",") or line.endswith(".")

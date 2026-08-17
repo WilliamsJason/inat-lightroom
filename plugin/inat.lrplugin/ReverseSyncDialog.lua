@@ -236,8 +236,8 @@ function ReverseSyncDialog.pageRange(page, total, pageSize)
   return first, last
 end
 
---- The summary line above the list.
-function ReverseSyncDialog.summarise(summary)
+--- The summary clauses, in order, headline first.
+function ReverseSyncDialog.summaryParts(summary)
   local parts = {}
 
   -- Photos and observations are counted separately because they are no longer
@@ -273,7 +273,55 @@ function ReverseSyncDialog.summarise(summary)
     parts[#parts + 1] = string.format("%d disagree on location", summary.conflicts)
   end
 
-  return table.concat(parts, ", ") .. "."
+  return parts
+end
+
+--- The summary line above the list.
+function ReverseSyncDialog.summarise(summary)
+  return table.concat(ReverseSyncDialog.summaryParts(summary), ", ") .. "."
+end
+
+--- Roughly how many characters fit across the summary's 780 points.
+--
+-- Measured off the overflow rather than guessed: a summary cut after "108"
+-- had drawn 122 characters, so 95 leaves room for a wider-than-average run of
+-- text without ever coming close.
+ReverseSyncDialog.LINE_BUDGET = 95
+
+--- The summary, broken into lines that each fit on their own.
+--
+-- One control could not hold it. With every clause present the sentence runs
+-- past 780 points, and f:static_text drops the words that do not fit instead
+-- of clipping them -- so a real run ended "...410 matched more than one photo,
+-- 108" and the reader had no way to know a whole clause was missing. A count
+-- that silently disappears is worse than no summary at all.
+--
+-- Wrapping is not the fix, for the same reason the rows use three controls
+-- rather than one: what fits is decided per control, so giving each line its
+-- own control is the only arrangement where nothing can be pushed out by
+-- something else. Packed greedily, so the clauses stay in order and the line
+-- breaks fall between them rather than mid-sentence.
+function ReverseSyncDialog.summaryLines(summary, budget)
+  budget = budget or ReverseSyncDialog.LINE_BUDGET
+
+  local parts = ReverseSyncDialog.summaryParts(summary)
+  local lines, current = {}, nil
+
+  for index, part in ipairs(parts) do
+    local piece = part .. (index == #parts and "." or ",")
+
+    if current == nil then
+      current = piece
+    elseif #current + 1 + #piece <= budget then
+      current = current .. " " .. piece
+    else
+      lines[#lines + 1] = current
+      current = piece
+    end
+  end
+
+  if current then lines[#lines + 1] = current end
+  return lines
 end
 
 --- How many are ticked.
@@ -556,11 +604,21 @@ function ReverseSyncDialog.show(context, matches, summary)
     end)
   end
 
+  -- Built as a plain table and handed to f:column, the way the rows are: a
+  -- constructed view is not a list you can go on appending to.
+  local summaryChildren = { spacing = 2 }
+  for _, line in ipairs(ReverseSyncDialog.summaryLines(summary)) do
+    summaryChildren[#summaryChildren + 1] = f:static_text {
+      title = line,
+      width = 780,
+    }
+  end
+
   local contents = f:column {
     bind_to_object = props,
     spacing = f:control_spacing(),
 
-    f:static_text { title = ReverseSyncDialog.summarise(summary), width = 780 },
+    f:column(summaryChildren),
     f:static_text {
       title = "Each row shows your photo beside the iNaturalist photo. "
         .. "Everything is ticked; untick anything you do not want linked.",
