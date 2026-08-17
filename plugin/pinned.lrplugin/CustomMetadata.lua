@@ -173,10 +173,33 @@ return {
   -- v5 adds inat_positional_accuracy, so that a location can say how much it
   -- claims to know. iNaturalist stores accuracy per observation; Lightroom has
   -- nowhere to put it, so the plugin has to.
-  schemaVersion = 5,
+  --
+  -- v6, v7 and v8 were three attempts at deleting the values v3 and v4 left
+  -- behind, and it cannot be done. setPropertyForPlugin validates against the
+  -- schema this file currently declares, so a removed field rejects the write
+  -- that would clear it:
+  --
+  --   Attempt to access property "inat_action_sync" that's not declared in
+  --   Info.lua
+  --
+  -- Three numbers rather than one because a migration that returns is recorded
+  -- as done and never runs again -- so each failed attempt costs a version. Two
+  -- of those failures were silent: v6 wrapped the pass in a plain pcall, inside
+  -- which getAllPhotos returns an empty list instead of raising, so it read the
+  -- catalog as empty and reported success. Instrumenting it was what ended the
+  -- guessing, and is the only reason the real cause is known.
+  --
+  -- What this leaves: a removed field's values are permanent, and its spec is
+  -- too. Removing a field is a one-way door. Everything a field has ever held
+  -- stays in the catalog and keeps showing up in Lightroom's own "All Plug-in
+  -- Metadata" preset, so it is worth being sure before adding one. See
+  -- docs/lightroom-sdk-notes.md.
+  schemaVersion = 8,
 
+  -- Nothing to do. Adding a field needs no migration, Lightroom will not let a
+  -- removed one be touched, and making a field read-only does not change what is
+  -- stored in it. Kept as a declared no-op rather than deleted because the next
+  -- schema change will want somewhere to put its migration.
   updateFromEarlierSchemaVersion = function(_catalog, _previousSchemaVersion, _progressScope)
-    -- Nothing to rewrite. Lightroom drops removed fields itself, and making a
-    -- field read-only does not change what is stored in it.
   end,
 }
