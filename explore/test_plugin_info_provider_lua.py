@@ -47,7 +47,7 @@ def props(plugin, **overrides):
     return plugin.runtime.table_from(dict(overrides))
 
 
-PLUGIN_PATH = "/plugins/inat.lrplugin"
+PLUGIN_PATH = "/plugins/pinned.lrplugin"
 
 
 # ---------------------------------------------------------------------------
@@ -137,10 +137,19 @@ def test_a_staged_update_is_reported_before_any_check(plugin, provider):
       {
         exists   = function(path) return _FILES[path] ~= nil end,
         readFile = function(path) return _FILES[path] end,
+        files    = function(root)
+          local found = {}
+          for path in pairs(_FILES) do
+            if path:sub(1, #root + 1) == root .. "/" then
+              found[#found + 1] = path:sub(#root + 2)
+            end
+          end
+          return found
+        end,
       }
     """.replace("_FILES", "({" + ", ".join([
         f'["{PLUGIN_PATH}/.update-staging/READY"] = "v9.9.9"',
-        f'["{PLUGIN_PATH}/.update-staging/inat.lrplugin"] = "dir"',
+        f'["{PLUGIN_PATH}/.update-staging/pinned.lrplugin/Info.lua"] = "return {{}}"',
     ]) + "})"))
 
     p = props(plugin)

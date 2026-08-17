@@ -14,7 +14,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-PLUGIN = Path(__file__).parent.parent / "plugin" / "inat.lrplugin"
+PLUGIN = Path(__file__).parent.parent / "plugin" / "pinned.lrplugin"
 TARGETS = {
     "Updater": PLUGIN / "Updater.lua",
     "UpdateInstall": PLUGIN / "UpdateInstall.lua",

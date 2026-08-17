@@ -309,7 +309,7 @@ def test_the_section_shows_the_installed_version(pair):
     plugin, _core, _fake = pair
     provider = plugin.require("PluginInfoProvider")
 
-    state = provider.initialise(_property_table(plugin), "/plugins/inat.lrplugin")
+    state = provider.initialise(_property_table(plugin), "/plugins/pinned.lrplugin")
     assert state.installedVersion
 
 
@@ -317,7 +317,7 @@ def test_the_section_starts_with_nothing_checked(pair):
     plugin, _core, _fake = pair
     provider = plugin.require("PluginInfoProvider")
 
-    state = provider.initialise(_property_table(plugin), "/plugins/inat.lrplugin")
+    state = provider.initialise(_property_table(plugin), "/plugins/pinned.lrplugin")
     assert state.status == "Not checked yet."
     assert state.result is None, (
         "the Install button is bound to this, and it must not be live before "
@@ -328,7 +328,7 @@ def test_the_section_starts_with_nothing_checked(pair):
 def test_checking_from_the_section_fills_in_the_status(pair):
     plugin, _core, _fake = pair
     provider = plugin.require("PluginInfoProvider")
-    state = provider.initialise(_property_table(plugin), "/plugins/inat.lrplugin")
+    state = provider.initialise(_property_table(plugin), "/plugins/pinned.lrplugin")
 
     plugin.call(provider.runCheck, state)
 
@@ -340,7 +340,7 @@ def test_checking_from_the_section_fills_in_the_status(pair):
 def test_installing_without_checking_is_refused(pair):
     plugin, _core, _fake = pair
     provider = plugin.require("PluginInfoProvider")
-    state = provider.initialise(_property_table(plugin), "/plugins/inat.lrplugin")
+    state = provider.initialise(_property_table(plugin), "/plugins/pinned.lrplugin")
 
     assert plugin.call(provider.runInstall, state)[0] is False
     assert "Check for updates first" in state.status

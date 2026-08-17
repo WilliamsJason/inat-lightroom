@@ -6,7 +6,7 @@
 # unless they agree, because the updater compares one against the other -- a
 # mismatch either hides an update forever or offers the same one on every check.
 #
-# The archive holds `inat.lrplugin/` at its root, which is exactly what a user
+# The archive holds `pinned.lrplugin/` at its root, which is exactly what a user
 # drops next to their other plugins and points the Plug-in Manager at, and
 # exactly what UpdateInstall.lua expects to find after unpacking.
 
@@ -56,15 +56,15 @@ jobs:
           name="inat-lightroom-${version}.zip"
           mkdir -p dist
 
-          # Zipped from inside plugin/ so the archive root is inat.lrplugin,
+          # Zipped from inside plugin/ so the archive root is pinned.lrplugin,
           # with no wrapping directory to strip on the way out.
           #
           # .update-staging is excluded belt-and-braces. CI always builds from a
           # fresh checkout so it cannot be there, but a release built by hand on
           # a machine that has run an update would otherwise ship a stale copy of
           # the whole plugin nested inside itself.
-          ( cd plugin && zip -r -q "../dist/${name}" inat.lrplugin \
-              -x "inat.lrplugin/.update-staging/*" )
+          ( cd plugin && zip -r -q "../dist/${name}" pinned.lrplugin \
+              -x "pinned.lrplugin/.update-staging/*" )
 
           # Checksums are generated from inside dist/ so the file names in
           # SHA256SUMS have no directory part; the updater matches on the asset
@@ -82,10 +82,10 @@ jobs:
         run: |
           set -euo pipefail
           unzip -q "dist/${{ steps.build.outputs.name }}" -d /tmp/check
-          test -f /tmp/check/inat.lrplugin/Info.lua
-          test -f /tmp/check/inat.lrplugin/fix_window_z_order.ps1
-          test -f /tmp/check/inat.lrplugin/install_update.ps1
-          test -f /tmp/check/inat.lrplugin/install_update.sh
+          test -f /tmp/check/pinned.lrplugin/Info.lua
+          test -f /tmp/check/pinned.lrplugin/fix_window_z_order.ps1
+          test -f /tmp/check/pinned.lrplugin/install_update.ps1
+          test -f /tmp/check/pinned.lrplugin/install_update.sh
 
       - name: Publish the release
         env:

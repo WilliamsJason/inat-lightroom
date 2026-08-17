@@ -27,7 +27,7 @@ from typing import Any
 
 from lupa import lua51
 
-PLUGIN_DIR = Path(__file__).resolve().parent.parent / "plugin" / "inat.lrplugin"
+PLUGIN_DIR = Path(__file__).resolve().parent.parent / "plugin" / "pinned.lrplugin"
 
 # Lua source for the fake SDK. Kept as Lua rather than built through the bridge
 # so that table semantics (methods called with ':') behave normally.
@@ -819,7 +819,7 @@ end
 -- Lightroom exposes the plugin object as a global. `path` is the plugin
 -- directory; it is in AgLrPlugin's property list in substrate.dll alongside
 -- id, enabled and type.
-_PLUGIN = { id = "com.github.inat-lightroom", path = "/plugins/inat.lrplugin" }
+_PLUGIN = { id = "com.github.inat-lightroom", path = "/plugins/pinned.lrplugin" }
 
 -- Lightroom sets exactly one of these in every plugin's sandbox; they are in
 -- the globals list in substrate.dll next to _PLUGIN and LOC. Tests that care

@@ -51,7 +51,7 @@ def main() -> None:
     png += chunk(b"IEND", b"")
 
     out = (Path(__file__).resolve().parent.parent
-           / "plugin" / "inat.lrplugin" / "no-photo.png")
+           / "plugin" / "pinned.lrplugin" / "no-photo.png")
     out.write_bytes(png)
     print(f"wrote {out} ({len(png)} bytes)")
 

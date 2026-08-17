@@ -10,7 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-TARGET = Path(__file__).parent.parent / "plugin" / "inat.lrplugin" / "RenderPhoto.lua"
+TARGET = Path(__file__).parent.parent / "plugin" / "pinned.lrplugin" / "RenderPhoto.lua"
 
 MUTATIONS = [
     (

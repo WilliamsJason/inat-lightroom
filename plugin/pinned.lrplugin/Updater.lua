@@ -140,12 +140,26 @@ end
 --------------------------------------------------------------------------------
 
 --- The plugin archive and the checksum file from a release's asset list.
+--
+-- The archive is matched by name, not by "the only .zip here": a release can
+-- carry zips that are not the plugin, and downloading one to find out would
+-- replace a quiet "no update" with a download and an error.
+--
+-- The pattern is built from Updater.REPO rather than written out, because this
+-- runs in the *installed* version -- by definition older than the release it
+-- is reading -- so a literal here is a name that future releases are stuck
+-- with, and getting it wrong fails as "no update available" forever rather
+-- than as anything anyone would think to report. release.yml names the asset
+-- after the repo; the two have to agree, and deriving one is the cheapest way
+-- to keep that true.
+--
 -- @return assetUrl, sumsUrl, assetName -- any of which may be nil
 function Updater.pickAssets(release)
   if type(release) ~= "table" or type(release.assets) ~= "table" then
     return nil, nil, nil
   end
 
+  local pattern = "^" .. Updater.REPO:gsub("%W", "%%%0") .. "%-.+%.zip$"
   local assetUrl, sumsUrl, assetName
 
   for _, asset in ipairs(release.assets) do
@@ -156,7 +170,7 @@ function Updater.pickAssets(release)
        and url:sub(1, #Updater.ASSET_URL_PREFIX) == Updater.ASSET_URL_PREFIX then
       if name == Updater.CHECKSUM_ASSET then
         sumsUrl = url
-      elseif name:match("^inat%-lightroom%-.+%.zip$") then
+      elseif name:match(pattern) then
         assetUrl  = url
         assetName = name
       end

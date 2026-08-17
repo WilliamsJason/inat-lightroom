@@ -51,7 +51,7 @@ local logger = require "Log"
 local UpdateInstall = {}
 
 UpdateInstall.STAGING_DIR   = ".update-staging"
-UpdateInstall.PLUGIN_DIR    = "inat.lrplugin"
+UpdateInstall.PLUGIN_SUFFIX = ".lrplugin"
 UpdateInstall.READY_MARKER  = "READY"
 UpdateInstall.WIN_SCRIPT    = "install_update.ps1"
 UpdateInstall.MAC_SCRIPT    = "install_update.sh"
@@ -72,10 +72,41 @@ function UpdateInstall.stagingPath(pluginPath)
   return LrPathUtils.child(pluginPath, UpdateInstall.STAGING_DIR)
 end
 
---- Where the archive unpacks to: <plugin>/.update-staging/inat.lrplugin
-function UpdateInstall.stagedPluginPath(pluginPath)
-  return LrPathUtils.child(
-    UpdateInstall.stagingPath(pluginPath), UpdateInstall.PLUGIN_DIR)
+--- The name of the plugin folder inside a staging folder, or nil.
+--
+-- Found rather than assumed. The code that reads a staging folder is always
+-- the *installed* version, one release older than the archive it is unpacking,
+-- so a hardcoded name here is a name the next release can never change: it
+-- would be checked by code that shipped before the change was made. That is
+-- exactly what happened when this plugin was renamed from inat.lrplugin, and
+-- it cost everyone installed at the time a manual reinstall.
+--
+-- Exactly one match is required. Zero means the archive is not a plugin, and
+-- more than one means guessing which to install, which is not a guess worth
+-- making with someone's working copy.
+function UpdateInstall.stagedPluginName(stagingPath, fs)
+  fs = fs or UpdateInstall.fs
+
+  local seen, names = {}, {}
+  for _, relative in ipairs(fs.files(stagingPath)) do
+    local head = relative:match("^([^/]+)")
+    if head and head:sub(-#UpdateInstall.PLUGIN_SUFFIX) == UpdateInstall.PLUGIN_SUFFIX
+      and not seen[head] then
+      seen[head] = true
+      names[#names + 1] = head
+    end
+  end
+
+  if #names ~= 1 then return nil end
+  return names[1]
+end
+
+--- Where the archive unpacked to: <plugin>/.update-staging/<something>.lrplugin
+function UpdateInstall.stagedPluginPath(pluginPath, fs)
+  local staging = UpdateInstall.stagingPath(pluginPath)
+  local name = UpdateInstall.stagedPluginName(staging, fs)
+  if not name then return nil end
+  return LrPathUtils.child(staging, name)
 end
 
 --- The file whose existence means "this staging folder is complete".
@@ -357,7 +388,11 @@ function UpdateInstall.pending(pluginPath, fs)
 
   local marker = UpdateInstall.readyMarkerPath(pluginPath)
   if not fs.exists(marker) then return nil end
-  if not fs.exists(UpdateInstall.stagedPluginPath(pluginPath)) then return nil end
+
+  -- No exists() check on the folder: stagedPluginPath only returns a name it
+  -- found a file underneath, so finding it is already proof it is there.
+  local staged = UpdateInstall.stagedPluginPath(pluginPath, fs)
+  if not staged then return nil end
 
   local contents = fs.readFile(marker)
   return contents and contents:match("^%s*(.-)%s*$") or ""
@@ -434,7 +469,8 @@ function UpdateInstall.apply(pluginPath, fs)
   local tag = UpdateInstall.pending(pluginPath, fs)
   if not tag then return nil end
 
-  local staged = UpdateInstall.stagedPluginPath(pluginPath)
+  local staged = UpdateInstall.stagedPluginPath(pluginPath, fs)
+  if not staged then return nil end
 
   local ok, result = pcall(function()
     local plan = UpdateInstall.swapPlan(fs.files(pluginPath), fs.files(staged))

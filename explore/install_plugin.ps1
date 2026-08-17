@@ -18,7 +18,7 @@
 
 .PARAMETER Destination
   The folder Lightroom is pointed at. Defaults to
-  ~\Documents\LrPlugins\inat.lrplugin.
+  ~\Documents\LrPlugins\pinned.lrplugin.
 
 .PARAMETER KeepStaged
   Keep any update the installed copy has already staged.
@@ -41,7 +41,7 @@
   .\install_plugin.ps1
 
 .EXAMPLE
-  .\install_plugin.ps1 -Destination D:\LrPlugins\inat.lrplugin
+  .\install_plugin.ps1 -Destination D:\LrPlugins\pinned.lrplugin
 
 .EXAMPLE
   .\install_plugin.ps1 -IncludeProbe
@@ -49,7 +49,7 @@
 
 [CmdletBinding()]
 param(
-  [string] $Destination = (Join-Path $HOME "Documents\LrPlugins\inat.lrplugin"),
+  [string] $Destination = (Join-Path $HOME "Documents\LrPlugins\pinned.lrplugin"),
   [switch] $KeepStaged,
   [switch] $IncludeProbe
 )
@@ -59,7 +59,7 @@ $ErrorActionPreference = 'Stop'
 
 # The plugin sits beside this script's parent: <repo>/explore/.. /plugin/...
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$source   = Join-Path $repoRoot "plugin\inat.lrplugin"
+$source   = Join-Path $repoRoot "plugin\pinned.lrplugin"
 
 if (-not (Test-Path (Join-Path $source "Info.lua"))) {
   [Console]::Error.WriteLine("No plugin found at $source")

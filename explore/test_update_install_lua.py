@@ -14,8 +14,8 @@ import pytest
 
 from lua_harness import LuaPlugin
 
-PLUGIN = "/plugins/inat.lrplugin"
-STAGED = PLUGIN + "/.update-staging/inat.lrplugin"
+PLUGIN = "/plugins/pinned.lrplugin"
+STAGED = PLUGIN + "/.update-staging/pinned.lrplugin"
 
 DIGEST = "a" * 64
 
@@ -144,8 +144,37 @@ def test_staging_lives_inside_the_plugin_folder(install):
     )
 
 
-def test_the_archive_unpacks_to_a_plugin_folder_inside_staging(install):
-    assert install.stagedPluginPath(PLUGIN) == STAGED
+def test_the_archive_unpacks_to_a_plugin_folder_inside_staging(install, make_fs):
+    fs, _state = make_fs({f"{STAGED}/Info.lua": "return {}"})
+
+    assert install.stagedPluginPath(PLUGIN, fs) == STAGED
+
+
+def test_the_staged_folder_is_found_whatever_it_is_called(install, make_fs):
+    """The installed copy is always a release older than the archive it is
+    unpacking, so it cannot know the name the next release chose. Hardcoding it
+    is what made renaming inat.lrplugin a manual reinstall for everyone."""
+    renamed = PLUGIN + "/.update-staging/something-else.lrplugin"
+    fs, _state = make_fs({f"{renamed}/Info.lua": "return {}"})
+
+    assert install.stagedPluginPath(PLUGIN, fs) == renamed
+
+
+def test_staging_without_a_plugin_folder_is_not_a_staged_update(install, make_fs):
+    fs, _state = make_fs({PLUGIN + "/.update-staging/READY": "v9.9.9"})
+
+    assert install.stagedPluginPath(PLUGIN, fs) is None
+
+
+def test_two_plugin_folders_in_staging_are_refused(install, make_fs):
+    """Picking one would be a guess, and the thing being guessed with is the
+    only working copy of the plugin."""
+    fs, _state = make_fs({
+        PLUGIN + "/.update-staging/one.lrplugin/Info.lua": "return {}",
+        PLUGIN + "/.update-staging/two.lrplugin/Info.lua": "return {}",
+    })
+
+    assert install.stagedPluginPath(PLUGIN, fs) is None
 
 
 def test_the_ready_marker_lives_beside_the_unpacked_plugin(install):
@@ -160,16 +189,16 @@ def test_the_ready_marker_lives_beside_the_unpacked_plugin(install):
 def test_the_windows_command_passes_every_path_quoted(plugin, install):
     plugin.set_platform(windows=True)
     command = install.command(
-        "C:/Program Files/inat.lrplugin/install_update.ps1",
+        "C:/Program Files/pinned.lrplugin/install_update.ps1",
         "C:/Users/A B/Temp/update.zip",
         DIGEST,
-        "C:/Program Files/inat.lrplugin/.update-staging",
+        "C:/Program Files/pinned.lrplugin/.update-staging",
     )
 
-    assert '-File "C:/Program Files/inat.lrplugin/install_update.ps1"' in command
+    assert '-File "C:/Program Files/pinned.lrplugin/install_update.ps1"' in command
     assert '-Archive "C:/Users/A B/Temp/update.zip"' in command
     assert f'-ExpectedHash "{DIGEST}"' in command
-    assert '-Destination "C:/Program Files/inat.lrplugin/.update-staging"' in command
+    assert '-Destination "C:/Program Files/pinned.lrplugin/.update-staging"' in command
 
 
 def test_the_windows_command_does_not_start_with_a_quote(plugin, install):
@@ -251,7 +280,7 @@ def test_the_staging_folder_is_never_deleted_mid_swap(plugin, install):
         plugin.eval(
             "function() return {'Info.lua', "
             "'.update-staging/READY', "
-            "'.update-staging/inat.lrplugin/Info.lua'} end"
+            "'.update-staging/pinned.lrplugin/Info.lua'} end"
         )(),
         plugin.eval("function() return {'Info.lua'} end")(),
     )
