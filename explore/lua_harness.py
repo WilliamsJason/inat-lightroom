@@ -1071,6 +1071,33 @@ class LuaPlugin:
             for i in range(1, len(created) + 1)
         ]
 
+    def add_keyword(self, name: str, parent: str | None = None) -> None:
+        """Put a keyword in the catalog before anything runs.
+
+        The user's own vocabulary, as opposed to the ones a sync creates. It
+        writes through the same createKeyword the plugin uses, with the write
+        flag flipped rather than a transaction opened, so seeding does not show
+        up in catalog_writes as work the code under test did.
+
+        Nesting is by parent *name*, which is all the stub catalog tracks.
+        """
+        seed = self.runtime.eval(
+            "function(env, name, parentName)\n"
+            "  local catalog = env.stubs.LrApplication.activeCatalog()\n"
+            "  local parent = nil\n"
+            "  if parentName then\n"
+            "    for _, kw in ipairs(env.createdKeywords) do\n"
+            "      if kw.name == parentName then parent = kw end\n"
+            "    end\n"
+            "  end\n"
+            "  local wasWriting = catalog._writing\n"
+            "  catalog._writing = true\n"
+            "  catalog:createKeyword(name, {}, true, parent, true)\n"
+            "  catalog._writing = wasWriting\n"
+            "end\n"
+        )
+        seed(self.env, name, parent)
+
     def refuse_keyword(self, name: str) -> None:
         """Make catalog:createKeyword hand back nil for this name.
 

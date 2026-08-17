@@ -840,3 +840,79 @@ def test_a_failed_taxon_is_not_cached(api_pair_with):
 
     assert err is None
     assert taxon["name"] == "Bombus"
+
+
+# ---------------------------------------------------------------------------
+# The keyword path
+#
+# The root is configurable because another plugin with this workflow prunes
+# keywords under the root *it* is pointed at, so two plugins sharing a root
+# means one deletes the other's work. The shape below the root is fixed:
+# kingdom down to the taxon, one level each.
+# ---------------------------------------------------------------------------
+
+
+BEE_LUA = (
+    '{ name = "Bombus",'
+    '  ancestors = { { name = "Animalia" }, { name = "Arthropoda" } } }'
+)
+
+
+def path_of(plugin, root=None):
+    InatAPI = plugin.require("InatAPI")
+    taxon = plugin.eval(BEE_LUA)
+    if root is None:
+        built = InatAPI["buildKeywordPath"](taxon)
+    else:
+        built = InatAPI["buildKeywordPath"](taxon, root)
+    return [built[i] for i in range(1, len(built) + 1)]
+
+
+def test_no_root_given_is_still_inaturalist():
+    """Callers that never learned about the setting keep the old behaviour."""
+    assert path_of(LuaPlugin()) == ["iNaturalist", "Animalia", "Arthropoda",
+                                    "Bombus"]
+
+
+def test_a_named_root_replaces_it():
+    assert path_of(LuaPlugin(), "Taxonomy")[0] == "Taxonomy"
+
+
+def test_a_root_path_becomes_several_levels():
+    """">" is how Lightroom spells a keyword hierarchy in its own interface,
+    so it is what the setting takes."""
+    assert path_of(LuaPlugin(), "Nature > iNaturalist")[:3] == [
+        "Nature", "iNaturalist", "Animalia"]
+
+
+def test_an_empty_root_puts_the_kingdom_at_the_top():
+    """An emptied setting means the top level of the catalog, matching what
+    the other plugin means by a root of -1. It is not "unset"."""
+    assert path_of(LuaPlugin(), "") == ["Animalia", "Arthropoda", "Bombus"]
+
+
+def test_a_root_of_only_separators_is_the_same_as_none_at_all():
+    """A level with no name would be a keyword the sync refuses outright,
+    taking the whole lineage with it."""
+    assert path_of(LuaPlugin(), " > > ") == ["Animalia", "Arthropoda", "Bombus"]
+
+
+def test_root_levels_are_trimmed():
+    """Lightroom would otherwise create a keyword whose name has a space on
+    the end, indistinguishable on screen from the one the user meant."""
+    plugin = LuaPlugin()
+    InatAPI = plugin.require("InatAPI")
+
+    levels = InatAPI["keywordRootPath"](" Nature >  iNaturalist ")
+
+    assert [levels[i] for i in range(1, len(levels) + 1)] == [
+        "Nature", "iNaturalist"]
+
+
+def test_a_root_already_split_into_levels_is_taken_as_it_is():
+    """The plumbing accepts a list too, so a caller holding the levels does
+    not have to join them only to have them split straight back."""
+    plugin = LuaPlugin()
+    levels = plugin.eval('{ "Nature", "iNaturalist" }')
+
+    assert path_of(plugin, levels)[:2] == ["Nature", "iNaturalist"]

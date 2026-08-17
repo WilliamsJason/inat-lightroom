@@ -71,6 +71,25 @@ Settings.DEFAULTS = {
   -- drift. Widening this does not find more photos so much as find the wrong
   -- ones -- at a minute, a burst of frames all become equally good answers.
   reverse_sync_tolerance_seconds = 2,
+
+  -- Where the taxonomy keyword tree hangs.
+  --
+  -- A ">"-separated keyword path, so the tree can be nested inside a
+  -- vocabulary the user already has; empty means the top level of the catalog.
+  --
+  -- Configurable rather than fixed because another plugin with this workflow --
+  -- rcloran's lr-inaturalist-publish -- syncs taxonomy keywords under a root
+  -- the user picks, and *prunes* anything under that root it considers
+  -- non-equivalent. Point both plugins at one keyword and whichever syncs last
+  -- silently strips the other's keywords off the photo. A user who hits that
+  -- needs somewhere else to put ours, and renaming our default would only
+  -- dodge the collision by coincidence.
+  --
+  -- The default stays "iNaturalist" because the root is provenance, not
+  -- branding: keywords leave Lightroom as XMP subject tags, where
+  -- "iNaturalist > Animalia > …" says where the identification came from and
+  -- this plugin's own name would mean nothing.
+  sync_keyword_root = "iNaturalist",
 }
 
 --- The stored value for one preference, or its default.

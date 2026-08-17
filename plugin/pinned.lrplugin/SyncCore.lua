@@ -13,7 +13,8 @@
 
     1. Fetches the latest observation from iNaturalist (GET /observations/{id})
     2. Reads the community-determined taxon and its ancestor list
-    3. Creates / reuses a hierarchical keyword tree under an "iNaturalist" root
+    3. Creates / reuses a hierarchical keyword tree under a configurable root
+       keyword ("iNaturalist" unless the user moved it)
     4. Applies the leaf keyword to the photo
     5. Updates the custom metadata fields (taxon name, common name, quality
        grade, observation UUID, last-synced timestamp)
@@ -27,6 +28,7 @@ local LrProgressScope = import "LrProgressScope"
 local InatAPI      = require "InatAPI"
 local InatAuth     = require "InatAuth"
 local Jobs         = require "Jobs"
+local Settings     = require "Settings"
 local UploadCore   = require "UploadCore"
 local logger       = require "Log"
 
@@ -129,8 +131,12 @@ end
 
 --- Build the keyword path from a taxon table.
 -- Delegates to InatAPI so the plugin and the Python harness agree on shape.
+--
+-- The root is read here rather than passed in, so every caller that writes a
+-- taxon -- the sync, the reverse sync, the panel's local apply -- files it in
+-- the same place without having to know the setting exists.
 local function buildKeywordPath(taxon)
-  return InatAPI.buildKeywordPath(taxon, "iNaturalist")
+  return InatAPI.buildKeywordPath(taxon, Settings.get("sync_keyword_root"))
 end
 
 --- Fill in a taxon's ancestors if it arrived without them.

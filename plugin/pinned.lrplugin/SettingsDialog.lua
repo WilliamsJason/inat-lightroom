@@ -146,6 +146,120 @@ local function accountTab(f, props)
 end
 
 --------------------------------------------------------------------------------
+-- Keyword root
+--------------------------------------------------------------------------------
+
+--- The picker's first item: picking nothing, rather than picking a keyword.
+-- Its value is the empty string, which the observer treats as "no choice made"
+-- so that selecting it does not silently empty the field.
+SettingsDialog.KEYWORD_ROOT_PICK_PROMPT = "Choose an existing keyword…"
+
+--- The separator between levels of the keyword root path.
+-- Lightroom writes a keyword hierarchy this way in its own interface, so a
+-- user reading "Nature > iNaturalist" already knows what it means.
+SettingsDialog.KEYWORD_ROOT_SEPARATOR = " > "
+
+--- How many keywords the picker is willing to list.
+--
+-- A catalog can hold tens of thousands -- this plugin creates one per taxon,
+-- so a heavy user's own tree is the smaller half of it -- and a popup with
+-- that many items is both unusable and slow to build. Past the cap the edit
+-- field is still there and still takes any path.
+SettingsDialog.KEYWORD_ROOT_PICK_LIMIT = 500
+
+--- Every keyword in the catalog, as picker items of full paths.
+--
+-- Depth-first so children follow their parent, which keeps a tree readable in
+-- a flat list. Exposed for testing: walking a catalog needs no dialog.
+function SettingsDialog.keywordRootItems(catalog)
+  local items = {
+    { title = SettingsDialog.KEYWORD_ROOT_PICK_PROMPT, value = "" },
+  }
+
+  local function walk(keywords, prefix)
+    -- Sorting a copy: getChildren hands back the catalog's own ordering, and
+    -- the list is read alphabetically whatever order it arrives in.
+    local sorted = {}
+    for _, kw in ipairs(keywords or {}) do sorted[#sorted + 1] = kw end
+    table.sort(sorted, function(a, b) return a:getName() < b:getName() end)
+
+    for _, kw in ipairs(sorted) do
+      if #items > SettingsDialog.KEYWORD_ROOT_PICK_LIMIT then return end
+
+      local path = prefix == ""
+        and kw:getName()
+        or (prefix .. SettingsDialog.KEYWORD_ROOT_SEPARATOR .. kw:getName())
+
+      items[#items + 1] = { title = path, value = path }
+      walk(kw:getChildren(), path)
+    end
+  end
+
+  walk(catalog:getKeywords(), "")
+  return items
+end
+
+--- Make the picker write into the edit field.
+--
+-- Two controls for one setting: the field takes any path, including one whose
+-- keywords do not exist yet, and the popup fills it in from the catalog for
+-- the common case of nesting under something already there.
+--
+-- Apart from the dialog because a modal cannot be opened from a test, and the
+-- rule about the prompt row is exactly the kind of thing that breaks quietly.
+function SettingsDialog.watchKeywordRootPicker(props)
+  props:addObserver("sync_keyword_root_pick", function()
+    -- Read back off the table rather than trusting the arguments the observer
+    -- was handed: ObservationPanel does the same, for the same reason.
+    local picked = props.sync_keyword_root_pick
+    -- The prompt row is a choice of nothing. Treating it as a value would
+    -- empty the field the moment the popup was reset.
+    if picked == nil or picked == "" then return end
+
+    props.sync_keyword_root = picked
+    -- Back to the prompt, so picking the same keyword twice still registers as
+    -- a change -- Lightroom does not re-notify for a write of the value that
+    -- is already there.
+    props.sync_keyword_root_pick = ""
+  end)
+end
+
+local function keywordRootSection(f, props)
+  local LABEL = 110
+
+  return f:column {
+    spacing = f:label_spacing(),
+    fill_horizontal = 1,
+
+    f:static_text { title = "Where the taxonomy keywords go", font = "<system/bold>" },
+
+    f:row {
+      f:static_text { title = "Keyword root:", width = LABEL, alignment = "right" },
+      f:edit_field {
+        value              = LrView.bind("sync_keyword_root"),
+        width              = 180,
+        immediate          = true,
+        placeholder_string = "top level",
+      },
+      f:popup_menu {
+        value = LrView.bind("sync_keyword_root_pick"),
+        items = LrView.bind("keywordRootItems"),
+        width = 190,
+      },
+    },
+
+    f:static_text {
+      title = "Synced keywords are filed under this, as\n"
+        .. "Root > Animalia > Insecta > …  Use > to nest it inside a keyword\n"
+        .. "you already have, or clear it to file the kingdoms at the top\n"
+        .. "level. Keywords already written stay where they are.",
+      width           = 500,
+      height_in_lines = 4,
+    },
+  }
+end
+
+--------------------------------------------------------------------------------
 -- Observations tab
 --------------------------------------------------------------------------------
 
@@ -207,6 +321,12 @@ local function observationsTab(f, props, actions)
           value = LrView.bind("inat_sync_after_upload"),
         },
       },
+
+      f:spacer { height = 10 },
+      f:separator { fill_horizontal = 1 },
+      f:spacer { height = 6 },
+
+      keywordRootSection(f, props),
 
       f:spacer { height = 10 },
       f:separator { fill_horizontal = 1 },
@@ -342,9 +462,24 @@ function SettingsDialog.savePreferences(props)
   for key in pairs(Settings.DEFAULTS) do
     local value = props[key]
     if value ~= nil then
+      if key == "sync_keyword_root" then
+        value = SettingsDialog.normalizeKeywordRoot(value)
+      end
       Settings.set(key, value)
     end
   end
+end
+
+--- Tidy a typed keyword root into the path the sync will actually build.
+--
+-- Round-tripped through InatAPI so the stored string and the keywords written
+-- from it cannot disagree: stray spaces, a trailing ">", an empty level typed
+-- between two separators all vanish here rather than becoming a keyword named
+-- " " that nobody can find. An empty result is left empty, which means the top
+-- level of the catalog.
+function SettingsDialog.normalizeKeywordRoot(value)
+  local levels = require("InatAPI").keywordRootPath(tostring(value or ""))
+  return table.concat(levels, SettingsDialog.KEYWORD_ROOT_SEPARATOR)
 end
 
 --- Store the pasted token, if one was given.
@@ -537,9 +672,17 @@ function SettingsDialog.show()
     props.api_token  = ""
     props.status     = tokenStatusText()
 
+    -- The picker is a way of typing into the field, not a second setting: it
+    -- has no entry in Settings.DEFAULTS, so savePreferences ignores it.
+    props.sync_keyword_root_pick = ""
+    props.keywordRootItems =
+      SettingsDialog.keywordRootItems(LrApplication.activeCatalog())
+
     for key, value in pairs(Settings.all()) do
       props[key] = value
     end
+
+    SettingsDialog.watchKeywordRootPicker(props)
 
     -- Follows the lock rather than the buttons, so the dialog is right about
     -- what is running even when it was not the one that started it: opened
