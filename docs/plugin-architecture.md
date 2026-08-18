@@ -363,9 +363,22 @@ observation than the one that now exists.
 ### The settings window
 
 `SettingsDialog.lua` is a modal `f:tab_view` with three tabs: **Account**
-(credentials), **Observations** (geoprivacy, GPS, project, sync-after-upload,
-and **Sync All Linked Photos**) and **Image** (metadata inclusion, location and
-person stripping, watermark).
+(credentials), **Observations** (keyword root, **Sync All Linked Photos**,
+**Find Unlinked Observations…**) and **Upload** (geoprivacy, GPS, project,
+sync-after-upload, metadata inclusion, location and person stripping,
+watermark).
+
+The split is by when a question is answered, not by which API field it lands
+in: what an observation *says* is decided at upload time alongside what the
+file carries, while the Observations tab is the catalog-wide side.
+
+Every preference is written by an observer the moment it changes
+(`SettingsDialog.watchPreferences`), so the window's only button is **Done** --
+the cancel button is left off with `cancelVerb = "< exclude >"`. A Save/Cancel
+pair would advertise a pending edit that does not exist, and a Cancel that
+cannot undo anything is worse than no Cancel. Credentials are the exception,
+being a store plus a network check, so **Save Token** and **Clear Stored
+Credentials** are push buttons on the Account tab instead.
 
 These were the publish connection's settings. They had to go somewhere when the
 connection did, and they are genuine preferences rather than per-batch choices,

@@ -77,8 +77,8 @@ Go to **File → Plug-in Extras → Pinned Settings…** and open the
    <https://www.inaturalist.org/users/api_token> directly.
 3. Copy the token and paste it into the **Token** field. Either the bare token
    or the whole `{"api_token":"..."}` response works.
-4. Click **Save**. The plugin verifies the token immediately and reports which
-   account it belongs to.
+4. Click **Save Token**, beside the field. The plugin verifies the token
+   immediately and reports which account it belongs to.
 
 These tokens expire after **24 hours**, so this needs repeating each day you
 use the plugin. It requires no registration, which makes it the practical
@@ -295,13 +295,20 @@ disagreeing with itself. Posting a new identification withdraws the old one.
 
 **File → Plug-in Extras → Pinned Settings…**, in three tabs:
 
-- **Account** — credentials, as above.
-- **Observations** — what new observations say: geoprivacy, whether to send the
-  photo's GPS coordinates, an optional project ID, and whether to sync taxa back
-  after uploading. Also **Sync All Linked Photos**, which refreshes every photo
-  in the catalog that has an observation ID.
-- **Image** — what gets uploaded: which metadata to include, whether to strip
-  location or person info, and an optional copyright watermark.
+- **Account** — credentials, as above. The only tab with buttons that save
+  something: a token has to be stored and checked, so **Save Token** and
+  **Clear Stored Credentials** sit beside the field they act on.
+- **Observations** — the catalog side: where the taxonomy keywords go, plus
+  **Sync All Linked Photos**, which refreshes every photo in the catalog that
+  has an observation ID, and **Find Unlinked Observations…**.
+- **Upload** — everything an upload decides. What the observation says:
+  geoprivacy, whether to send the photo's GPS coordinates, an optional project
+  ID, and whether to sync taxa back afterwards. And what the file carries:
+  which metadata to include, whether to strip location or person info, and an
+  optional copyright watermark.
+
+Every setting outside the Account tab is saved the moment you change it, so the
+window closes on **Done** and there is nothing to cancel.
 
 Uploads are always JPEG, sRGB, 2048 px on the long edge, quality 90, and that is
 not adjustable. iNaturalist rejects uploads over roughly 20 MB and displays at

@@ -40,14 +40,14 @@ MUTATIONS = [
     (
         "SettingsDialog",
         "saving copies the whole property table into prefs, token included",
-        "  for key in pairs(Settings.DEFAULTS) do\n    local value = props[key]",
-        "  for key in pairs(props) do\n    local value = props[key]",
+        "  for key in pairs(Settings.DEFAULTS) do\n    SettingsDialog.applyPreference(props, key)\n  end\nend",
+        "  for key in pairs(props) do\n    SettingsDialog.applyPreference(props, key)\n  end\nend",
     ),
     (
         "SettingsDialog",
         "a preference set to false is skipped when saving",
-        "    if value ~= nil then",
-        "    if value then",
+        "  local value = props[key]\n  if value == nil then return end",
+        "  local value = props[key]\n  if not value then return end",
     ),
     (
         "SettingsDialog",
@@ -70,7 +70,7 @@ MUTATIONS = [
     (
         "SettingsDialog",
         "Sync All is silent when nothing is linked",
-        "  if #photos == 0 then\n    LrDialogs.message(\"iNaturalist Sync\",\n      \"No photos in this catalog are linked to an observation yet.\", \"info\")\n    return 0\n  end",
+        "  if #photos == 0 then\n    LrDialogs.message(\"Pinned Sync\",\n      \"No photos in this catalog are linked to an observation yet.\", \"info\")\n    return 0\n  end",
         "  if #photos == 0 then\n    return 0\n  end",
     ),
     (
@@ -82,20 +82,26 @@ MUTATIONS = [
     (
         "SettingsDialog",
         "a tab carries no identifier at all",
-        '    identifier = "image",',
+        '    identifier = "upload",',
         "    identifier = nil,",
     ),
     (
         "SettingsDialog",
         "a tab has no title, so there is nothing to click",
-        '    title      = "Image",',
+        '    title      = "Upload",',
         '    title      = nil,',
     ),
     (
         "SettingsDialog",
         "the account tab is buried behind the others",
-        "    accountTab(f, props),\n    observationsTab(f, props, actions),",
-        "    observationsTab(f, props, actions),\n    accountTab(f, props),",
+        "    accountTab(f, props, actions),\n    observationsTab(f, props, actions),",
+        "    observationsTab(f, props, actions),\n    accountTab(f, props, actions),",
+    ),
+    (
+        "SettingsDialog",
+        "settings wait for a Save that no longer exists",
+        "function SettingsDialog.watchPreferences(props)\n  for key in pairs(Settings.DEFAULTS) do",
+        "function SettingsDialog.watchPreferences(props)\n  for key in pairs({}) do",
     ),
 ]
 

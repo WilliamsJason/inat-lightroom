@@ -12,11 +12,18 @@
   people:
 
     Account       once per machine, then forgotten
-    Observations  what an observation says
-    Image         what the uploaded file contains
+    Observations  linking this catalog to iNaturalist, and where the keywords go
+    Upload        what gets sent: the observation's own fields, and the file
 
-  Modal on purpose. Unlike the observation panel there is nothing here to keep
-  watching while you work, and a modal is what makes "Save" mean something.
+  Modal on purpose: unlike the observation panel there is nothing here to keep
+  watching while you work.
+
+  Every preference is saved the moment it is changed, so the window closes on
+  "Done" rather than on "Save". A Save/Cancel pair would promise a pending
+  edit that could be thrown away, and there is no such thing here -- Cancel
+  would have to undo settings already written. Credentials are the exception,
+  because storing a token is a deliberate act with a network check behind it:
+  their buttons live on the Account tab, next to the field they act on.
 --]]
 
 local LrApplication     = import "LrApplication"
@@ -84,7 +91,7 @@ end
 
 SettingsDialog.tokenStatusText = tokenStatusText
 
-local function accountTab(f, props)
+local function accountTab(f, props, actions)
   local LABEL = 90
 
   return f:tab_view_item {
@@ -119,6 +126,23 @@ local function accountTab(f, props)
       f:row {
         f:static_text { title = "Token:", width = LABEL, alignment = "right" },
         f:password_field { value = LrView.bind("api_token"), width = 380, immediate = true },
+      },
+
+      -- On this tab rather than in the window's button bar, because they are
+      -- the only two things in the dialog that do not take effect the moment
+      -- they are changed: a token has to be stored and checked against
+      -- iNaturalist, and clearing one is deliberate enough to ask for its own
+      -- button. Everything else here saves itself, so the window needs no Save.
+      f:row {
+        f:static_text { title = "", width = LABEL },
+        f:push_button {
+          title  = "Save Token",
+          action = actions.saveToken,
+        },
+        f:push_button {
+          title  = "Clear Stored Credentials",
+          action = actions.clearCredentials,
+        },
       },
 
       f:spacer { height = 10 },
@@ -301,12 +325,82 @@ end
 -- Observations tab
 --------------------------------------------------------------------------------
 
+--- Linking this catalog to iNaturalist, and where the taxonomy lands.
+--
+-- What an observation *says* is not here: geoprivacy, the project, and whether
+-- coordinates travel are all decided at upload time, and they read better
+-- beside the file settings they are applied with than beside the catalog-wide
+-- jobs below.
 local function observationsTab(f, props, actions)
-  local LABEL = 110
-
   return f:tab_view_item {
     title      = "Observations",
     identifier = "observations",
+
+    f:column {
+      spacing = f:label_spacing(),
+      margin  = 10,
+
+      keywordRootSection(f, props),
+
+      f:spacer { height = 10 },
+      f:separator { fill_horizontal = 1 },
+      f:spacer { height = 6 },
+
+      f:static_text { title = "Everything already linked", font = "<system/bold>" },
+      f:static_text {
+        title = "Fetches the current identification for every photo in this\n"
+          .. "catalog that has an observation ID, and updates its keywords.",
+        width           = 500,
+        height_in_lines = 2,
+      },
+      f:push_button {
+        title   = "Sync All Linked Photos",
+        action  = actions.syncAll,
+        enabled = LrView.bind("idle"),
+      },
+
+      f:spacer { height = 10 },
+      f:separator { fill_horizontal = 1 },
+      f:spacer { height = 6 },
+
+      f:static_text { title = "Observations not linked", font = "<system/bold>" },
+      f:static_text {
+        title = "Looks through your iNaturalist observations for ones where the\n"
+          .. "matching photo in your catalog does not have the linked\n"
+          .. "iNaturalist metadata. You choose what gets linked before\n"
+          .. "anything is written.",
+        width           = 500,
+        height_in_lines = 4,
+      },
+      f:push_button {
+        title   = "Find Unlinked Observations…",
+        action  = actions.reverseSync,
+        enabled = LrView.bind("idle"),
+      },
+      f:static_text {
+        title   = LrView.bind("busyLabel"),
+        width   = 500,
+        visible = LrView.bind { key = "idle", transform = function(idle)
+          return not idle
+        end },
+      },
+    },
+  }
+end
+
+--------------------------------------------------------------------------------
+-- Upload tab
+--------------------------------------------------------------------------------
+
+--- Everything an upload decides: what the observation says, and what the file
+-- carries. One tab because they are answered together, at the same moment, by
+-- someone about to send a photo.
+local function uploadTab(f, props)
+  local LABEL = 110
+
+  return f:tab_view_item {
+    title      = "Upload",
+    identifier = "upload",
 
     f:column {
       spacing = f:label_spacing(),
@@ -364,69 +458,7 @@ local function observationsTab(f, props, actions)
       f:separator { fill_horizontal = 1 },
       f:spacer { height = 6 },
 
-      keywordRootSection(f, props),
-
-      f:spacer { height = 10 },
-      f:separator { fill_horizontal = 1 },
-      f:spacer { height = 6 },
-
-      f:static_text { title = "Everything already linked", font = "<system/bold>" },
-      f:static_text {
-        title = "Fetches the current identification for every photo in this\n"
-          .. "catalog that has an observation ID, and updates its keywords.",
-        width           = 500,
-        height_in_lines = 2,
-      },
-      f:push_button {
-        title   = "Sync All Linked Photos",
-        action  = actions.syncAll,
-        enabled = LrView.bind("idle"),
-      },
-
-      f:spacer { height = 10 },
-      f:separator { fill_horizontal = 1 },
-      f:spacer { height = 6 },
-
-      f:static_text { title = "Observations not linked", font = "<system/bold>" },
-      f:static_text {
-        title = "Looks through your iNaturalist observations for ones where the\n"
-          .. "matching photo in your catalog does not have the linked\n"
-          .. "iNaturalist metadata. You choose what gets linked before\n"
-          .. "anything is written.",
-        width           = 500,
-        height_in_lines = 4,
-      },
-      f:push_button {
-        title   = "Find Unlinked Observations…",
-        action  = actions.reverseSync,
-        enabled = LrView.bind("idle"),
-      },
-      f:static_text {
-        title   = LrView.bind("busyLabel"),
-        width   = 500,
-        visible = LrView.bind { key = "idle", transform = function(idle)
-          return not idle
-        end },
-      },
-    },
-  }
-end
-
---------------------------------------------------------------------------------
--- Image tab
---------------------------------------------------------------------------------
-
-local function imageTab(f, props)
-  local LABEL = 110
-
-  return f:tab_view_item {
-    title      = "Image",
-    identifier = "image",
-
-    f:column {
-      spacing = f:label_spacing(),
-      margin  = 10,
-
+      f:static_text { title = "The file that gets sent", font = "<system/bold>" },
       f:static_text {
         title = "Uploads are always JPEG, sRGB, 2048 px on the long edge --\n"
           .. "which is the largest size iNaturalist displays.",
@@ -456,7 +488,7 @@ local function imageTab(f, props)
       },
       f:static_text {
         title = "This strips GPS from the JPEG only. The observation's own\n"
-          .. "location is set on the Observations tab and is unaffected.",
+          .. "location is set above and is unaffected.",
         width           = 500,
         height_in_lines = 2,
       },
@@ -494,17 +526,43 @@ end
 -- Saving
 --------------------------------------------------------------------------------
 
+--- Copy one edited preference off the property table into storage.
+-- Tidying belongs here rather than at the call sites so that a value written
+-- as it is typed and a value written on close go through the same rules.
+function SettingsDialog.applyPreference(props, key)
+  local value = props[key]
+  if value == nil then return end
+
+  if key == "sync_keyword_root" then
+    value = SettingsDialog.normalizeKeywordRoot(value)
+  end
+
+  Settings.set(key, value)
+end
+
 --- Copy the editable preferences off the property table into storage.
 -- Kept apart from the dialog so it can be tested without one.
 function SettingsDialog.savePreferences(props)
   for key in pairs(Settings.DEFAULTS) do
-    local value = props[key]
-    if value ~= nil then
-      if key == "sync_keyword_root" then
-        value = SettingsDialog.normalizeKeywordRoot(value)
-      end
-      Settings.set(key, value)
-    end
+    SettingsDialog.applyPreference(props, key)
+  end
+end
+
+--- Store each preference as it is changed, rather than on the way out.
+--
+-- What makes the dialog honest: with no Save button there is nothing to
+-- promise, and with nothing pending there is nothing a Cancel could undo.
+-- A ticked checkbox is already the setting.
+--
+-- Every key in DEFAULTS gets an observer, including the few nothing on screen
+-- binds -- the bookkeeping ones. Writing back a value no control can change
+-- costs nothing, and a setting that gains a control later cannot be forgotten
+-- here.
+function SettingsDialog.watchPreferences(props)
+  for key in pairs(Settings.DEFAULTS) do
+    props:addObserver(key, function()
+      SettingsDialog.applyPreference(props, key)
+    end)
   end
 end
 
@@ -532,6 +590,65 @@ function SettingsDialog.saveCredentials(props)
   end
 
   return nil, nil
+end
+
+--- Store the pasted token, check it, and say what happened.
+--
+-- Must run in a task: verifying touches the network.
+--
+-- The field is emptied once the token is stored, whether or not the check that
+-- follows succeeds -- what is on screen then matches what is on disk, and the
+-- status line above it is the one thing worth reading.
+--
+-- @return true when a token was stored, false when there was nothing to store
+--         or storing failed
+function SettingsDialog.commitToken(props)
+  local stored, storeErr = SettingsDialog.saveCredentials(props)
+
+  if storeErr then
+    LrDialogs.message("Pinned", storeErr, "critical")
+    return false
+  end
+
+  if not stored then
+    LrDialogs.message("Pinned",
+      "Paste a token into the field above first.", "info")
+    return false
+  end
+
+  props.api_token = ""
+  props.status    = tokenStatusText()
+
+  -- Verify immediately. Storing a token that does not work is worse than
+  -- storing nothing, because the failure surfaces later during an upload.
+  local token, tokenErr = InatAuth.getToken(true)
+  if not token then
+    LrDialogs.message("Pinned",
+      "Saved, but authentication failed:\n\n" .. tostring(tokenErr), "critical")
+    return true
+  end
+
+  local user, userErr = InatAuth.whoami(token)
+  if not user then
+    LrDialogs.message("Pinned",
+      "Saved, but the token was rejected:\n\n" .. tostring(userErr), "critical")
+    return true
+  end
+
+  logger:info("Credentials verified for " .. tostring(user.login))
+  LrDialogs.message("Pinned",
+    "Connected as " .. tostring(user.login)
+      .. " (" .. tostring(user.observations_count or 0) .. " observations).",
+    "info")
+  return true
+end
+
+--- Forget the stored token, and say so on the tab that did it.
+function SettingsDialog.clearCredentials(props)
+  InatAuth.clear()
+  props.api_token = ""
+  props.status    = tokenStatusText()
+  LrDialogs.message("Pinned", "Stored credentials cleared.", "info")
 end
 
 --------------------------------------------------------------------------------
@@ -695,9 +812,9 @@ end
 -- the settings window simply does not appear.
 function SettingsDialog.tabs(f, props, actions)
   return {
-    accountTab(f, props),
+    accountTab(f, props, actions),
     observationsTab(f, props, actions),
-    imageTab(f, props),
+    uploadTab(f, props),
   }
 end
 
@@ -757,6 +874,10 @@ function SettingsDialog.show()
 
     SettingsDialog.watchKeywordRootPicker(props)
 
+    -- After the values are in, so that filling the table from storage is not
+    -- itself mistaken for an edit.
+    SettingsDialog.watchPreferences(props)
+
     -- Follows the lock rather than the buttons, so the dialog is right about
     -- what is running even when it was not the one that started it: opened
     -- during a sync launched from the menu, the buttons come up already greyed.
@@ -792,6 +913,18 @@ function SettingsDialog.show()
             SettingsDialog.reverseSync(syncContext)
           end)
       end,
+
+      -- A task because storing the token is followed by a request to
+      -- iNaturalist, and a button's action does not run in one.
+      saveToken = function()
+        LrTasks.startAsyncTask(function()
+          SettingsDialog.commitToken(props)
+        end)
+      end,
+
+      clearCredentials = function()
+        SettingsDialog.clearCredentials(props)
+      end,
     }
 
     local contents = f:column {
@@ -803,66 +936,23 @@ function SettingsDialog.show()
       },
     }
 
-    local result = LrDialogs.presentModalDialog {
+    -- One button, and it only closes the window. Every setting here was
+    -- written the moment it was changed, and the credentials have their own
+    -- buttons on the Account tab, so there is nothing left for a Save to do --
+    -- and nothing a Cancel could take back. "< exclude >" is what
+    -- presentModalDialog takes to leave the cancel button off entirely.
+    LrDialogs.presentModalDialog {
       title      = "Pinned Settings",
       contents   = contents,
-      actionVerb = "Save",
-      otherVerb  = "Clear Stored Credentials",
+      actionVerb = "Done",
+      cancelVerb = "< exclude >",
     }
 
-    if result == "other" then
-      InatAuth.clear()
-      LrDialogs.message("Pinned", "Stored credentials cleared.", "info")
-      return
-    end
-
-    if result ~= "ok" then
-      return
-    end
-
-    -- Preferences are saved whether or not credentials were touched. Someone
-    -- opening this to change geoprivacy has no reason to retype a token, and
-    -- making them would be a good way to end up with neither saved.
+    -- A backstop, not the saving mechanism. An edit_field that was still being
+    -- typed into when the window closed has already reached the property table
+    -- -- every field here is immediate -- but writing the lot once more costs
+    -- one pass over a handful of keys and cannot leave a stale preference.
     SettingsDialog.savePreferences(props)
-
-    -- Verifying credentials touches the network, so it has to run in a task.
-    LrTasks.startAsyncTask(function()
-      local stored, storeErr = SettingsDialog.saveCredentials(props)
-
-      if storeErr then
-        LrDialogs.message("Pinned", storeErr, "critical")
-        return
-      end
-
-      if not stored then
-        -- Not a failure. The settings above were saved; there was simply
-        -- nothing in the credential fields, which is the normal case for
-        -- anyone who set them up last week.
-        return
-      end
-
-      -- Verify immediately. Storing a token that does not work is worse than
-      -- storing nothing, because the failure surfaces later during an upload.
-      local token, tokenErr = InatAuth.getToken(true)
-      if not token then
-        LrDialogs.message("Pinned",
-          "Saved, but authentication failed:\n\n" .. tostring(tokenErr), "critical")
-        return
-      end
-
-      local user, userErr = InatAuth.whoami(token)
-      if not user then
-        LrDialogs.message("Pinned",
-          "Saved, but the token was rejected:\n\n" .. tostring(userErr), "critical")
-        return
-      end
-
-      logger:info("Credentials verified for " .. tostring(user.login))
-      LrDialogs.message("Pinned",
-        "Connected as " .. tostring(user.login)
-          .. " (" .. tostring(user.observations_count or 0) .. " observations).",
-        "info")
-    end)
   end)
 end
 
