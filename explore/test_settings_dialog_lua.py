@@ -140,6 +140,121 @@ def test_leftover_application_fields_do_not_stop_a_token_being_stored(plugin, di
 
 
 # ---------------------------------------------------------------------------
+# Saving happens as you type
+#
+# There is no Save button any more: the window closes on "Done" and every
+# preference was already written when it changed. A Save/Cancel pair claimed a
+# pending edit that never existed -- Cancel could not have undone anything --
+# and the whole promise rests on these observers being attached.
+# ---------------------------------------------------------------------------
+
+
+def watching(plugin, dialog):
+    """A property table wired up the way the open dialog wires one."""
+    props = bindable(plugin)
+    for key, value in plugin.require("Settings")["all"]().items():
+        props[key] = value
+    dialog["watchPreferences"](props)
+    return props
+
+
+def test_a_changed_setting_is_stored_without_a_save(plugin, dialog, settings):
+    props = watching(plugin, dialog)
+
+    props["inat_geoprivacy"] = "obscured"
+
+    assert settings["get"]("inat_geoprivacy") == "obscured"
+
+
+def test_a_setting_turned_off_is_stored_without_a_save(plugin, dialog, settings):
+    """The checkbox case, which is the one a user is most likely to tick and
+    then close the window on."""
+    props = watching(plugin, dialog)
+
+    props["inat_upload_location"] = False
+
+    assert settings["get"]("inat_upload_location") is False
+
+
+def test_a_typed_keyword_root_is_tidied_on_the_way_in(plugin, dialog, settings):
+    """Saved as it is typed still means saved the way Save would have."""
+    props = watching(plugin, dialog)
+
+    props["sync_keyword_root"] = "  Nature >  "
+
+    assert settings["get"]("sync_keyword_root") == "Nature"
+
+
+def test_picking_a_keyword_stores_it_too(plugin, dialog, settings):
+    """The picker writes into the field rather than into prefs, so it only
+    reaches storage if the field's own observer is listening."""
+    props = watching(plugin, dialog)
+    dialog["watchKeywordRootPicker"](props)
+
+    props["sync_keyword_root_pick"] = "Nature > Wildlife"
+
+    assert settings["get"]("sync_keyword_root") == "Nature > Wildlife"
+
+
+def test_attaching_the_observers_does_not_count_as_an_edit(plugin, dialog):
+    """Nothing has been changed yet, so nothing should have been written --
+    otherwise opening the dialog rewrites every preference it displays."""
+    dialog["watchPreferences"](bindable(plugin))
+
+    assert plugin.prefs["inat_geoprivacy"] is None
+
+
+# ---------------------------------------------------------------------------
+# The credential buttons
+#
+# Storing a token is the one thing here that is not immediate: it is checked
+# against iNaturalist. Its buttons live on the Account tab beside the field.
+# ---------------------------------------------------------------------------
+
+
+def test_clearing_credentials_empties_the_field_and_says_so(plugin, dialog):
+    props = bindable(plugin)
+    props["api_token"] = _jwt()
+
+    dialog["clearCredentials"](props)
+
+    assert props["api_token"] == ""
+    assert props["status"]
+    assert "cleared" in plugin.dialogs[-1]["message"]
+
+
+def test_an_empty_token_field_is_not_a_saved_token(plugin, dialog):
+    """Pressing the button with nothing pasted has to say so. On the way out
+    of the old dialog this was silence, which was right then and wrong now."""
+    props = bindable(plugin)
+    props["api_token"] = ""
+
+    stored = plugin.in_task(dialog["commitToken"], props)
+
+    assert stored is False
+    assert "Paste a token" in plugin.dialogs[-1]["message"]
+
+
+def test_a_saved_token_is_verified_and_the_field_emptied(plugin, dialog):
+    def handler(method, url, body, headers):
+        return '{"results":[{"login":"birder","observations_count":7}]}', \
+            plugin.runtime.table_from({"status": 200})
+
+    plugin.set_http_handler(handler)
+    props = bindable(plugin)
+    props["api_token"] = _jwt()
+
+    stored = plugin.in_task(dialog["commitToken"], props)
+
+    assert stored is True
+    assert props["api_token"] == "", (
+        "the field still holds the token after it was stored, which leaves a "
+        "secret on screen that no longer matches what the status line says"
+    )
+    assert "birder" in plugin.dialogs[-1]["message"]
+
+
+# ---------------------------------------------------------------------------
 # Sync All
 # ---------------------------------------------------------------------------
 
@@ -518,6 +633,43 @@ def test_every_tab_is_labelled(plugin, dialog):
 def test_the_account_tab_comes_first(plugin, dialog):
     """Nothing else in the dialog does anything until credentials exist."""
     assert tabs(plugin, dialog)[0]["identifier"] == "account"
+
+
+# ---------------------------------------------------------------------------
+# Which tab a setting is on
+#
+# Observations is the catalog side: where the keywords go, and the two jobs
+# that walk the catalog. Upload is everything decided when a photo is sent --
+# what the observation says as much as what the file carries, because they are
+# answered in the same breath by the same person.
+# ---------------------------------------------------------------------------
+
+
+def tab_bindings(plugin, dialog, index):
+    from test_plugin_info_provider_lua import bound_keys, walk
+
+    tab = tabs(plugin, dialog)[index]
+    return [key for binding, _ in walk(tab) for key in bound_keys(binding)]
+
+
+def test_the_upload_tab_holds_everything_an_upload_decides(plugin, dialog):
+    bound = tab_bindings(plugin, dialog, 2)
+
+    for key in ("inat_geoprivacy", "inat_upload_location", "inat_project_id",
+                "inat_sync_after_upload", "render_metadata_option",
+                "render_remove_location", "render_use_watermark"):
+        assert key in bound, key
+
+
+def test_the_observations_tab_is_not_also_an_upload_tab(plugin, dialog):
+    """They were split for a reason. A setting left behind on both tabs is two
+    controls for one preference, which is how a user ends up believing the one
+    they can see is the one that applied."""
+    bound = tab_bindings(plugin, dialog, 1)
+
+    for key in ("inat_geoprivacy", "inat_upload_location", "inat_project_id",
+                "inat_sync_after_upload"):
+        assert key not in bound, key
 
 
 # ---------------------------------------------------------------------------

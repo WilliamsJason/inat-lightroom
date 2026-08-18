@@ -16,7 +16,7 @@ This is a spare-time project, so please do not expect a same-day reply.
 `LrPasswords`, which is Lightroom's wrapper around the OS credential vault —
 Windows Credential Manager or the macOS Keychain. It is not written to disk by
 the plugin and it is not written to its log. Use **Clear Stored Credentials**
-in the settings window to remove it.
+on the Account tab of the settings window to remove it.
 
 The plugin never asks for your iNaturalist password.
 
