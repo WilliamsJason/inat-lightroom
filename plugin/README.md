@@ -178,7 +178,9 @@ all.
 ### Location, and why the panel nags about it
 
 The panel shows the selected photo's coordinates, and **Set on Map** hands you
-over to Lightroom's own Map module to place a photo that has none.
+over to Lightroom's own Map module to place a photo that has none. Drop the pin
+and the panel picks the coordinates up on its own within a couple of seconds —
+no need to click off the photo and back to make it notice.
 
 This matters more than it looks. Measured against the live API: of 8,691,735
 observations with open geoprivacy and no coordinates, **99.975% are casual

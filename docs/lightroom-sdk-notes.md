@@ -580,6 +580,44 @@ it the text looks like every other label and nobody will try clicking it.
 This is read from the binary, not from a documented API. It has not been proven
 against a Lightroom that dislikes it.
 
+## A plugin is never told that a photo's metadata changed
+
+There is no observer for it. `LrCatalog`'s method table — the SDK-facing one, in
+`LibraryToolkit.dll` next to `getTargetPhotos` — has `withReadAccessDo`,
+`findPhotos`, `batchGetRawMetadata`, `setPropertyForPlugin` and the rest, and
+nothing that registers a callback. The only two observers a plugin can have are
+the ones `presentFloatingDialog` wires up for it:
+
+```
+selectionChangeObserver  ->  addSelectionContentObserver
+sourceChangeObserver     ->  addSourcesChangedObserver
+```
+
+Both are about *which* photos, never about what is on them. Lightroom does have
+the notification internally — `AgMetadataEvents.addMetadataObserver`, beside
+`removeMetadataObserver` and `beginObservingDB` in `LibraryToolkit.dll` — and it
+is not reachable from Lua.
+
+So a panel that shows a photo's metadata cannot be event-driven. Setting a
+location in the Map module changes nothing a plugin can see, and the panel goes
+on showing what it read. The only options are to poll, or to make the user
+reselect the photo so the *selection* observer fires — and the second is the
+kind of thing people learn to do without ever reporting it as a bug.
+
+This plugin polls: `ObservationPanel.watch` re-reads the selected photo every
+two seconds while its window is open, compares, and writes only what differs
+(`PanelCore.valuesDiffer`). Cheap enough at one photo, and it stops with the
+window.
+
+Two things a poll has to get right, both of which are about *not* writing:
+
+- **Leave what the user is editing alone.** A bound property the panel writes to
+  and the catalog does not — text being typed, a choice not yet applied — will
+  differ from the catalog on every single look. Reapplying the catalog value
+  there means the field silently reverts a couple of seconds after each edit.
+- **Leave a moved-on selection alone**, or the poll and the selection observer
+  race, and the poll wins by being last.
+
 ## `export_destinationType = "tempFolder"` needs an export service provider
 
 A plugin with no `LrExportServiceProvider` cannot render into Lightroom's temp

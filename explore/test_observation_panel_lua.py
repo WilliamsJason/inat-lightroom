@@ -255,6 +255,147 @@ def test_the_source_observer_also_reads_on_a_task(plugin, panel):
     assert plugin.pending_task_count() > 0
 
 
+#
+# Watching for what the SDK will not report
+#
+# The catalog offers a plugin two observers, for the selection and for the
+# sources, and nothing for metadata. So giving a photo a location in the Map
+# module used to leave the panel saying "None" until the selection was jogged
+# off the photo and back.
+#
+
+
+def with_gps(plugin, photo, latitude=47.6, longitude=-122.3):
+    """Give a stub photo a location the way the Map module would."""
+    photo["_raw"]["gps"] = deep(
+        plugin, {"latitude": latitude, "longitude": longitude})
+    return photo
+
+
+def watching(plugin, panel, photo):
+    """Open the panel on one photo and hand back its property table."""
+    plugin.set_target_photos([photo])
+    return show(plugin, panel)["contents"]["bind_to_object"]
+
+
+def test_a_location_added_elsewhere_reaches_the_panel(plugin, panel):
+    """The whole point: set the location in the Map module and come back."""
+    photo = plugin.new_photo(formatted={"fileName": "one.jpg"})
+    props = watching(plugin, panel, photo)
+    assert props["hasLocation"] is False
+
+    with_gps(plugin, photo)
+
+    assert plugin.in_task(panel.pollOnce, props) is True
+    assert props["hasLocation"] is True
+    assert "None" not in props["location"]
+
+
+def test_a_photo_that_has_not_changed_is_not_rewritten(plugin, panel):
+    """This runs every couple of seconds for as long as the panel is open. The
+    common case has to be a read and nothing else."""
+    photo = with_gps(plugin, plugin.new_photo(formatted={"fileName": "one.jpg"}))
+    props = watching(plugin, panel, photo)
+
+    assert plugin.in_task(panel.pollOnce, props) is False
+
+
+def test_a_species_guess_being_typed_survives_a_poll(plugin, panel):
+    """The guess is not in the catalog until a button is pressed. A poll that
+    treated the catalog as the truth would undo it two seconds later -- silent,
+    late, and blamed on the typing."""
+    photo = plugin.new_photo(
+        inat_species_guess="Apis mellifera", formatted={"fileName": "one.jpg"})
+    props = watching(plugin, panel, photo)
+
+    props["speciesGuess"] = "Bombus"
+    with_gps(plugin, photo)
+    plugin.in_task(panel.pollOnce, props)
+
+    assert props["speciesGuess"] == "Bombus"
+    assert props["hasLocation"] is True
+
+
+def test_the_suggestions_survive_a_poll(plugin, panel):
+    """Unlike a change of selection, which clears them. The photo is the same
+    photo, so what the model said about it still describes it."""
+    photo = plugin.new_photo(formatted={"fileName": "one.jpg"})
+    props = watching(plugin, panel, photo)
+    plugin.call(panel.applySuggestionSlots, props,
+                deep(plugin, [{"taxon_id": 47219, "name": "Apis mellifera"}]), 1)
+
+    with_gps(plugin, photo)
+    plugin.in_task(panel.pollOnce, props)
+
+    assert "Apis mellifera" in props["suggestionTitle1"]
+
+
+def test_a_poll_leaves_a_selection_that_has_moved_on_alone(plugin, panel):
+    """The selection observer owns that, and it does more than this does."""
+    first = plugin.new_photo(formatted={"fileName": "one.jpg"})
+    second = plugin.new_photo(formatted={"fileName": "two.jpg"})
+    props = watching(plugin, panel, first)
+
+    plugin.set_target_photos([second])
+
+    assert plugin.in_task(panel.pollOnce, props) is False
+    assert props["selection"] == "one.jpg"
+
+
+def test_the_watcher_waits_between_looks(plugin, panel):
+    """A tight loop against the catalog would be worse than the problem."""
+    photo = plugin.new_photo(formatted={"fileName": "one.jpg"})
+    props = watching(plugin, panel, photo)
+
+    answers = iter([True, True, False])
+    plugin.in_task(panel.watch, props, lambda: next(answers, False))
+
+    assert plugin.sleeps[-1] == panel["WATCH_INTERVAL"]
+
+
+def test_the_watcher_stops_when_the_window_closes(plugin, panel):
+    """Otherwise it goes on reading the catalog against a dead property table
+    for the rest of the session."""
+    photo = plugin.new_photo(formatted={"fileName": "one.jpg"})
+    props = watching(plugin, panel, photo)
+
+    looks = []
+
+    def is_open():
+        looks.append(len(looks))
+        return len(looks) <= 3
+
+    plugin.in_task(panel.watch, props, is_open)
+
+    assert len(looks) == 4, "it must ask, and then stop asking"
+
+
+def test_the_watcher_survives_a_failed_look(plugin, panel):
+    """One bad read must not end the task: the only symptom would be the panel
+    quietly going back to needing a nudge."""
+    photo = plugin.new_photo(formatted={"fileName": "one.jpg"})
+    props = watching(plugin, panel, photo)
+    plugin.eval("""
+      (function()
+        local ObservationPanel = require "ObservationPanel"
+        ObservationPanel.pollOnce = function() error("catalog said no") end
+      end)()
+    """)
+
+    answers = iter([True, True, True, True, False])
+    plugin.in_task(panel.watch, props, lambda: next(answers, False))
+
+    assert any("catalog said no" in line for line in plugin.log_lines)
+
+
+def test_closing_the_window_is_announced(plugin, panel):
+    """What stops the watcher. Without a hook it would keep looking until this
+    task happened to be scheduled again, against a window that is gone."""
+    args = show(plugin, panel)
+
+    assert args["windowWillClose"] is not None
+
+
 def test_a_superseded_refresh_does_not_overwrite_a_newer_one(plugin, panel):
     """Arrow-keying fires the observer faster than the reads finish, and a
     folder change reports the whole folder selected before settling on one

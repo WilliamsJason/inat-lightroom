@@ -218,6 +218,32 @@ whole folder selected before settling on one photo — the host log showed
 refresh that started earlier and finished later can leave the panel on the wrong
 photo, and there is nothing to correct it until the next click.
 
+**Nothing reports that a photo changed, so the panel looks for itself.** The
+SDK's catalog offers a plugin exactly two observers — selection and sources —
+and no metadata notification of any kind; Lightroom has one internally
+(`AgMetadataEvents.addMetadataObserver`) and does not expose it. So placing a
+photo in the Map module left the panel insisting the photo had no location until
+the selection was jogged off it and back.
+
+`ObservationPanel.watch` polls every `WATCH_INTERVAL` seconds for as long as the
+window is up, and `pollOnce` is deliberately narrow about what it will touch:
+
+- **Only the same photo.** A selection that has moved on belongs to the
+  selection observer, which also clears the suggestions.
+- **Only if something differs**, so the ordinary case is a read and nothing
+  else.
+- **Never `PanelCore.PANEL_OWNED`** — the species guess and the accuracy are
+  what the person is halfway through saying, and are not in the catalog until a
+  button is pressed. Overwriting a guess being typed with what the catalog last
+  stored would be silent, two seconds late, and blamed on the typing.
+- **Never the suggestions**, since the photo has not changed and they still
+  describe it.
+
+The loop stops on `windowWillClose` and again when `presentFloatingDialog`
+returns, and swallows and logs a failed look rather than dying on it — a watcher
+that ends on one bad read stops watching for the session, and the only symptom
+would be the panel going back to needing a nudge.
+
 The panel shows the selection, what the observation currently is, its quality
 grade and last sync, a **Species guess** with a **Get Suggestions** button and a
 list of what came back, one button that is **Upload to iNaturalist** or **Update

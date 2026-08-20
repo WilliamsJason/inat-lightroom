@@ -249,6 +249,24 @@ MUTATIONS = [
 
     (
         "ObservationPanel",
+        "the watcher rewrites what the panel owns, undoing a guess being typed",
+        "  for key, value in pairs(values) do\n    if not PanelCore.PANEL_OWNED[key] then props[key] = value end\n  end",
+        "  for key, value in pairs(values) do\n    props[key] = value\n  end",
+    ),
+    (
+        "ObservationPanel",
+        "the watcher writes onto a selection that has already moved on",
+        "  if not samePhoto(photo, props.photo) then return false end",
+        "",
+    ),
+    (
+        "ObservationPanel",
+        "the watcher never stops looking once the window is gone",
+        "    if not isOpen() then break end",
+        "",
+    ),
+    (
+        "ObservationPanel",
         "the observation id looks like a link but does nothing",
         "        text_color      = LINK_COLOR,\n        mouse_down      = actions.view,",
         "        text_color      = LINK_COLOR,",

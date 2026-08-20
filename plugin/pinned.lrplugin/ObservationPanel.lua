@@ -221,6 +221,82 @@ local function makeRefresh(props)
   end
 end
 
+--- How long to wait between looks at the selected photo, in seconds.
+--
+-- Short enough that coming back from the Map module feels like the panel
+-- noticed, long enough that it is not doing anything while nobody is looking.
+ObservationPanel.WATCH_INTERVAL = 2
+
+--- Whether two references describe the same photo.
+--
+-- Identity first, because that is what the harness and, as far as anything
+-- here can tell, the host both do. `localIdentifier` is the fallback in case a
+-- second read hands back a different wrapper for the same photo: the whole
+-- watcher would go quiet if that were true and nothing would say why.
+local function samePhoto(a, b)
+  if a == b then return true end
+  if not a or not b then return false end
+
+  return a.localIdentifier ~= nil and a.localIdentifier == b.localIdentifier
+end
+
+--- Look once at the selected photo, and redraw only if it has something new.
+--
+-- For the case the SDK cannot report: giving a photo a location in the Map
+-- module. Nothing tells a plugin that metadata changed -- there are observers
+-- for the selection and for the sources and nothing else -- so before this the
+-- panel went on saying "None - iNaturalist will mark this casual" until the
+-- selection was jogged off the photo and back.
+--
+-- Only the same photo is touched. A selection that has moved on belongs to the
+-- selection observer, which does more than this does: it clears the suggestions
+-- too, because they describe the photo they were asked about.
+--
+-- The suggestions are deliberately left alone here for the same reason -- the
+-- photo has not changed, so they still describe it -- and the values the panel
+-- owns rather than reads are left alone as well. Overwriting a species guess
+-- being typed with what the catalog last stored would be the worst kind of bug:
+-- silent, two seconds late, and blamed on the typing.
+function ObservationPanel.pollOnce(props)
+  local catalog = LrApplication.activeCatalog()
+  local photos  = catalog:getTargetPhotos() or {}
+  local photo   = photos[1]
+
+  if not samePhoto(photo, props.photo) then return false end
+
+  local values = ObservationPanel.valuesFor(photo, #photos)
+  if not PanelCore.valuesDiffer(props, values, PanelCore.PANEL_OWNED) then
+    return false
+  end
+
+  for key, value in pairs(values) do
+    if not PanelCore.PANEL_OWNED[key] then props[key] = value end
+  end
+
+  return true
+end
+
+--- Keep looking for as long as the window is up.
+--
+-- Errors are caught and logged rather than left to end the task: a watcher that
+-- dies on one bad read stops watching for the rest of the session, and the only
+-- symptom would be the panel going back to needing a nudge.
+--
+-- @param props   The window's property table.
+-- @param isOpen  Answers whether the window is still up.
+function ObservationPanel.watch(props, isOpen)
+  while isOpen() do
+    LrTasks.sleep(ObservationPanel.WATCH_INTERVAL)
+
+    if not isOpen() then break end
+
+    local ok, err = LrTasks.pcall(ObservationPanel.pollOnce, props)
+    if not ok then
+      logger:warnf("panel watch failed: %s", tostring(err))
+    end
+  end
+end
+
 --- Empty the suggestion list and everything derived from it.
 --
 -- One function because the rows, the chosen row, and what the buttons below do
@@ -960,6 +1036,16 @@ function ObservationPanel.show()
         require("WindowFix").apply(WINDOW_TITLE)
       end)
 
+      -- Nothing tells a plugin that a photo's metadata changed, so the panel
+      -- looks for itself while it is up. Started here rather than inside the
+      -- window because the call below blocks this task until the window closes;
+      -- `open` is what stops the watcher afterwards.
+      local open = true
+
+      LrTasks.startAsyncTask(function()
+        ObservationPanel.watch(props, function() return open end)
+      end)
+
       LrDialogs.presentFloatingDialog(_PLUGIN, {
         title    = WINDOW_TITLE,
         contents = ObservationPanel.contents(f, props, actions),
@@ -987,7 +1073,17 @@ function ObservationPanel.show()
         -- window is bound to -- alive. Without it the context ends the moment
         -- show() returns and the bindings are pointing at a dead object.
         blockTask = true,
+
+        -- Stops the watcher at the earliest moment there is, rather than
+        -- whenever this task is next scheduled.
+        windowWillClose = function() open = false end,
       })
+
+      -- blockTask means this line is reached when the window has closed, which
+      -- is what stops the watcher. Also set from windowWillClose, because a
+      -- watcher left running against a dead property table is exactly the kind
+      -- of thing that would only show up as a mystery in the log much later.
+      open = false
     end)
 end
 

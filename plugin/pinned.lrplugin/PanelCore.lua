@@ -217,6 +217,47 @@ function PanelCore.suggestionSlots(rows, selected)
   return slots
 end
 
+--- Which of the panel's values belong to the panel rather than to the catalog.
+--
+-- Everything else the panel shows is a *reading* of the catalog and can be
+-- replaced with a fresher reading at any time. These two are what the person in
+-- front of it is halfway through saying: a species guess being typed, or picked
+-- from the suggestions and not yet uploaded, and an accuracy chosen from the
+-- popup. Neither is written to the catalog until a button is pressed, so a
+-- refresh that treated the catalog as the truth would quietly undo them.
+PanelCore.PANEL_OWNED = {
+  speciesGuess  = true,
+  accuracy      = true,
+  accuracyItems = true,
+}
+
+--- Whether a fresh reading of the catalog says anything the panel is not
+--- already showing.
+--
+-- Exists because nothing tells a plugin that a photo changed. The SDK's catalog
+-- offers observers for the selection and for the sources and nothing else --
+-- Lightroom's own metadata observer is internal -- so the only way to notice a
+-- location arriving is to look again and compare. This is the "is it worth
+-- redrawing" half of that, kept away from the catalog so it can be tested.
+--
+-- Tables are skipped. The only ones are rebuilt on every read and so would
+-- never compare equal, and each is derived from a scalar that is compared.
+--
+-- @param current  The property table the window is bound to.
+-- @param fresh    A newly built set of values.
+-- @param ignore   Keys to leave out of the comparison, or nil.
+function PanelCore.valuesDiffer(current, fresh, ignore)
+  for key, value in pairs(fresh or {}) do
+    if type(value) ~= "table"
+       and not (ignore and ignore[key])
+       and current[key] ~= value then
+      return true
+    end
+  end
+
+  return false
+end
+
 --- Normalise whatever a caller offers as a suggestion row index.
 --
 -- The rows are hand-built now and hand a plain number straight back, so this is
