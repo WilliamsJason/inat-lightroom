@@ -279,7 +279,6 @@ def test_the_window_offers_the_actions_the_metadata_panel_cannot(plugin, panel):
     titles = {b["title"] for b in of_type(args["contents"], "push_button")
               if isinstance(b["title"], str)}
     assert "Sync" in titles
-    assert "View on iNaturalist" in titles
     assert "Unlink" in titles
     assert "Get Suggestions" in titles
     # The ellipsis is a multi-byte character and Lua hands back raw bytes, so
@@ -306,10 +305,30 @@ def test_the_species_guess_is_editable_here(plugin, panel):
     assert fields[0]["value"]["__bind"] == "speciesGuess"
 
 
-def test_the_view_button_is_disabled_without_an_observation(plugin, panel):
+def observation_link(args):
+    """The static_text bound to observationId, which is the link out."""
+    return [v for v in views(args["contents"])
+            if v["_viewType"] == "static_text"
+            and hasattr(v["title"], "keys")
+            and v["title"]["__bind"] == "observationId"][0]
+
+
+def test_the_observation_id_is_the_link_out(plugin, panel):
+    """Not a button beside it: the number and the page it names are the same
+    fact, so a "View on iNaturalist" button was a second control for something
+    the ID already is."""
     args = show(plugin, panel)
-    buttons = {b["title"]: b for b in of_type(args["contents"], "push_button")}
-    assert buttons["View on iNaturalist"]["enabled"]["__bind"] == "hasObservation"
+    link = observation_link(args)
+
+    assert link["mouse_down"] is not None
+    assert link["text_color"] is not None
+
+
+def test_there_is_no_view_button_any_more(plugin, panel):
+    args = show(plugin, panel)
+    titles = {b["title"] for b in of_type(args["contents"], "push_button")
+              if isinstance(b["title"], str)}
+    assert "View on iNaturalist" not in titles
 
 
 # ---------------------------------------------------------------------------
@@ -432,12 +451,11 @@ def test_unlinking_says_it_leaves_inaturalist_alone(plugin, panel):
     assert "keyword" in message.lower()
 
 
-def test_the_view_button_opens_the_observation(plugin, panel):
+def test_clicking_the_observation_id_opens_the_observation(plugin, panel):
     plugin.set_target_photos([plugin.new_photo(inat_observation_id="387778406")])
     args = show(plugin, panel)
-    buttons = {b["title"]: b for b in of_type(args["contents"], "push_button")}
 
-    plugin.call(buttons["View on iNaturalist"]["action"])
+    plugin.call(observation_link(args)["mouse_down"])
     plugin.run_pending_tasks()
 
     assert plugin.opened_urls == [
@@ -445,14 +463,14 @@ def test_the_view_button_opens_the_observation(plugin, panel):
     ]
 
 
-def test_the_view_button_opens_nothing_without_an_observation(plugin, panel):
-    """enabled is a binding, and a binding is not a guarantee -- the action has
-    to refuse too, or a stale click opens /observations/ and a 404."""
+def test_clicking_an_empty_observation_id_opens_nothing(plugin, panel):
+    """There is no enabled state on clickable text, so the click handler is the
+    only guard -- without it a click on the blank line opens /observations/ and
+    a 404."""
     plugin.set_target_photos([plugin.new_photo()])
     args = show(plugin, panel)
-    buttons = {b["title"]: b for b in of_type(args["contents"], "push_button")}
 
-    plugin.call(buttons["View on iNaturalist"]["action"])
+    plugin.call(observation_link(args)["mouse_down"])
     plugin.run_pending_tasks()
 
     assert plugin.opened_urls == []
@@ -704,26 +722,34 @@ def button_titles(args):
             if isinstance(b["title"], str)]
 
 
-def test_the_panel_offers_both_new_buttons(plugin, panel):
+def test_the_panel_offers_the_button_that_files_a_name_locally(plugin, panel):
     plugin.set_target_photos([plugin.new_photo()])
 
     titles = button_titles(show(plugin, panel))
 
     assert "Sync guess to Metadata tags" in titles
-    assert "View guess on iNaturalist" in titles
 
 
-def test_both_new_buttons_wait_for_a_chosen_suggestion(plugin, panel):
-    """Neither means anything without a taxon: one would have nothing to apply
-    and the other nowhere to go. Enabled buttons that do nothing are how users
-    learn to distrust a panel."""
+def test_looking_a_guess_up_is_not_a_button_any_more(plugin, panel):
+    """Each suggestion row links to its own taxon page, so a button that opened
+    the page for whichever row happened to be chosen is a second control for
+    something the row already does."""
+    plugin.set_target_photos([plugin.new_photo()])
+
+    titles = button_titles(show(plugin, panel))
+
+    assert "View guess on iNaturalist" not in titles
+
+
+def test_filing_a_name_waits_for_a_chosen_suggestion(plugin, panel):
+    """It would have nothing to apply. Enabled buttons that do nothing are how
+    users learn to distrust a panel."""
     plugin.set_target_photos([plugin.new_photo()])
     args = show(plugin, panel)
 
-    for title in ("Sync guess to Metadata tags", "View guess on iNaturalist"):
-        button = [b for b in of_type(args["contents"], "push_button")
-                  if b["title"] == title][0]
-        assert button["enabled"]["__bind"] == "hasSuggestion", title
+    button = [b for b in of_type(args["contents"], "push_button")
+              if b["title"] == "Sync guess to Metadata tags"][0]
+    assert button["enabled"]["__bind"] == "hasSuggestion"
 
 
 def test_choosing_a_suggestion_enables_them(plugin, panel):
@@ -762,6 +788,158 @@ def test_the_chosen_rank_and_score_are_remembered(plugin, panel):
 
     assert props["suggestionRank"] == "species"
     assert props["suggestionScore"] == 40
+
+
+# ---------------------------------------------------------------------------
+# The suggestion rows
+# ---------------------------------------------------------------------------
+
+
+def suggestion_rows(args):
+    """The name/link static_text pairs, in row order."""
+    texts = [v for v in views(args["contents"])
+             if v["_viewType"] == "static_text"
+             and hasattr(v["title"], "keys")
+             and str(v["title"]["__bind"]).startswith("suggestionTitle")]
+    return sorted(texts, key=lambda v: int(v["title"]["__bind"][len("suggestionTitle"):]))
+
+
+def suggestion_links(args):
+    links = [v for v in views(args["contents"])
+             if v["_viewType"] == "static_text"
+             and hasattr(v["title"], "keys")
+             and str(v["title"]["__bind"]).startswith("suggestionLink")]
+    return sorted(links, key=lambda v: int(v["title"]["__bind"][len("suggestionLink"):]))
+
+
+def test_there_is_one_row_per_suggestion_slot(plugin, panel):
+    """A presented view tree cannot grow rows, and a bound `visible` does not
+    hide one, so the rows are built to the cap and the surplus draw blank."""
+    core = plugin.require("PanelCore")
+    args = show(plugin, panel)
+
+    assert len(suggestion_rows(args)) == core["SUGGESTION_LIMIT"]
+    assert len(suggestion_links(args)) == core["SUGGESTION_LIMIT"]
+
+
+def test_every_row_property_exists_before_the_window_is_built(plugin, panel):
+    """A binding to a property that was never set has no title to draw."""
+    core = plugin.require("PanelCore")
+    show(plugin, panel)
+    props = plugin.floating_dialogs[0]["contents"]["bind_to_object"]
+
+    for index in range(1, int(core["SUGGESTION_LIMIT"]) + 1):
+        assert props[f"suggestionTitle{index}"] == ""
+        assert props[f"suggestionLink{index}"] == ""
+
+
+def test_clicking_a_name_picks_that_suggestion(plugin, panel):
+    props = plugin.runtime.table_from({})
+    props["suggestions"] = deep(plugin, [
+        {"taxon_id": 1, "name": "Bombus"},
+        {"taxon_id": 47219, "name": "Apis mellifera"},
+    ])
+
+    plugin.call(panel.chooseSuggestion, props, 2)
+
+    assert props["speciesGuess"] == "Apis mellifera"
+    assert props["suggestionTitle2"].startswith(
+        plugin.require("PanelCore")["CHOSEN_MARK"])
+
+
+def test_clicking_a_link_opens_that_taxon(plugin, panel):
+    """The row's own link, which is why the button that did this for whichever
+    row was chosen is gone."""
+    props = plugin.runtime.table_from({})
+    props["suggestions"] = deep(plugin, [
+        {"taxon_id": 1, "name": "Bombus"},
+        {"taxon_id": 47219, "name": "Apis mellifera"},
+    ])
+
+    plugin.call(panel.viewSuggestion, props, 2)
+
+    assert plugin.opened_urls == ["https://www.inaturalist.org/taxa/47219"]
+
+
+def test_looking_a_suggestion_up_does_not_pick_it(plugin, panel):
+    """The two clicks mean different things -- "this is what it is" against "I
+    do not know yet, show me" -- so looking one up must not commit to it."""
+    props = plugin.runtime.table_from({})
+    props["suggestions"] = deep(plugin, [{"taxon_id": 47219, "name": "Apis"}])
+
+    plugin.call(panel.viewSuggestion, props, 1)
+
+    assert props["suggestionTaxonId"] is None
+    assert props["speciesGuess"] is None
+
+
+def test_clicking_a_blank_row_does_nothing(plugin, panel):
+    """Most rows are blank most of the time, and every one of them is
+    clickable."""
+    props = plugin.runtime.table_from({})
+    props["suggestions"] = deep(plugin, [])
+
+    plugin.call(panel.viewSuggestion, props, 4)
+    plugin.call(panel.chooseSuggestion, props, 4)
+
+    assert plugin.opened_urls == []
+    assert props["hasSuggestion"] is False
+
+
+def test_a_row_without_a_taxon_opens_nothing(plugin, panel):
+    """/taxa/ with nothing after it is a 404, and the row's link caption is
+    blank in that case -- but the handler is still there to be clicked."""
+    props = plugin.runtime.table_from({})
+    props["suggestions"] = deep(plugin, [{"name": "Unrankable"}])
+
+    plugin.call(panel.viewSuggestion, props, 1)
+
+    assert plugin.opened_urls == []
+
+
+def stub_suggestions(plugin, rows):
+    """Get loadSuggestions past authentication and the network.
+
+    These tests are about what the panel does with the rows, not about how they
+    are fetched, so the fetch is replaced wholesale.
+    """
+    plugin.set_target_photos([plugin.new_photo()])
+    install = plugin.eval("""
+      function(rows)
+        local UploadCore = require "UploadCore"
+        local PanelCore  = require "PanelCore"
+        UploadCore.requireAPI   = function() return {} end
+        PanelCore.getSuggestions = function() return rows end
+      end
+    """)
+    install(deep(plugin, rows))
+
+
+def test_asking_for_suggestions_fills_the_rows(plugin, panel):
+    props = plugin.runtime.table_from({})
+    stub_suggestions(plugin, [
+        {"taxon_id": 47219, "name": "Apis mellifera", "combined_score": 91},
+    ])
+
+    plugin.in_task(panel.loadSuggestions, props)
+
+    assert "Apis mellifera" in props["suggestionTitle1"]
+    assert props["suggestionTitle2"] == ""
+
+
+def test_moving_to_another_photo_empties_the_rows(plugin, panel):
+    """Suggestions belong to the photo they were asked about: a leftover row is
+    still clickable, and clicking it would put the previous photo's species on
+    this one."""
+    props = plugin.runtime.table_from({})
+    props["suggestionTitle1"] = "left over"
+    props["suggestionLink1"] = "View"
+
+    plugin.call(panel.clearSuggestions, props)
+
+    assert props["suggestionTitle1"] == ""
+    assert props["suggestionLink1"] == ""
+    assert props["hasSuggestion"] is False
 
 
 # ---------------------------------------------------------------------------

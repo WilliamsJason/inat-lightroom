@@ -551,6 +551,35 @@ f:simple_list {
 }
 ```
 
+A `simple_list` row is a *string*, though, and that is its other limit: a row
+cannot carry a control, so it cannot carry a per-row link or button, and its
+`value` names selected rows rather than the row clicked. Anything a row needs to
+*do* by itself has to be hand-built — which is fine at a handful of rows and
+ruled out by the table above at a thousand.
+
+## `f:static_text` can be a clickable link -- `mouse_down` plus `text_color`
+
+Not documented in the SDK, and no `f:link` control exists, but the idiom is
+Lightroom's own. Scanning `ui.dll` for `mouse_down` finds the alert dialog it
+builds for `$$$/AgDialogs/AlertInfo=Click here to know more`: a `static_text`
+with a `text_color`, a `mouse_down`, and `LrHttp.openUrlInBrowser` in the
+handler.
+
+```lua
+f:static_text {
+  title      = LrView.bind("observationId"),
+  text_color = LrColor(0.45, 0.72, 1),
+  mouse_down = function() LrHttp.openUrlInBrowser(url) end,
+}
+```
+
+`mouse_down` is passed no position, so the whole control is the hit area — give
+each clickable thing its own `static_text`. The colour is not automatic: without
+it the text looks like every other label and nobody will try clicking it.
+
+This is read from the binary, not from a documented API. It has not been proven
+against a Lightroom that dislikes it.
+
 ## `export_destinationType = "tempFolder"` needs an export service provider
 
 A plugin with no `LrExportServiceProvider` cannot render into Lightroom's temp

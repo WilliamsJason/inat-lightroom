@@ -222,8 +222,10 @@ The panel shows the selection, what the observation currently is, its quality
 grade and last sync, a **Species guess** with a **Get Suggestions** button and a
 list of what came back, one button that is **Upload to iNaturalist** or **Update
 species guess** depending on whether the selection is already linked, and
-**Sync**, **Set on Map**, **Link to Observation…**, **View on iNaturalist** and
-**Unlink**. The observation ID has a **Copy** button of its own.
+**Sync**, **Set on Map**, **Link to Observation…** and **Unlink**. The
+observation ID has a **Copy** button of its own, and is itself clickable: it
+opens the observation in a browser, which is what the **View on iNaturalist**
+button used to do beside it.
 
 Everything below the heading describes the *first* selected photo and the
 heading says so. Uploading is the exception: it takes the whole selection into a
@@ -242,9 +244,21 @@ own photos is a better question than scoring a fresh JPEG of one of them. Only
 an unlinked photo needs `RenderPhoto.renderForSuggestions` and
 `score_image`, and that render is cleaned up afterwards.
 
-`suggestionItems` maps list entries to *row positions*, not taxon ids, because a
-malformed result may have no id and a list that silently drops rows is worse
-than one that shows a row it cannot act on.
+**The suggestions are hand-built rows, not a list control.** A `simple_list` row
+is a string and can carry nothing else, so a per-row link out to iNaturalist is
+impossible in one; the button that used to do that job for whichever row was
+chosen is gone in favour of a **View ↗** at the end of every row. Hand-built rows
+scale badly — the SDK notes describe a thousand of them as unusable — but there
+are never more than `SUGGESTION_LIMIT` (8).
+
+A presented view tree is fixed, so `PanelCore.suggestionSlots` always returns
+exactly that many slots and the surplus are blank in both title and link: an
+unused row is inert rather than a link to nowhere. Slots are addressed by *row
+position*, not taxon id, because a malformed result may have no id and a list
+that silently drops rows is worse than one that shows a row it cannot act on.
+Rows drawn by hand have no selection highlight either, so the chosen one is
+marked with a bullet — `CHOSEN_MARK` and `UNCHOSEN_MARK` are the same width so
+the names stay in one column.
 
 ### Location: warn, and hand off to the Map module
 

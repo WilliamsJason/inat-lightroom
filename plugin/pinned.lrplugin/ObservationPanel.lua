@@ -34,6 +34,7 @@
 local LrApplication     = import "LrApplication"
 local LrApplicationView = import "LrApplicationView"
 local LrBinding         = import "LrBinding"
+local LrColor           = import "LrColor"
 local LrDialogs         = import "LrDialogs"
 local LrFunctionContext = import "LrFunctionContext"
 local LrHttp            = import "LrHttp"
@@ -53,6 +54,12 @@ local ObservationPanel = {}
 local WINDOW_ID = "com.github.inat-lightroom.observationPanel"
 
 local OBSERVATION_URL = "https://www.inaturalist.org/observations/"
+
+-- What clickable text is drawn in. Lightroom's own dialogs colour their one
+-- clickable line rather than underlining it, and there is nothing in LrView
+-- that could underline it anyway. Light enough to read against the panel's dark
+-- background, which rules out the browser-blue this would be on a page.
+local LINK_COLOR = LrColor(0.45, 0.72, 1)
 
 -- Both the window's caption and the handle the z-order fix-up finds it by, so
 -- they cannot drift apart.
@@ -192,39 +199,90 @@ local function makeRefresh(props)
 
       -- Suggestions belong to the photo they were asked about. Leaving them on
       -- screen after the selection moves is worse than showing nothing: the
-      -- list would still be clickable, and clicking it would put the previous
+      -- rows would still be clickable, and clicking one would put the previous
       -- photo's species onto this one.
-      props.suggestions       = {}
-      props.suggestionItems   = {}
-      props.selectedSuggestion = nil
-      props.suggestionTaxonId = nil
-      props.suggestionRank    = nil
-      props.suggestionScore   = nil
-      props.hasSuggestion     = false
+      ObservationPanel.clearSuggestions(props)
       props.suggestionStatus  = ""
     end)
   end
 end
 
+--- Empty the suggestion list and everything derived from it.
+--
+-- One function because the rows, the chosen row, and what the buttons below do
+-- with it are one state: clearing some of them leaves a panel offering to apply
+-- a guess that is no longer on screen.
+function ObservationPanel.clearSuggestions(props)
+  props.suggestions        = {}
+  props.selectedSuggestion = nil
+  props.suggestionTaxonId  = nil
+  props.suggestionRank     = nil
+  props.suggestionScore    = nil
+  props.hasSuggestion      = false
+
+  ObservationPanel.applySuggestionSlots(props, {}, nil)
+end
+
+--- Copy the suggestion rows onto the fixed set of bound row properties.
+--
+-- The view reads suggestionTitleN / suggestionLinkN, one pair per row, because
+-- a presented view tree cannot grow rows to match a list.
+function ObservationPanel.applySuggestionSlots(props, rows, selected)
+  local slots = PanelCore.suggestionSlots(rows, selected)
+
+  for index, slot in ipairs(slots) do
+    props["suggestionTitle" .. index] = slot.title
+    props["suggestionLink" .. index]  = slot.link
+  end
+
+  return slots
+end
+
 --- The control that shows the suggestions.
 --
--- Isolated because f:simple_list is undocumented. It is real -- ui.dll's
--- view-constructor list has it beside popup_menu, and its implementation there
--- wraps a table_view in a scroll_view -- and it renders correctly in the host,
--- but if it ever turns out not to, swapping the constructor here for
--- f:popup_menu is the whole fix: the items are the SDK's usual
--- { title = ..., value = ... } shape either way.
+-- Hand-built rows rather than a list control, because a list row cannot carry a
+-- link. Each row is two pieces of clickable text: the name, which picks that
+-- suggestion as the guess, and a link out to the taxon's page on iNaturalist
+-- for when the name alone does not settle it. That link is why the button that
+-- used to do the same job is gone.
 --
--- Its `value` is bound to the table_view's selected_indexes, so what comes back
--- is a list rather than a row number. PanelCore.selectedIndex deals with that.
-function ObservationPanel.suggestionsView(f)
-  return f:simple_list {
-    items           = LrView.bind("suggestionItems"),
-    value           = LrView.bind("selectedSuggestion"),
-    fill_horizontal = 1,
-    height          = 110,
-    enabled         = LrView.bind("hasPhoto"),
-  }
+-- Clickable text is `f:static_text` with a `mouse_down`, which is not in the
+-- SDK documentation but is what Lightroom's own alert dialog uses for its
+-- "Click here to know more" line -- the string sits in ui.dll beside a
+-- text_color, a mouse_down and an LrHttp.openUrlInBrowser call.
+--
+-- The row count is fixed at PanelCore.SUGGESTION_LIMIT because a presented view
+-- tree cannot grow, shrink, or hide a row: a bound `visible` is accepted and
+-- changes nothing. Surplus rows carry an empty title and an empty link, which
+-- draws as blank space and clicks to nothing.
+--
+-- Was f:simple_list, which scales far better and was the right control while
+-- rows were only selectable. It holds strings, so the moment a row had to hold
+-- a second, separately clickable thing it could not. Eight rows is nowhere near
+-- where hand-built rows get slow.
+function ObservationPanel.suggestionsView(f, actions)
+  local rows = { spacing = 0 }
+
+  for index = 1, PanelCore.SUGGESTION_LIMIT do
+    rows[#rows + 1] = f:row {
+      spacing = f:label_spacing(),
+
+      f:static_text {
+        title           = LrView.bind("suggestionTitle" .. index),
+        fill_horizontal = 1,
+        mouse_down      = function() actions.chooseSuggestion(index) end,
+      },
+
+      f:static_text {
+        title      = LrView.bind("suggestionLink" .. index),
+        width      = 60,
+        text_color = LINK_COLOR,
+        mouse_down = function() actions.viewSuggestion(index) end,
+      },
+    }
+  end
+
+  return f:column(rows)
 end
 
 --- Build the window contents.
@@ -266,16 +324,19 @@ function ObservationPanel.contents(f, props, actions)
 
     f:separator { fill_horizontal = 1 },
 
-    -- The observation ID gets a Copy button because it is the one value here
-    -- people need somewhere else: linking further photos of the same specimen
-    -- means putting this number into the Link dialog, and there is no way to
-    -- select text in an SDK static_text to copy it by hand.
+    -- The observation ID is the link out to iNaturalist, which is why there is
+    -- no View button here any more: the number and the page it names are the
+    -- same fact, and a button that says "View on iNaturalist" is a second
+    -- control for something the ID already is. Copy stays, because pasting the
+    -- number into Link to Observation is the other thing it is wanted for.
     f:row {
       f:static_text { title = "Observation:", width = LABEL, alignment = "right" },
       f:static_text {
         title           = LrView.bind("observationId"),
         width           = 260,
         fill_horizontal = 1,
+        text_color      = LINK_COLOR,
+        mouse_down      = actions.view,
       },
       f:push_button {
         title   = "Copy",
@@ -340,7 +401,7 @@ function ObservationPanel.contents(f, props, actions)
       },
     },
 
-    ObservationPanel.suggestionsView(f),
+    ObservationPanel.suggestionsView(f, actions),
 
     f:static_text {
       title           = LrView.bind("suggestionStatus"),
@@ -354,10 +415,9 @@ function ObservationPanel.contents(f, props, actions)
     -- choose between two buttons would be asking them a question the plugin
     -- already knows the answer to.
     --
-    -- The other two are deliberately not that intent. One files the name in the
-    -- catalog and tells iNaturalist nothing; the other just opens a page to look
-    -- at. Neither publishes anything, which is why they sit apart from the
-    -- button that does.
+    -- The other one is deliberately not that intent: it files the name in the
+    -- catalog and tells iNaturalist nothing, which is why it sits apart from
+    -- the button that publishes.
     f:row {
       spacing = f:control_spacing(),
       f:push_button {
@@ -370,11 +430,6 @@ function ObservationPanel.contents(f, props, actions)
         title   = "Sync guess to Metadata tags",
         enabled = LrView.bind("hasSuggestion"),
         action  = actions.applyLocally,
-      },
-      f:push_button {
-        title   = "View guess on iNaturalist",
-        enabled = LrView.bind("hasSuggestion"),
-        action  = actions.viewTaxon,
       },
     },
 
@@ -391,11 +446,6 @@ function ObservationPanel.contents(f, props, actions)
         title  = "Link to Observation…",
         enabled = LrView.bind("hasPhoto"),
         action = actions.link,
-      },
-      f:push_button {
-        title   = "View on iNaturalist",
-        enabled = LrView.bind("hasObservation"),
-        action  = actions.view,
       },
       f:push_button {
         title   = "Unlink",
@@ -441,7 +491,7 @@ function ObservationPanel.loadSuggestions(props)
   end
 
   props.suggestions        = rows
-  props.suggestionItems    = PanelCore.suggestionItems(rows)
+  ObservationPanel.applySuggestionSlots(props, rows, nil)
   props.selectedSuggestion = nil
   props.suggestionTaxonId  = nil
   props.suggestionRank     = nil
@@ -451,7 +501,9 @@ function ObservationPanel.loadSuggestions(props)
   if #rows == 0 then
     props.suggestionStatus = "iNaturalist had no suggestions for this photo."
   else
-    props.suggestionStatus = "Pick one to use it as the species guess."
+    props.suggestionStatus =
+      "Click a name to use it as the species guess, or View to open it "
+      .. "on iNaturalist."
   end
 end
 
@@ -468,14 +520,17 @@ function ObservationPanel.chooseSuggestion(props, selection)
   local row   = index and rows[index]
 
   if not row then
+    props.selectedSuggestion = nil
     props.suggestionTaxonId = nil
     props.suggestionRank    = nil
     props.suggestionScore   = nil
     props.hasSuggestion     = false
+    ObservationPanel.applySuggestionSlots(props, rows, nil)
     return nil
   end
 
   props.speciesGuess      = row.name or row.common_name or ""
+  props.selectedSuggestion = index
   props.suggestionTaxonId = row.taxon_id
   props.hasSuggestion     = row.taxon_id ~= nil
 
@@ -486,7 +541,29 @@ function ObservationPanel.chooseSuggestion(props, selection)
   props.suggestionRank    = row.rank
   props.suggestionScore   = row.combined_score
 
+  -- The mark on the row is the only thing saying which one is chosen: these
+  -- rows are drawn by us and have no selection highlight of their own.
+  ObservationPanel.applySuggestionSlots(props, rows, index)
+
   return row
+end
+
+--- Open a suggestion's taxon page on iNaturalist.
+--
+-- The row's own link, and the reason there is no longer a button doing this for
+-- whichever row happens to be chosen. Clicking it does not choose the row: what
+-- the two clicks mean is different -- one says "this is what it is", the other
+-- says "I do not know yet, show me" -- and merging them would make looking
+-- something up commit to it.
+function ObservationPanel.viewSuggestion(props, index)
+  local rows = props.suggestions or {}
+  local row  = rows[PanelCore.selectedIndex(index)]
+  local url  = row and PanelCore.taxonUrl(row.taxon_id)
+
+  if not url then return nil end
+
+  LrHttp.openUrlInBrowser(url)
+  return url
 end
 
 --- Hand the user over to Lightroom's Map module to set a location.
@@ -740,19 +817,12 @@ function ObservationPanel.show()
       local props = LrBinding.makePropertyTable(context)
       local refresh = makeRefresh(props)
 
-      props.suggestions      = {}
-      props.suggestionItems  = {}
+      -- Every bound property the view reads has to exist before the window is
+      -- built, including one title and one link caption per suggestion row.
       props.suggestionStatus = ""
-      props.hasSuggestion    = false
+      ObservationPanel.clearSuggestions(props)
 
       refresh()
-
-      -- Picking a row in the list is the selection changing, not a click on
-      -- anything, so there is no action callback to hang this off. The property
-      -- observer is how a list control tells us anything at all.
-      props:addObserver("selectedSuggestion", function()
-        ObservationPanel.chooseSuggestion(props, props.selectedSuggestion)
-      end)
 
       local actions = {
         getSuggestions = function()
@@ -775,13 +845,14 @@ function ObservationPanel.show()
           end)
         end,
 
-        -- Not on a task: opening a browser does not block, and there is nothing
-        -- to refresh afterwards.
-        viewTaxon = function()
-          local url = PanelCore.taxonUrl(props.suggestionTaxonId)
-          if url then
-            LrHttp.openUrlInBrowser(url)
-          end
+        -- Not on a task: neither picking a row nor opening a browser blocks,
+        -- and there is nothing to refresh from the catalog afterwards.
+        chooseSuggestion = function(index)
+          ObservationPanel.chooseSuggestion(props, index)
+        end,
+
+        viewSuggestion = function(index)
+          ObservationPanel.viewSuggestion(props, index)
         end,
 
         unlink = function()
@@ -826,6 +897,9 @@ function ObservationPanel.show()
           end)
         end,
 
+        -- The observation ID's own click, not a button's. Guarded because the
+        -- ID can be empty, and openUrlInBrowser would then open /observations/
+        -- and a 404.
         view = function()
           local id = props.observationId
           if id and id ~= "" then

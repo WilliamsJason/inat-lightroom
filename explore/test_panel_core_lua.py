@@ -210,35 +210,82 @@ def test_a_nameless_suggestion_does_not_produce_a_blank_row(plugin, core):
 
 
 # ---------------------------------------------------------------------------
-# Turning suggestions into list items
+# Turning suggestions into row slots
 # ---------------------------------------------------------------------------
 
 
-def test_items_carry_the_row_position_as_their_value(plugin, core):
-    """Not the taxon id: a malformed result comes back with a taxon that has no
-    id, and a list with nil or colliding values selects the wrong row rather
-    than failing."""
-    items = core["suggestionItems"](rows(plugin,
-        {"name": "Apis mellifera"},
-        {"name": "Bombus terrestris"},
-    ))
-
-    assert items[1]["value"] == 1
-    assert items[2]["value"] == 2
+def slots(plugin, core, suggestions, selected=None):
+    return core["suggestionSlots"](rows(plugin, *suggestions), selected)
 
 
-def test_items_are_capped(plugin, core):
+def test_every_row_gets_a_slot_whether_there_is_a_suggestion_or_not(plugin, core):
+    """The panel's rows are built once and a bound `visible` does not hide one,
+    so a short list has to leave the surplus rows blank rather than remove
+    them."""
+    filled = slots(plugin, core, [{"name": "Apis mellifera"}])
+
+    assert len(list(filled.values())) == core["SUGGESTION_LIMIT"]
+    assert "Apis mellifera" in filled[1]["title"]
+    assert filled[2]["title"] == ""
+
+
+def test_a_blank_row_has_no_link(plugin, core):
+    """An empty row that still offers to open a page is a link to nowhere."""
+    assert slots(plugin, core, [])[1]["link"] == ""
+
+
+def test_a_row_with_a_taxon_offers_a_link(plugin, core):
+    filled = slots(plugin, core, [{"name": "Apis mellifera", "taxon_id": 47219}])
+    assert filled[1]["link"] == core["TAXON_LINK"]
+
+
+def test_a_row_without_a_taxon_id_offers_no_link(plugin, core):
+    """A malformed result comes back with a taxon that has no id, and
+    /taxa/ with nothing after it is a 404."""
+    filled = slots(plugin, core, [{"name": "Apis mellifera"}])
+    assert filled[1]["link"] == ""
+
+
+def test_the_chosen_row_is_marked_and_the_others_are_not(plugin, core):
+    """Hand-built rows have no selection highlight of their own, so the mark is
+    the only thing saying which suggestion the buttons below are about."""
+    filled = slots(plugin, core,
+                   [{"name": "Apis mellifera"}, {"name": "Bombus terrestris"}],
+                   selected=2)
+
+    assert filled[2]["title"].startswith(core["CHOSEN_MARK"])
+    assert filled[1]["title"].startswith(core["UNCHOSEN_MARK"])
+
+
+def test_the_marks_are_the_same_width(plugin, core):
+    """Otherwise every name shifts sideways when a row is picked. Measured in
+    Lua: the chosen mark is a three-byte glyph plus a space, which is two
+    characters against the unchosen mark's two spaces."""
+    bytes_in = plugin.eval("""
+      (function()
+        local PanelCore = require "PanelCore"
+        return { chosen = #PanelCore.CHOSEN_MARK,
+                 unchosen = #PanelCore.UNCHOSEN_MARK }
+      end)()
+    """)
+
+    assert bytes_in["chosen"] == 4
+    assert bytes_in["unchosen"] == 2
+
+
+def test_slots_are_capped(plugin, core):
     """iNaturalist returns a long tail of noise, and a list that needs scrolling
     is harder to use than a short one."""
-    many = rows(plugin, *[{"name": f"Taxon {i}"} for i in range(20)])
+    many = [{"name": f"Taxon {i}"} for i in range(20)]
 
-    items = core["suggestionItems"](many)
-
-    assert len(list(items.values())) == core["SUGGESTION_LIMIT"]
+    assert len(list(slots(plugin, core, many).values())) == core["SUGGESTION_LIMIT"]
 
 
-def test_no_suggestions_makes_no_items(plugin, core):
-    assert len(list(core["suggestionItems"](None).values())) == 0
+def test_no_suggestions_leaves_every_slot_blank(plugin, core):
+    empty = core["suggestionSlots"](None, None)
+
+    assert len(list(empty.values())) == core["SUGGESTION_LIMIT"]
+    assert all(empty[i]["title"] == "" for i in range(1, core["SUGGESTION_LIMIT"] + 1))
 
 
 # ---------------------------------------------------------------------------

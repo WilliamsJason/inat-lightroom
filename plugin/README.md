@@ -123,8 +123,11 @@ The usual run of it:
 1. Select the photo, or several photos of the same individual.
 2. Click **Get Suggestions**. The plugin asks iNaturalist's vision model what
    the photo is and lists what comes back, best first, with how confident it is.
-3. Click a suggestion. It fills in **Species guess** and, invisibly, the taxon
-   ID behind it.
+3. Click a suggestion's name. It fills in **Species guess** and, invisibly, the
+   taxon ID behind it, and marks the row. Each row also ends in a **View ↗**
+   link that opens that taxon's page on iNaturalist, for when two suggestions
+   look alike and the only way to decide is to go and look. Looking one up does
+   not choose it.
 4. Click **Upload to iNaturalist** — or, if the selection is already linked to
    an observation, **Update species guess**.
 
@@ -152,10 +155,13 @@ The other buttons:
   observation.
 - **Copy**, beside the observation ID — puts the number on the clipboard, for
   pasting into Link to Observation, a browser, or anywhere else.
-- **View on iNaturalist** — open it in a browser.
 - **Unlink** — forget the observation. It asks first, and it does not touch
   iNaturalist or remove the keywords already synced; it only detaches the
   Lightroom photo.
+
+The observation ID itself is a link: click it to open the observation in a
+browser. It used to have a **View on iNaturalist** button beside it, which was a
+second control saying the same thing as the number it sat next to.
 
 The window remembers where you put it, so drag it somewhere out of the way once
 and it will reopen there. Close it and the menu item brings it back.
@@ -263,18 +269,14 @@ to refine than to argue down.
 
 ### Using a suggestion without publishing anything
 
-Two buttons sit next to the upload button and neither one uploads:
+**Sync guess to Metadata tags** sits next to the upload button and does not
+upload: it writes the chosen taxon's full keyword hierarchy and taxon fields into
+the catalog and tells iNaturalist nothing. For the frames worth filing under the
+right name and not worth publishing — a duplicate, a soft focus, something
+already recorded. Before this the only way to get the hierarchy onto a photo was
+to create an observation and then think better of it.
 
-- **Sync guess to Metadata tags** writes the chosen taxon's full keyword
-  hierarchy and taxon fields into the catalog and tells iNaturalist nothing. For
-  the frames worth filing under the right name and not worth publishing — a
-  duplicate, a soft focus, something already recorded. Before this the only way
-  to get the hierarchy onto a photo was to create an observation and then think
-  better of it.
-- **View guess on iNaturalist** opens the taxon page, for when two suggestions
-  look alike and the only way to decide is to go and look.
-
-Neither warns about anything. A keyword in your own catalog is not public, not
+It warns about nothing. A keyword in your own catalog is not public, not
 permanent, and plainly visible; warning about it would only teach you to click
 past the warnings that matter.
 

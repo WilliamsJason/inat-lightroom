@@ -93,14 +93,14 @@ MUTATIONS = [
     (
         "PanelCore",
         "the suggestion list is not capped",
-        "    if i > PanelCore.SUGGESTION_LIMIT then break end",
-        "",
+        "  for i = 1, PanelCore.SUGGESTION_LIMIT do",
+        "  for i = 1, #(rows or {}) do",
     ),
     (
         "PanelCore",
-        "list items are keyed by taxon id, which can be nil",
-        "      value = i,",
-        "      value = row.taxon_id,",
+        "an empty row still offers a link to nowhere",
+        '      slots[i] = { title = "", link = "" }',
+        '      slots[i] = { title = "", link = PanelCore.TAXON_LINK }',
     ),
     (
         "PanelCore",
@@ -243,8 +243,21 @@ MUTATIONS = [
     (
         "ObservationPanel",
         "stale suggestions survive a change of selection",
-        "      props.suggestions       = {}\n      props.suggestionItems   = {}",
-        "      props.suggestions       = props.suggestions or {}\n      props.suggestionItems   = props.suggestionItems or {}",
+        "  props.suggestions        = {}\n  props.selectedSuggestion = nil",
+        "  props.suggestions        = props.suggestions or {}\n  props.selectedSuggestion = props.selectedSuggestion",
+    ),
+
+    (
+        "ObservationPanel",
+        "the observation id looks like a link but does nothing",
+        "        text_color      = LINK_COLOR,\n        mouse_down      = actions.view,",
+        "        text_color      = LINK_COLOR,",
+    ),
+    (
+        "ObservationPanel",
+        "the View link opens whichever row is chosen rather than its own",
+        "  local row  = rows[PanelCore.selectedIndex(index)]",
+        "  local row  = rows[props.selectedSuggestion]",
     ),
 
     (
@@ -616,8 +629,8 @@ MUTATIONS = [
     (
         "ObservationPanel",
         "a deselected suggestion leaves the buttons live against a stale taxon",
-        "    props.hasSuggestion     = false\n    return nil",
-        "    return nil",
+        "    props.hasSuggestion     = false\n    ObservationPanel.applySuggestionSlots(props, rows, nil)\n    return nil",
+        "    ObservationPanel.applySuggestionSlots(props, rows, nil)\n    return nil",
     ),
     (
         "ObservationPanel",
