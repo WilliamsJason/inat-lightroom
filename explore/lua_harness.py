@@ -343,13 +343,23 @@ stubs.LrDate = {
 -- would have been shown to the user.
 local dialogMessages = {}
 local floatingDialogs = {}
+local modalDialogs = {}
 local confirmAnswer = "cancel"
+local modalAnswer = "cancel"
 stubs.LrDialogs = {
   message = function(title, message, style)
     dialogMessages[#dialogMessages + 1] =
       { title = title, message = message, style = style }
   end,
-  presentModalDialog = function() return "cancel" end,
+
+  -- Records the args and answers whatever the test told it to, defaulting to
+  -- Cancel. Recording matters as much as the answer: the wording a dialog is
+  -- built with, and the state its property table starts in, are the parts a
+  -- test can check without a UI.
+  presentModalDialog = function(args)
+    modalDialogs[#modalDialogs + 1] = args or {}
+    return modalAnswer
+  end,
 
   -- Answers whatever the test told it to, defaulting to Cancel. Defaulting to
   -- "ok" would make a missing confirmation look like a working one, and the
@@ -966,6 +976,8 @@ return {
   timeline = timeline,
   setExecuteExitCode = function(code) executeExitCode = code end,
   setConfirmAnswer = function(answer) confirmAnswer = answer end,
+  setModalAnswer = function(answer) modalAnswer = answer end,
+  modalDialogs = modalDialogs,
   dialogMessages = dialogMessages,
   moduleSwitches = moduleSwitches,
   floatingDialogs = floatingDialogs,
@@ -1158,6 +1170,16 @@ class LuaPlugin:
     def set_confirm_answer(self, answer: str) -> None:
         """Make LrDialogs.confirm return this. Defaults to "cancel"."""
         self.env["setConfirmAnswer"](answer)
+
+    def set_modal_answer(self, answer: str) -> None:
+        """Make LrDialogs.presentModalDialog return this. Defaults to "cancel"."""
+        self.env["setModalAnswer"](answer)
+
+    @property
+    def modal_dialogs(self) -> list:
+        """Args of each presentModalDialog call, in order."""
+        shown = self.env["modalDialogs"]
+        return [shown[i] for i in range(1, len(shown) + 1)]
 
     def set_platform(self, windows: bool) -> None:
         """Flip the WIN_ENV / MAC_ENV pair Lightroom sets in the sandbox."""

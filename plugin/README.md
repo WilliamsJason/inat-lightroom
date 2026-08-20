@@ -146,7 +146,12 @@ The other buttons:
   location. See below for why this is worth doing.
 - **Link to Observation…** — adopt an observation that already exists on
   iNaturalist, made in the app or on the web. Paste its ID; the plugin fetches
-  it and asks you to confirm before attaching.
+  it and asks you to confirm before attaching. If any photo in the selection is
+  already linked, its ID is filled in for you — so selecting the whole set of
+  frames of one specimen and clicking through attaches the rest to the same
+  observation.
+- **Copy**, beside the observation ID — puts the number on the clipboard, for
+  pasting into Link to Observation, a browser, or anywhere else.
 - **View on iNaturalist** — open it in a browser.
 - **Unlink** — forget the observation. It asks first, and it does not touch
   iNaturalist or remove the keywords already synced; it only detaches the

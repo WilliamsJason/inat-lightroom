@@ -458,6 +458,55 @@ def test_the_view_button_opens_nothing_without_an_observation(plugin, panel):
     assert plugin.opened_urls == []
 
 
+def test_the_copy_button_is_disabled_without_an_observation(plugin, panel):
+    args = show(plugin, panel)
+    buttons = {b["title"]: b for b in of_type(args["contents"], "push_button")}
+    assert buttons["Copy"]["enabled"]["__bind"] == "hasObservation"
+
+
+def copies(plugin):
+    """The clipboard shell-outs, apart from the window fix-up's own."""
+    return [c for c in plugin.executed_commands if "Set-Clipboard" in c]
+
+
+def test_the_copy_button_puts_the_id_on_the_clipboard(plugin, panel):
+    """The number is needed in the Link dialog for the other frames of the same
+    specimen, and an SDK static_text cannot be selected to copy by hand."""
+    plugin.set_platform(windows=True)
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="387778406")])
+    args = show(plugin, panel)
+    buttons = {b["title"]: b for b in of_type(args["contents"], "push_button")}
+
+    plugin.call(buttons["Copy"]["action"])
+    plugin.run_pending_tasks()
+
+    assert len(copies(plugin)) == 1
+    assert "387778406" in copies(plugin)[0]
+
+
+def test_copying_nothing_copies_nothing(plugin, panel):
+    plugin.set_platform(windows=True)
+    plugin.set_target_photos([plugin.new_photo()])
+    args = show(plugin, panel)
+    buttons = {b["title"]: b for b in of_type(args["contents"], "push_button")}
+
+    plugin.call(buttons["Copy"]["action"])
+    plugin.run_pending_tasks()
+
+    assert copies(plugin) == []
+
+
+def test_copying_reports_through_the_status_line(plugin, panel):
+    """Not a modal: the point of the button is that linking further photos is a
+    couple of clicks, and a dialog to dismiss every time would undo that."""
+    props = plugin.runtime.table_from({"observationId": "387778406"})
+    plugin.set_platform(windows=True)
+
+    assert plugin.in_task(panel.copyObservationId, props) is True
+    assert "387778406" in props["suggestionStatus"]
+    assert plugin.dialogs == []
+
+
 # ---------------------------------------------------------------------------
 # Location
 # ---------------------------------------------------------------------------

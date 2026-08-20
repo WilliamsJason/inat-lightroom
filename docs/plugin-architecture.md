@@ -28,6 +28,7 @@ pinned.lrplugin/
 ├── SettingsDialog.lua         # The settings window
 ├── Settings.lua               # Reading, writing and validating settings
 ├── WindowFix.lua              # Fixes the panel's z-order (Windows only)
+├── Clipboard.lua              # Puts short text on the system clipboard
 ├── fix_window_z_order.ps1     # The Win32 helper WindowFix shells out to
 ├── PluginInfoProvider.lua     # The plugin's section in the Plug-in Manager
 ├── PluginInit.lua             # Load hook: finishes an interrupted update, checks for new ones
@@ -222,7 +223,7 @@ grade and last sync, a **Species guess** with a **Get Suggestions** button and a
 list of what came back, one button that is **Upload to iNaturalist** or **Update
 species guess** depending on whether the selection is already linked, and
 **Sync**, **Set on Map**, **Link to Observation…**, **View on iNaturalist** and
-**Unlink**.
+**Unlink**. The observation ID has a **Copy** button of its own.
 
 Everything below the heading describes the *first* selected photo and the
 heading says so. Uploading is the exception: it takes the whole selection into a
@@ -405,6 +406,19 @@ no-op because the behaviour there has never been measured. See
 button and the `lightroom://` URL. It used to be a local function inside
 `URLHandler.lua`, which meant the panel could only reach it by pretending to be
 a URL.
+
+Its dialog opens with the first observation ID it finds on the selection, if
+there is one. Photographing a specimen produces a burst of frames and only one
+of them gets uploaded from the field, so the number needed to attach the rest is
+usually already in the selection — selecting the lot and accepting the dialog
+links them all. The field stays editable, because a selection spanning two
+observations has no right answer, only a starting point.
+
+`Clipboard.lua` is the other half of that: the SDK has no clipboard API and no
+control that is both read-only and selectable, so the observation ID the panel
+shows could otherwise only be retyped — and a mistyped nine-digit ID attaches a
+photo to a stranger's observation. It shells out the same way `WindowFix.lua`
+does: `Set-Clipboard` on Windows, `pbcopy` on macOS.
 
 ### Offering a rank the evidence supports
 

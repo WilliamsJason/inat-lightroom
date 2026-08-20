@@ -266,7 +266,24 @@ function ObservationPanel.contents(f, props, actions)
 
     f:separator { fill_horizontal = 1 },
 
-    labelled("Observation:", "observationId"),
+    -- The observation ID gets a Copy button because it is the one value here
+    -- people need somewhere else: linking further photos of the same specimen
+    -- means putting this number into the Link dialog, and there is no way to
+    -- select text in an SDK static_text to copy it by hand.
+    f:row {
+      f:static_text { title = "Observation:", width = LABEL, alignment = "right" },
+      f:static_text {
+        title           = LrView.bind("observationId"),
+        width           = 260,
+        fill_horizontal = 1,
+      },
+      f:push_button {
+        title   = "Copy",
+        enabled = LrView.bind("hasObservation"),
+        action  = actions.copyObservationId,
+      },
+    },
+
     labelled("Quality:", "quality"),
     labelled("Last synced:", "lastSynced"),
 
@@ -685,6 +702,32 @@ function ObservationPanel.unlink(props)
   return PanelCore.unlink(catalog, photos)
 end
 
+--- Put the shown observation ID on the clipboard.
+--
+-- MUST be called from inside a task.
+--
+-- Reports through the panel's own status line rather than a dialog. A modal to
+-- dismiss after every copy would defeat the point, which is to make attaching
+-- further photos to the same observation a couple of clicks.
+function ObservationPanel.copyObservationId(props)
+  local id = props.observationId
+
+  if not id or id == "" then
+    props.suggestionStatus = "No observation to copy."
+    return false
+  end
+
+  local Clipboard = require "Clipboard"
+
+  if not Clipboard.copy(id) then
+    props.suggestionStatus = "Could not copy observation " .. id .. "."
+    return false
+  end
+
+  props.suggestionStatus = "Copied observation " .. id .. " to the clipboard."
+  return true
+end
+
 --------------------------------------------------------------------------------
 -- Showing it
 --------------------------------------------------------------------------------
@@ -774,6 +817,13 @@ function ObservationPanel.show()
               require("LinkObservation").run(linkContext)
               refresh()
             end)
+        end,
+
+        -- On a task because the copy shells out, and LrTasks.execute blocks.
+        copyObservationId = function()
+          LrTasks.startAsyncTask(function()
+            ObservationPanel.copyObservationId(props)
+          end)
         end,
 
         view = function()
