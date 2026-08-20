@@ -551,6 +551,73 @@ f:simple_list {
 }
 ```
 
+A `simple_list` row is a *string*, though, and that is its other limit: a row
+cannot carry a control, so it cannot carry a per-row link or button, and its
+`value` names selected rows rather than the row clicked. Anything a row needs to
+*do* by itself has to be hand-built — which is fine at a handful of rows and
+ruled out by the table above at a thousand.
+
+## `f:static_text` can be a clickable link -- `mouse_down` plus `text_color`
+
+Not documented in the SDK, and no `f:link` control exists, but the idiom is
+Lightroom's own. Scanning `ui.dll` for `mouse_down` finds the alert dialog it
+builds for `$$$/AgDialogs/AlertInfo=Click here to know more`: a `static_text`
+with a `text_color`, a `mouse_down`, and `LrHttp.openUrlInBrowser` in the
+handler.
+
+```lua
+f:static_text {
+  title      = LrView.bind("observationId"),
+  text_color = LrColor(0.45, 0.72, 1),
+  mouse_down = function() LrHttp.openUrlInBrowser(url) end,
+}
+```
+
+`mouse_down` is passed no position, so the whole control is the hit area — give
+each clickable thing its own `static_text`. The colour is not automatic: without
+it the text looks like every other label and nobody will try clicking it.
+
+This is read from the binary, not from a documented API. It has not been proven
+against a Lightroom that dislikes it.
+
+## A plugin is never told that a photo's metadata changed
+
+There is no observer for it. `LrCatalog`'s method table — the SDK-facing one, in
+`LibraryToolkit.dll` next to `getTargetPhotos` — has `withReadAccessDo`,
+`findPhotos`, `batchGetRawMetadata`, `setPropertyForPlugin` and the rest, and
+nothing that registers a callback. The only two observers a plugin can have are
+the ones `presentFloatingDialog` wires up for it:
+
+```
+selectionChangeObserver  ->  addSelectionContentObserver
+sourceChangeObserver     ->  addSourcesChangedObserver
+```
+
+Both are about *which* photos, never about what is on them. Lightroom does have
+the notification internally — `AgMetadataEvents.addMetadataObserver`, beside
+`removeMetadataObserver` and `beginObservingDB` in `LibraryToolkit.dll` — and it
+is not reachable from Lua.
+
+So a panel that shows a photo's metadata cannot be event-driven. Setting a
+location in the Map module changes nothing a plugin can see, and the panel goes
+on showing what it read. The only options are to poll, or to make the user
+reselect the photo so the *selection* observer fires — and the second is the
+kind of thing people learn to do without ever reporting it as a bug.
+
+This plugin polls: `ObservationPanel.watch` re-reads the selected photo every
+two seconds while its window is open, compares, and writes only what differs
+(`PanelCore.valuesDiffer`). Cheap enough at one photo, and it stops with the
+window.
+
+Two things a poll has to get right, both of which are about *not* writing:
+
+- **Leave what the user is editing alone.** A bound property the panel writes to
+  and the catalog does not — text being typed, a choice not yet applied — will
+  differ from the catalog on every single look. Reapplying the catalog value
+  there means the field silently reverts a couple of seconds after each edit.
+- **Leave a moved-on selection alone**, or the poll and the selection observer
+  race, and the poll wins by being last.
+
 ## `export_destinationType = "tempFolder"` needs an export service provider
 
 A plugin with no `LrExportServiceProvider` cannot render into Lightroom's temp
@@ -913,6 +980,30 @@ Three things matter for it to be usable:
 - **`save_frame` plus `id`.** Position and size persist across sessions. A
   floating window that reopens centred every time is one people close once.
 - **Observers on a task**, as above.
+
+##### The saved frame stores the *size*, and the window cannot be resized
+
+`save_frame` is a preferences key, not a flag. The frame lands in
+`Lightroom Classic CC 7 Preferences.agprefs` as
+
+```
+["<toolkit id>_<save_frame>"] = AgRect( 1169, 308, 1731, 850 ),
+["<toolkit id>_<save_frame>_showCmd"] = 1,
+```
+
+— a rectangle, so width and height come back with the position. Nothing in
+`presentFloatingDialog` makes the window resizable, and there is no API to
+forget a frame. So the first time a layout is seen, its width is the width
+forever: making the panel narrower changes what Lightroom *would* measure and
+nothing about what it restores, and the user cannot drag it back either.
+
+The way out is to key the frame on something other than the window id and put a
+number in it — `ObservationPanel` uses `WINDOW_ID .. ".frame2"` — and bump that
+number whenever the layout changes size. The window reopens in its default
+position once, which is the whole cost.
+
+Or delete the two lines above from the preferences file with Lightroom closed,
+which is the same fix by hand.
 
 It takes focus every time it is opened — which is why the panel updates its
 bindings in place on selection change rather than rebuilding the window.

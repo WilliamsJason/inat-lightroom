@@ -24,6 +24,31 @@ local logger     = require "Log"
 
 local LinkObservation = {}
 
+--- The first observation ID already on any of these photos, if there is one.
+--
+-- This is what makes "select the whole burst, link them all" work: usually one
+-- frame of a set was uploaded from the field and the rest never were, so the
+-- number the user would otherwise go and look up is already sitting on a photo
+-- in the same selection.
+--
+-- Reads in selection order and stops at the first hit. When the selection spans
+-- two different observations there is no right answer, only a starting point;
+-- the field stays editable and the dialog says which one it picked.
+function LinkObservation.existingObservationId(photos)
+  for _, photo in ipairs(photos or {}) do
+    -- Read straight through, no pcall: this runs inside a task, and reading
+    -- plugin metadata yields, which a plain pcall would turn into "attempt to
+    -- yield across a C-call boundary".
+    local value = photo:getPropertyForPlugin(_PLUGIN, "inat_observation_id")
+
+    if type(value) == "string" and value ~= "" then
+      return value
+    end
+  end
+
+  return nil
+end
+
 --- Ask for an observation ID, store it on the selection, then sync.
 -- @param context  A live LrFunctionContext; the dialog's property table and the
 --                 sync's progress scope are both tied to it.
@@ -39,14 +64,24 @@ function LinkObservation.run(context)
 
   local f     = LrView.osFactory()
   local props = LrBinding.makePropertyTable(context)
-  props.obs_id = ""
+
+  local existing = LinkObservation.existingObservationId(photos)
+  props.obs_id = existing or ""
+
+  local prompt = "Paste the observation ID or URL from iNaturalist.\n"
+    .. "It will be applied to all " .. #photos .. " selected photo(s)."
+
+  if existing then
+    prompt = "Observation " .. existing .. " is already on one of the "
+      .. #photos .. " selected photo(s), so it is filled in below.\n"
+      .. "Link and Sync applies it to all of them; edit it to use another."
+  end
 
   local contents = f:column {
     bind_to_object = props,
     spacing = f:label_spacing(),
     f:static_text {
-      title = "Paste the observation ID or URL from iNaturalist.\n"
-        .. "It will be applied to all " .. #photos .. " selected photo(s).",
+      title = prompt,
       width = 400,
       height_in_lines = 2,
     },

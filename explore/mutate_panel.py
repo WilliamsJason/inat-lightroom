@@ -93,14 +93,14 @@ MUTATIONS = [
     (
         "PanelCore",
         "the suggestion list is not capped",
-        "    if i > PanelCore.SUGGESTION_LIMIT then break end",
-        "",
+        "  for i = 1, PanelCore.SUGGESTION_LIMIT do",
+        "  for i = 1, #(rows or {}) do",
     ),
     (
         "PanelCore",
-        "list items are keyed by taxon id, which can be nil",
-        "      value = i,",
-        "      value = row.taxon_id,",
+        "an empty row still offers a link to nowhere",
+        '      slots[i] = { title = "", link = "" }',
+        '      slots[i] = { title = "", link = PanelCore.TAXON_LINK }',
     ),
     (
         "PanelCore",
@@ -243,8 +243,39 @@ MUTATIONS = [
     (
         "ObservationPanel",
         "stale suggestions survive a change of selection",
-        "      props.suggestions       = {}\n      props.suggestionItems   = {}",
-        "      props.suggestions       = props.suggestions or {}\n      props.suggestionItems   = props.suggestionItems or {}",
+        "  props.suggestions        = {}\n  props.selectedSuggestion = nil",
+        "  props.suggestions        = props.suggestions or {}\n  props.selectedSuggestion = props.selectedSuggestion",
+    ),
+
+    (
+        "ObservationPanel",
+        "the watcher rewrites what the panel owns, undoing a guess being typed",
+        "  for key, value in pairs(values) do\n    if not PanelCore.PANEL_OWNED[key] then props[key] = value end\n  end",
+        "  for key, value in pairs(values) do\n    props[key] = value\n  end",
+    ),
+    (
+        "ObservationPanel",
+        "the watcher writes onto a selection that has already moved on",
+        "  if not samePhoto(photo, props.photo) then return false end",
+        "",
+    ),
+    (
+        "ObservationPanel",
+        "the watcher never stops looking once the window is gone",
+        "    if not isOpen() then break end",
+        "",
+    ),
+    (
+        "ObservationPanel",
+        "the observation id looks like a link but does nothing",
+        "        text_color      = LINK_COLOR,\n        mouse_down      = actions.view,",
+        "        text_color      = LINK_COLOR,",
+    ),
+    (
+        "ObservationPanel",
+        "the View link opens whichever row is chosen rather than its own",
+        "  local row  = rows[PanelCore.selectedIndex(index)]",
+        "  local row  = rows[props.selectedSuggestion]",
     ),
 
     (
@@ -616,8 +647,8 @@ MUTATIONS = [
     (
         "ObservationPanel",
         "a deselected suggestion leaves the buttons live against a stale taxon",
-        "    props.hasSuggestion     = false\n    return nil",
-        "    return nil",
+        "    props.hasSuggestion     = false\n    ObservationPanel.applySuggestionSlots(props, rows, nil)\n    return nil",
+        "    ObservationPanel.applySuggestionSlots(props, rows, nil)\n    return nil",
     ),
     (
         "ObservationPanel",

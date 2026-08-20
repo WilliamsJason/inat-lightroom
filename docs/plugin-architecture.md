@@ -28,6 +28,7 @@ pinned.lrplugin/
 ├── SettingsDialog.lua         # The settings window
 ├── Settings.lua               # Reading, writing and validating settings
 ├── WindowFix.lua              # Fixes the panel's z-order (Windows only)
+├── Clipboard.lua              # Puts short text on the system clipboard
 ├── fix_window_z_order.ps1     # The Win32 helper WindowFix shells out to
 ├── PluginInfoProvider.lua     # The plugin's section in the Plug-in Manager
 ├── PluginInit.lua             # Load hook: finishes an interrupted update, checks for new ones
@@ -217,12 +218,40 @@ whole folder selected before settling on one photo — the host log showed
 refresh that started earlier and finished later can leave the panel on the wrong
 photo, and there is nothing to correct it until the next click.
 
+**Nothing reports that a photo changed, so the panel looks for itself.** The
+SDK's catalog offers a plugin exactly two observers — selection and sources —
+and no metadata notification of any kind; Lightroom has one internally
+(`AgMetadataEvents.addMetadataObserver`) and does not expose it. So placing a
+photo in the Map module left the panel insisting the photo had no location until
+the selection was jogged off it and back.
+
+`ObservationPanel.watch` polls every `WATCH_INTERVAL` seconds for as long as the
+window is up, and `pollOnce` is deliberately narrow about what it will touch:
+
+- **Only the same photo.** A selection that has moved on belongs to the
+  selection observer, which also clears the suggestions.
+- **Only if something differs**, so the ordinary case is a read and nothing
+  else.
+- **Never `PanelCore.PANEL_OWNED`** — the species guess and the accuracy are
+  what the person is halfway through saying, and are not in the catalog until a
+  button is pressed. Overwriting a guess being typed with what the catalog last
+  stored would be silent, two seconds late, and blamed on the typing.
+- **Never the suggestions**, since the photo has not changed and they still
+  describe it.
+
+The loop stops on `windowWillClose` and again when `presentFloatingDialog`
+returns, and swallows and logs a failed look rather than dying on it — a watcher
+that ends on one bad read stops watching for the session, and the only symptom
+would be the panel going back to needing a nudge.
+
 The panel shows the selection, what the observation currently is, its quality
 grade and last sync, a **Species guess** with a **Get Suggestions** button and a
 list of what came back, one button that is **Upload to iNaturalist** or **Update
 species guess** depending on whether the selection is already linked, and
-**Sync**, **Set on Map**, **Link to Observation…**, **View on iNaturalist** and
-**Unlink**.
+**Sync**, **Set on Map**, **Link to Observation…** and **Unlink**. The
+observation ID has a **Copy** button of its own, and is itself clickable: it
+opens the observation in a browser, which is what the **View on iNaturalist**
+button used to do beside it.
 
 Everything below the heading describes the *first* selected photo and the
 heading says so. Uploading is the exception: it takes the whole selection into a
@@ -241,9 +270,21 @@ own photos is a better question than scoring a fresh JPEG of one of them. Only
 an unlinked photo needs `RenderPhoto.renderForSuggestions` and
 `score_image`, and that render is cleaned up afterwards.
 
-`suggestionItems` maps list entries to *row positions*, not taxon ids, because a
-malformed result may have no id and a list that silently drops rows is worse
-than one that shows a row it cannot act on.
+**The suggestions are hand-built rows, not a list control.** A `simple_list` row
+is a string and can carry nothing else, so a per-row link out to iNaturalist is
+impossible in one; the button that used to do that job for whichever row was
+chosen is gone in favour of a **View ↗** at the end of every row. Hand-built rows
+scale badly — the SDK notes describe a thousand of them as unusable — but there
+are never more than `SUGGESTION_LIMIT` (8).
+
+A presented view tree is fixed, so `PanelCore.suggestionSlots` always returns
+exactly that many slots and the surplus are blank in both title and link: an
+unused row is inert rather than a link to nowhere. Slots are addressed by *row
+position*, not taxon id, because a malformed result may have no id and a list
+that silently drops rows is worse than one that shows a row it cannot act on.
+Rows drawn by hand have no selection highlight either, so the chosen one is
+marked with a bullet — `CHOSEN_MARK` and `UNCHOSEN_MARK` are the same width so
+the names stay in one column.
 
 ### Location: warn, and hand off to the Map module
 
@@ -405,6 +446,19 @@ no-op because the behaviour there has never been measured. See
 button and the `lightroom://` URL. It used to be a local function inside
 `URLHandler.lua`, which meant the panel could only reach it by pretending to be
 a URL.
+
+Its dialog opens with the first observation ID it finds on the selection, if
+there is one. Photographing a specimen produces a burst of frames and only one
+of them gets uploaded from the field, so the number needed to attach the rest is
+usually already in the selection — selecting the lot and accepting the dialog
+links them all. The field stays editable, because a selection spanning two
+observations has no right answer, only a starting point.
+
+`Clipboard.lua` is the other half of that: the SDK has no clipboard API and no
+control that is both read-only and selectable, so the observation ID the panel
+shows could otherwise only be retyped — and a mistyped nine-digit ID attaches a
+photo to a stranger's observation. It shells out the same way `WindowFix.lua`
+does: `Set-Clipboard` on Windows, `pbcopy` on macOS.
 
 ### Offering a rank the evidence supports
 

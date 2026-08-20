@@ -171,37 +171,105 @@ function PanelCore.confidenceWarning(row)
     score, name)
 end
 
---- Turn suggestion rows into items for a list control.
+--- What a chosen and an unchosen suggestion row are prefixed with.
 --
--- The value is the row's position rather than its taxon_id because a taxon_id
--- is not guaranteed to be there (an unranked or malformed result comes back
--- with a taxon that has no id), and a list whose values collide or go nil
--- selects the wrong row rather than failing.
-function PanelCore.suggestionItems(rows)
-  local items = {}
-  for i, row in ipairs(rows or {}) do
-    if i > PanelCore.SUGGESTION_LIMIT then break end
-    items[#items + 1] = {
-      title = PanelCore.describeSuggestion(row),
-      value = i,
-    }
+-- A hand-built row has no selection highlight of its own -- that came free with
+-- the list control this replaced -- so the mark is the only thing saying which
+-- suggestion the buttons below are about. Both are the same width so the names
+-- stay in one column.
+PanelCore.CHOSEN_MARK   = "\226\151\143 "  -- a filled circle
+PanelCore.UNCHOSEN_MARK = "  "
+
+--- The caption of the per-row link out to iNaturalist.
+PanelCore.TAXON_LINK = "View \226\134\151"
+
+--- Turn suggestion rows into the fixed set of display slots the panel has.
+--
+-- The panel's rows are built once and cannot be added to, removed or hidden --
+-- a bound `visible` is accepted and ignored (see docs/lightroom-sdk-notes.md)
+-- -- so there is always SUGGESTION_LIMIT of them and the surplus are blank.
+--
+-- A slot carries what its row draws and nothing else: the title with its
+-- chosen/unchosen mark, and the link caption, which is empty when the row has
+-- no taxon to link to. Blank slots have neither, so an empty row is inert
+-- rather than a link to nowhere.
+--
+-- @param rows      The suggestion rows, in order.
+-- @param selected  The index currently chosen, or nil.
+function PanelCore.suggestionSlots(rows, selected)
+  local slots = {}
+
+  for i = 1, PanelCore.SUGGESTION_LIMIT do
+    local row = (rows or {})[i]
+
+    if row then
+      local mark = (i == selected) and PanelCore.CHOSEN_MARK
+                                    or PanelCore.UNCHOSEN_MARK
+      slots[i] = {
+        title = mark .. PanelCore.describeSuggestion(row),
+        link  = PanelCore.taxonUrl(row.taxon_id) and PanelCore.TAXON_LINK or "",
+      }
+    else
+      slots[i] = { title = "", link = "" }
+    end
   end
-  return items
+
+  return slots
 end
 
---- Work out which suggestion row a list control is reporting as selected.
+--- Which of the panel's values belong to the panel rather than to the catalog.
 --
--- f:simple_list does not hand back the row number. Its `value` is bound to the
--- underlying table_view's `selected_indexes` through a transform, and the
--- reverse path runs ipairs over that -- so what arrives is a *list* of selected
--- values, even when only one row can be picked. Observed in the host: choosing
--- a row set the property to a table, chooseSuggestion was handed that table as
--- an index, rows[{...}] was nil, and the click did nothing at all.
+-- Everything else the panel shows is a *reading* of the catalog and can be
+-- replaced with a fresher reading at any time. These two are what the person in
+-- front of it is halfway through saying: a species guess being typed, or picked
+-- from the suggestions and not yet uploaded, and an accuracy chosen from the
+-- popup. Neither is written to the catalog until a button is pressed, so a
+-- refresh that treated the catalog as the truth would quietly undo them.
+PanelCore.PANEL_OWNED = {
+  speciesGuess  = true,
+  accuracy      = true,
+  accuracyItems = true,
+}
+
+--- Whether a fresh reading of the catalog says anything the panel is not
+--- already showing.
 --
--- Every plausible shape is accepted rather than the one that turned out to be
--- real, because the failure is silent -- a control that quietly does nothing
--- looks like a control nobody wired up. The shapes: a bare row number, a list
--- of them, or a list of the item tables themselves.
+-- Exists because nothing tells a plugin that a photo changed. The SDK's catalog
+-- offers observers for the selection and for the sources and nothing else --
+-- Lightroom's own metadata observer is internal -- so the only way to notice a
+-- location arriving is to look again and compare. This is the "is it worth
+-- redrawing" half of that, kept away from the catalog so it can be tested.
+--
+-- Tables are skipped. The only ones are rebuilt on every read and so would
+-- never compare equal, and each is derived from a scalar that is compared.
+--
+-- @param current  The property table the window is bound to.
+-- @param fresh    A newly built set of values.
+-- @param ignore   Keys to leave out of the comparison, or nil.
+function PanelCore.valuesDiffer(current, fresh, ignore)
+  for key, value in pairs(fresh or {}) do
+    if type(value) ~= "table"
+       and not (ignore and ignore[key])
+       and current[key] ~= value then
+      return true
+    end
+  end
+
+  return false
+end
+
+--- Normalise whatever a caller offers as a suggestion row index.
+--
+-- The rows are hand-built now and hand a plain number straight back, so this is
+-- a guard rather than a translation. It stays because of what it was written
+-- for: f:simple_list, which the rows replaced, reported its selection as a
+-- *table* of selected indexes even when only one row could be picked, and
+-- taking that for a row number failed silently -- the row highlighted, rows[{}]
+-- was nil, and the click did nothing, with no error and nothing in the log.
+-- See docs/lightroom-sdk-notes.md.
+--
+-- Every plausible shape is accepted rather than only the one that turned out to
+-- be real, because that failure mode is invisible.
 function PanelCore.selectedIndex(value)
   if type(value) == "number" then return value end
   if type(value) == "string" then return tonumber(value) end
