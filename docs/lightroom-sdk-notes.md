@@ -943,6 +943,30 @@ Three things matter for it to be usable:
   floating window that reopens centred every time is one people close once.
 - **Observers on a task**, as above.
 
+##### The saved frame stores the *size*, and the window cannot be resized
+
+`save_frame` is a preferences key, not a flag. The frame lands in
+`Lightroom Classic CC 7 Preferences.agprefs` as
+
+```
+["<toolkit id>_<save_frame>"] = AgRect( 1169, 308, 1731, 850 ),
+["<toolkit id>_<save_frame>_showCmd"] = 1,
+```
+
+— a rectangle, so width and height come back with the position. Nothing in
+`presentFloatingDialog` makes the window resizable, and there is no API to
+forget a frame. So the first time a layout is seen, its width is the width
+forever: making the panel narrower changes what Lightroom *would* measure and
+nothing about what it restores, and the user cannot drag it back either.
+
+The way out is to key the frame on something other than the window id and put a
+number in it — `ObservationPanel` uses `WINDOW_ID .. ".frame2"` — and bump that
+number whenever the layout changes size. The window reopens in its default
+position once, which is the whole cost.
+
+Or delete the two lines above from the preferences file with Lightroom closed,
+which is the same fix by hand.
+
 It takes focus every time it is opened — which is why the panel updates its
 bindings in place on selection change rather than rebuilding the window.
 

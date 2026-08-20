@@ -53,6 +53,20 @@ local ObservationPanel = {}
 -- stored position on, and so a second Show does not open a second window.
 local WINDOW_ID = "com.github.inat-lightroom.observationPanel"
 
+-- Where the saved frame is keyed, which is deliberately not WINDOW_ID.
+--
+-- save_frame stores a whole rectangle -- size as well as position -- in
+-- Lightroom's preferences, as `["<plugin>_<key>"] = AgRect(l, t, r, b)`. This
+-- window cannot be resized, so once a layout has been seen at one width, that
+-- width is what reopens forever: making the panel narrower changes what
+-- Lightroom *would* measure and nothing about what it restores. There is no way
+-- to ask it to forget, and a user cannot drag it back.
+--
+-- So the key carries a number, and **making the panel a different size means
+-- bumping it**. The cost is that the window reopens in its default position
+-- once, which is cheap next to a panel stuck at a width nobody chose.
+local FRAME_KEY = WINDOW_ID .. ".frame2"
+
 local OBSERVATION_URL = "https://www.inaturalist.org/observations/"
 
 -- What clickable text is drawn in. Lightroom's own dialogs colour their one
@@ -260,15 +274,35 @@ end
 -- rows were only selectable. It holds strings, so the moment a row had to hold
 -- a second, separately clickable thing it could not. Eight rows is nowhere near
 -- where hand-built rows get slow.
+-- Both pieces carry an explicit width. A `static_text` takes its size from the
+-- title it was *built* with, and these are built empty, so without a width the
+-- name collapses to nothing and every row draws as a link floating on the left
+-- (seen in the host). `fill_horizontal` alone does not save it: it shares out
+-- space a row has spare, and a row of two zero-width controls has none.
+--
+-- That width is what decides how wide the window wants to be, so it is set to
+-- the narrowest that holds a typical name rather than the widest name there
+-- could be: a long name is ellipsised and its tooltip has the whole thing, and
+-- a panel that is permanently as wide as its worst case is a worse trade. Both
+-- keys are undocumented and both are read out of ui.dll, where `static_text` is
+-- built with `truncation` beside `mouse_down` and `text_color` -- and
+-- `truncation` is worth having on its own, because the documented behaviour
+-- without it is to drop the last *word* silently.
+local NAME_WIDTH = 330
+
 function ObservationPanel.suggestionsView(f, actions)
   local rows = { spacing = 0 }
 
   for index = 1, PanelCore.SUGGESTION_LIMIT do
     rows[#rows + 1] = f:row {
-      spacing = f:label_spacing(),
+      spacing         = f:label_spacing(),
+      fill_horizontal = 1,
 
       f:static_text {
         title           = LrView.bind("suggestionTitle" .. index),
+        tooltip         = LrView.bind("suggestionTitle" .. index),
+        width           = NAME_WIDTH,
+        truncation      = "tail",
         fill_horizontal = 1,
         mouse_down      = function() actions.chooseSuggestion(index) end,
       },
@@ -282,7 +316,16 @@ function ObservationPanel.suggestionsView(f, actions)
     }
   end
 
-  return f:column(rows)
+  -- A frame, because eight rows of plain text against the rest of the panel's
+  -- plain text read as more of the same. The list control this replaced drew
+  -- its own; without one the suggestions stop looking like a list of things to
+  -- click. `show_title = false` is what makes a group_box a bare frame rather
+  -- than a titled one -- ui.dll's AgViewWinGroupBox reads it.
+  return f:group_box {
+    show_title      = false,
+    fill_horizontal = 1,
+    f:column(rows),
+  }
 end
 
 --- Build the window contents.
@@ -502,8 +545,7 @@ function ObservationPanel.loadSuggestions(props)
     props.suggestionStatus = "iNaturalist had no suggestions for this photo."
   else
     props.suggestionStatus =
-      "Click a name to use it as the species guess, or View to open it "
-      .. "on iNaturalist."
+      "Click a name to use it, or View to open it on iNaturalist."
   end
 end
 
@@ -922,10 +964,11 @@ function ObservationPanel.show()
         title    = WINDOW_TITLE,
         contents = ObservationPanel.contents(f, props, actions),
 
-        -- Keyed so save_frame has something to store a position against, and
-        -- so this is the same window every time rather than a new one.
+        -- Keyed so this is the same window every time rather than a new one.
+        -- The saved frame is keyed separately, so that a layout change can
+        -- start it over without the window itself becoming a different one.
         id         = WINDOW_ID,
-        save_frame = WINDOW_ID,
+        save_frame = FRAME_KEY,
 
         -- The point of the whole thing: follow the filmstrip.
         --

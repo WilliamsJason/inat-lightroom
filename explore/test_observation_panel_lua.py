@@ -170,7 +170,18 @@ def test_the_window_remembers_where_it_was_put(plugin, panel):
     close and never open again."""
     args = show(plugin, panel)
     assert args["save_frame"], "save_frame is what persists position and size"
-    assert args["id"], "save_frame needs an id to key the stored frame on"
+    assert args["id"], "the id is what makes Show reuse one window"
+
+
+def test_the_saved_frame_is_keyed_apart_from_the_window(plugin, panel):
+    """The frame carries the size too, and this window cannot be resized, so a
+    panel that is made narrower would still reopen at the old width forever.
+    Bumping this key is the only way to let Lightroom measure it again, and it
+    must not take the window's identity with it."""
+    args = show(plugin, panel)
+
+    assert args["save_frame"] != args["id"]
+    assert args["save_frame"].startswith(args["id"])
 
 
 def test_the_window_holds_its_task_open(plugin, panel):
@@ -831,6 +842,37 @@ def test_every_row_property_exists_before_the_window_is_built(plugin, panel):
     for index in range(1, int(core["SUGGESTION_LIMIT"]) + 1):
         assert props[f"suggestionTitle{index}"] == ""
         assert props[f"suggestionLink{index}"] == ""
+
+
+def test_every_row_reserves_width_for_the_name(plugin, panel):
+    """A static_text sizes itself from the title it was built with, and these are
+    built empty. Without a width the name collapses to nothing and the row draws
+    as a link with no name beside it, which is what the host showed."""
+    args = show(plugin, panel)
+
+    for row in suggestion_rows(args):
+        assert row["width"] > 0
+
+
+def test_a_long_name_is_ellipsised_and_kept_in_a_tooltip(plugin, panel):
+    """The panel is only as wide as a typical name, and static_text drops the
+    last whole word rather than clipping. `truncation` makes that an ellipsis;
+    the tooltip is where the name it could not draw survives."""
+    args = show(plugin, panel)
+
+    for row in suggestion_rows(args):
+        assert row["truncation"] == "tail"
+        assert row["tooltip"]["__bind"] == row["title"]["__bind"]
+
+
+def test_the_suggestions_sit_in_a_frame(plugin, panel):
+    """Eight rows of plain text among a panel of plain text do not read as a
+    list of things to click. The list control this replaced drew its own."""
+    args = show(plugin, panel)
+    boxes = [v for v in views(args["contents"]) if v["_viewType"] == "group_box"]
+
+    assert len(boxes) == 1
+    assert boxes[0]["show_title"] is False
 
 
 def test_clicking_a_name_picks_that_suggestion(plugin, panel):
