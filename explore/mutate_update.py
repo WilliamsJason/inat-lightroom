@@ -179,6 +179,24 @@ MUTATIONS = [
     ),
     (
         "UpdateCore",
+        "you are interrupted to be told about a release you cannot install",
+        "  if not result.canInstall then return false end\n",
+        "",
+    ),
+    (
+        "UpdateCore",
+        "pressing Update does nothing at all",
+        "    if answer ~= \"ok\" then return end",
+        "    if answer ~= \"ok\" then return end\n    do return end",
+    ),
+    (
+        "UpdateCore",
+        "a failed install is silent, so it reads as a successful one",
+        "    if ok then\n      LrDialogs.message(\"Pinned\", UpdateCore.stagedText(result), \"info\")",
+        "    if true then\n      LrDialogs.message(\"Pinned\", UpdateCore.stagedText(result), \"info\")",
+    ),
+    (
+        "UpdateCore",
         "the startup check blocks Lightroom while it loads plugins",
         "  LrTasks.startAsyncTask(function()\n    LrTasks.sleep(UpdateCore.STARTUP_DELAY_SECONDS)",
         "  do\n    LrTasks.sleep(UpdateCore.STARTUP_DELAY_SECONDS)",

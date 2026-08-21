@@ -900,9 +900,9 @@ accurately.
 ### Checking is automatic; installing is not
 
 The check runs once a day from `LrInitPlugin`, after a delay, in its own task,
-and can be switched off in the Plug-in Manager. Installing stays a button.
-Replacing the code that touches someone's catalog while they are not looking is
-not a default anyone chose.
+and can be switched off in the Plug-in Manager. Installing stays something
+someone pressed. Replacing the code that touches someone's catalog while they
+are not looking is not a default anyone chose.
 
 A failed check resolves to "could not check", never to a silence that reads as
 "nothing new", and the timestamp is written whether or not the check succeeded —
@@ -910,11 +910,28 @@ recording only successes turns an offline week into a request on every launch,
 which is the behaviour rate limits exist to punish. When there is something new,
 the user is told once per version rather than once per launch.
 
+That one interruption is a confirmation with **Update** and **Later**, and
+**Update** stages the release there and then. It first offered **Show Me** and
+opened the releases page instead, which reads as helpful and is not: having
+agreed to update, you were handed a browser tab, and still had to find **File →
+Plug-in Manager**, press **Check for Updates**, and press **Download and
+Install** — three steps to reach a thing the plugin was already holding. The
+dialog now does the update; the releases page is a button in the Plug-in Manager
+for anyone who wants to read the notes before installing.
+
+Because that button is the dialog's whole offer, `UpdateCore.shouldNotify`
+declines to interrupt about a release it cannot install — one published by hand,
+with no archive attached. Nothing is recorded as notified in that case, so the
+offer still arrives if the archive appears later, and the Plug-in Manager says
+so in the meantime.
+
 The UI lives in the **Plug-in Manager** (`LrPluginInfoProvider`), which is the
 one Lightroom surface that is about the plugin rather than about photos, and
 where people already go to install and enable one. The settings window is about
 what an observation says, and the floating panel is about the photo in front of
-you; neither is about the plugin.
+you; neither is about the plugin. There is no SDK call that opens the Plug-in
+Manager, which is the other reason the dialog does the work rather than pointing
+at it.
 
 ## What comes next
 

@@ -55,9 +55,11 @@ section:
 - The update finishes installing **when you quit Lightroom**, and is in use the
   next time you start it.
 
-The plugin also checks once a day on its own and tells you once about each new
-version. Untick **Check for updates automatically** to stop that; the button
-still works.
+The plugin also checks once a day on its own. When it finds a new version it
+offers it once, in a dialog with **Update** and **Later** — **Update** does the
+same download-verify-stage as the button above, so a new version is two clicks
+from wherever you happen to be. Untick **Check for updates automatically** to
+stop the check; the buttons still work.
 
 Nothing is installed without you clicking it. If your plugin folder is
 read-only the plugin says so rather than failing half way — download the release

@@ -119,9 +119,10 @@ Create the `Modules` folder if it isn't there yet.
 
 After that, **File → Plug-in Manager → Pinned for iNaturalist → Updates** has a button that
 fetches the latest release, checks it against its published checksum, and
-installs it when you next quit Lightroom. It also checks once a day by itself
-and mentions each new version once; that can be switched off. Nothing installs
-without a click. See [`SECURITY.md`](SECURITY.md) for what you are trusting when
+installs it when you next quit Lightroom. It also checks once a day by itself,
+and offers each new version once in a dialog whose **Update** button does the
+same thing. Nothing installs without a click, and the daily check can be
+switched off. See [`SECURITY.md`](SECURITY.md) for what you are trusting when
 you use it.
 
 Setup and usage are in [`plugin/README.md`](plugin/README.md).

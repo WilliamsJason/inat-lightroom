@@ -12,7 +12,7 @@
 
     Checking is automatic; installing is not. A plugin that replaces itself
     without being asked is a plugin that changes what your catalog does while
-    you are not looking. The check is cheap and quiet; the install is a button.
+    you are not looking. The check is cheap and quiet; the install is a click.
 
     Not knowing is not the same as being up to date. Every network failure here
     resolves to "could not check", never to silence that a user would read as
@@ -20,7 +20,6 @@
 --]]
 
 local LrDate  = import "LrDate"
-local LrHttp  = import "LrHttp"
 local LrTasks = import "LrTasks"
 
 local Settings      = require "Settings"
@@ -172,8 +171,17 @@ end
 -- Once per version, not once per launch. Being told about the same release
 -- every morning is how a notification becomes something people learn to click
 -- through without reading.
+--
+-- Only for a release the dialog can actually install. The dialog's whole offer
+-- is a single button that does the update; a release published by hand has no
+-- archive to install, so interrupting about it would be interrupting to say
+-- "go and do this yourself somewhere else". That one waits in the Plug-in
+-- Manager instead, where the releases page is a button. Nothing is recorded as
+-- notified in that case, so if the archive is attached later the offer still
+-- arrives.
 function UpdateCore.shouldNotify(result, alreadyNotifiedTag)
   if not result or not result.isNewer then return false end
+  if not result.canInstall then return false end
   local tag = result.latest and result.latest.tag
   if not tag then return false end
   return tag ~= alreadyNotifiedTag
@@ -199,15 +207,40 @@ function UpdateCore.checkOnStartup()
     -- A dialog, once, for a version. The alternative is a status line in the
     -- Plug-in Manager that nobody opens, which is the same as not telling
     -- anyone. There is a preference to turn the whole check off.
+    --
+    -- The offer is the update itself rather than a link. Sending someone to a
+    -- browser to read release notes leaves them to find the Plug-in Manager
+    -- afterwards and press two more buttons, which is a long way round for a
+    -- thing the plugin can do here. Release notes are a button in the Plug-in
+    -- Manager for anyone who wants to read before installing; this dialog is
+    -- for everyone who does not.
     local LrDialogs = import "LrDialogs"
     local answer = LrDialogs.confirm(
       "Pinned",
       UpdateCore.statusText(result),
-      "Show Me",
+      "Update",
       "Later")
 
-    if answer == "ok" then
-      LrHttp.openUrlInBrowser(result.latest.pageUrl)
+    if answer ~= "ok" then return end
+
+    -- Downloading, verifying and unpacking takes a second or two, with the
+    -- dialog already gone. Without this the answer to "did pressing Update do
+    -- anything?" is nothing at all until it finishes.
+    LrDialogs.showBezel("Downloading the update…", 3)
+
+    -- Still not an unattended install: this is a button someone pressed. It
+    -- only stages, as it does from the Plug-in Manager, so nothing about the
+    -- running session changes underneath them.
+    local ok, err = UpdateCore.install(result)
+
+    if ok then
+      LrDialogs.message("Pinned", UpdateCore.stagedText(result), "info")
+    else
+      LrDialogs.message(
+        "Pinned",
+        "Could not install the update: " .. tostring(err) ..
+          ".\n\nYou can try again from File > Plug-in Manager.",
+        "critical")
     end
   end)
 end
