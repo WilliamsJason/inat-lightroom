@@ -352,6 +352,14 @@ stubs.LrDialogs = {
       { title = title, message = message, style = style }
   end,
 
+  -- The transient toast. Recorded alongside the modals because it is the only
+  -- evidence that something told the user work had started, and "nothing
+  -- appeared to happen" is the failure it exists to prevent.
+  showBezel = function(message, duration)
+    dialogMessages[#dialogMessages + 1] =
+      { title = "", message = message, style = "bezel", duration = duration }
+  end,
+
   -- Records the args and answers whatever the test told it to, defaulting to
   -- Cancel. Recording matters as much as the answer: the wording a dialog is
   -- built with, and the state its property table starts in, are the parts a
