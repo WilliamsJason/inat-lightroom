@@ -250,26 +250,31 @@ back if the API returns it to you as the owner.
 
 ### Picking a rank you can defend
 
-Suggestions come back with a confidence score. When the best one is under 75%,
-the plugin puts coarser options at the **top** of the list — genus, family,
-order — each marked *"agreed by every suggestion"*.
+Every suggestion list opens with the coarser options — genus, family, order —
+above the species, whatever the top score is. 80% sure of a species is one photo
+in five filed under a wrong name, and stepping back a rank is a choice worth
+having in front of you rather than one the plugin makes for you.
 
-Those come from iNaturalist's own `common_ancestor`: the most specific taxon its
-model is confident about across *all* the candidates. If five results argue
-about the species but all sit in one genus, that genus is the honest answer, and
-it is the one the website itself falls back to. The ladder is never built by
-walking up from the top result, because at 40% that result's family is exactly
-what is in doubt — and it never offers a rank finer than the common ancestor.
+Each row says where it came from, because the two sources are not equally safe:
+
+- *"agreed by every suggestion"* — the taxon is at or above iNaturalist's own
+  `common_ancestor`, the most specific taxon its model is confident about across
+  *all* the candidates. If five results argue about the species but all sit in
+  one genus, that genus is the honest answer, and it is the one the website
+  itself falls back to.
+- *"containing Ischnura erratica"* — the rung comes from the top candidate's own
+  lineage, below the common ancestor. It is only right if that candidate is in
+  the right genus, so the note names it instead of implying the model agreed.
 
 They sit at the top rather than the bottom because a safer choice listed below
-eight species is one nobody scrolls to.
+ten species is one nobody scrolls to.
 
-For the same reason, identifying something as a **species** on a score below 75%
-asks for confirmation first — on upload and on update, since an observation that
-already exists is a published record, not a safer place to be wrong. Choosing
-the genus instead is never questioned. A coarse record that is right is worth
-more than a precise one that is wrong, and it is much easier for somebody else
-to refine than to argue down.
+Identifying something as a **species** on a score below 75% asks for
+confirmation first — on upload and on update, since an observation that already
+exists is a published record, not a safer place to be wrong. Choosing the genus
+instead is never questioned. A coarse record that is right is worth more than a
+precise one that is wrong, and it is much easier for somebody else to refine
+than to argue down.
 
 ### Using a suggestion without publishing anything
 

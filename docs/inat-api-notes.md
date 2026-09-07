@@ -566,13 +566,19 @@ lineage. Walking up from result #1 assumes result #1 is in the right family —
 which, at a 40% score, is exactly what is in doubt. Walking up from
 `common_ancestor` assumes only what every candidate already agrees on.
 
-So the rank ladder the plugin offers is built from `common_ancestor` and its
-`ancestors`, never from a single result, and it never descends below it.
+So the ladder the plugin offers is built from `common_ancestor` and its
+`ancestors` wherever it can be, and those rows say *"agreed by every
+suggestion"*. Below the common ancestor it does walk up from the top result —
+that is the only place a genus can come from once the model has settled on one —
+and those rows say *"containing &lt;top result&gt;"* instead, so the assumption is
+on screen rather than buried. Both are offered whatever the score is: somebody
+who wants the genus behind a 90% species should not have to type it by hand.
 
 `/v1/taxa/{id}` supplies the ladder: the response carries an `ancestors` array
 from `kingdom` downwards, including intermediate ranks (`subphylum`, `suborder`,
 `superfamily`) that are real but useless as choices — the plugin keeps only
-`order`, `family` and `genus`.
+`order`, `family` and `genus`. One fetch covers both sources, because the top
+result's lineage passes through the common ancestor.
 
 Two things this does **not** establish:
 

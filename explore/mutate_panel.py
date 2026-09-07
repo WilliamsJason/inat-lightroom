@@ -504,15 +504,17 @@ MUTATIONS = [
     ),
     (
         "PanelCore",
-        "a fallback is offered even when the top answer is confident",
-        "  if tonumber(topScore) and tonumber(topScore) >= PanelCore.CONFIDENT_SCORE then\n    return {}\n  end",
-        "",
+        "the coarser ranks go back to hiding behind a confidence threshold",
+        "  local fallbacks = PanelCore.coarserRows(topTaxon, ancestor, rows)",
+        "  local fallbacks = {}\n"
+        "  if (tonumber(top and top.combined_score) or 0) < PanelCore.CONFIDENT_SCORE then\n"
+        "    fallbacks = PanelCore.coarserRows(topTaxon, ancestor, rows)\n  end",
     ),
     (
         "PanelCore",
-        "the ladder is built coarsest-first, burying the useful option",
-        "  for i = #chain, 1, -1 do\n    local taxon = chain[i]",
-        "  for i = 1, #chain do\n    local taxon = chain[i]",
+        "the ladder is sorted coarsest-first, burying the useful option",
+        "    return (fineness[a.rank] or 0) > (fineness[b.rank] or 0)",
+        "    return (fineness[a.rank] or 0) < (fineness[b.rank] or 0)",
     ),
     (
         "PanelCore",
@@ -522,9 +524,27 @@ MUTATIONS = [
     ),
     (
         "PanelCore",
-        "a fallback row is given an invented confidence score",
-        "        note        = taxon.rank",
-        "        combined_score = 100, note = taxon.rank",
+        "a coarser row is given an invented confidence score",
+        "          note        = taxon.rank",
+        "          combined_score = 100, note = taxon.rank",
+    ),
+    (
+        "PanelCore",
+        "a taxon already in the list is offered a second time as a coarser row",
+        "        and not taken[taxon.id] and not seen[taxon.id] then",
+        "        and not seen[taxon.id] then",
+    ),
+    (
+        "PanelCore",
+        "a rung the model never agreed on claims that it did",
+        "        if i > agreedThrough then",
+        "        if false then",
+    ),
+    (
+        "PanelCore",
+        "every rung is hedged, so the agreed ones lose what makes them safe",
+        "        local why = PanelCore.AGREED_NOTE",
+        '        local why = "containing " .. tostring(topName)',
     ),
     (
         "PanelCore",
@@ -534,15 +554,16 @@ MUTATIONS = [
     ),
     (
         "PanelCore",
-        "the lineage is fetched even for a confident list",
-        "  if topScore and topScore >= PanelCore.CONFIDENT_SCORE then return rows end",
-        "",
+        "the top candidate's own lineage is never looked up, so the ladder "
+        "stops at the common ancestor",
+        "      id                    = top.taxon_id,",
+        "      id                    = nil,",
     ),
     (
         "PanelCore",
         "the fallback rows never reach the list",
-        "    SyncCore.withAncestors(api, commonAncestor), topScore)",
-        "    nil, topScore)",
+        "  local fallbacks = PanelCore.coarserRows(topTaxon, ancestor, rows)",
+        "  local fallbacks = {}",
     ),
 
     # --- arguing before a weak species claim ----------------------------------
@@ -567,8 +588,8 @@ MUTATIONS = [
     (
         "PanelCore",
         "the warning never names the alternative, so it is just a nag",
-        '"again and pick the genus or family instead -- a coarser record that is " ..',
-        '"again. " ..',
+        '"order for this photo are waiting at the top of the suggestion list -- a " ..',
+        '"order for this photo are elsewhere. " ..',
     ),
     (
         "ObservationPanel",
