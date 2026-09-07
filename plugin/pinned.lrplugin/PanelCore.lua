@@ -489,26 +489,39 @@ end
 -- frames were taken of it.
 --
 -- @param options  onEvent(message) progress callback, sleep for the upload
---                 verifier
--- @return observationId, url, list of error strings
+--                 verifier, isCanceled() checked at every step
+-- @return observationId, url, list of error strings, true when the user
+--         cancelled partway
 function PanelCore.upload(catalog, api, settings, photos, options)
   options  = options or {}
   settings = settings or {}
-  local onEvent = options.onEvent or function() end
+  local onEvent    = options.onEvent or function() end
+  local isCanceled = options.isCanceled or function() return false end
 
   if not photos or #photos == 0 then
-    return nil, nil, { "Select at least one photo first." }
+    return nil, nil, { "Select at least one photo first." }, false
   end
 
   local errors = {}
 
   onEvent("Rendering " .. #photos .. " photo(s)…")
-  local rendered, renderFailures, folder = RenderPhoto.render(photos, {
-    settings = settings,
+  local rendered, renderFailures, folder, renderCanceled = RenderPhoto.render(photos, {
+    settings   = settings,
+    onEvent    = onEvent,
+    isCanceled = isCanceled,
   })
 
   for _, failure in ipairs(renderFailures) do
     errors[#errors + 1] = failure
+  end
+
+  -- Nothing has been created on iNaturalist yet, so a cancel here is free:
+  -- delete the JPEGs and go, without the render failures, which are only
+  -- interesting when the run was meant to finish.
+  if renderCanceled or isCanceled() then
+    RenderPhoto.cleanUp(folder)
+    logger:info("Upload cancelled before the observation was created")
+    return nil, nil, {}, true
   end
 
   if #rendered == 0 then
@@ -516,30 +529,80 @@ function PanelCore.upload(catalog, api, settings, photos, options)
     if #errors == 0 then
       errors[#errors + 1] = RenderPhoto.FAILED_MESSAGE
     end
-    return nil, nil, errors
+    return nil, nil, errors, false
   end
 
   onEvent("Creating the observation…")
   local seen = {}
-  local observationId, uuid, resolveErr =
+  local observationId, uuid, resolveErr, wasCreated =
     UploadCore.resolveObservation(api, settings, photos[1], seen, errors)
 
   if not observationId then
     RenderPhoto.cleanUp(folder)
     errors[#errors + 1] = resolveErr or "Could not create the observation."
-    return nil, nil, errors
+    return nil, nil, errors, false
+  end
+
+  --- Undo as much of this run as it is ours to undo.
+  --
+  -- Only an observation this call created is deleted. Re-uploading to one that
+  -- already existed is the other half of the same button, and there a cancel
+  -- means "stop adding photos", not "destroy the record I made last week" --
+  -- which is why resolveObservation has to say which of the two happened.
+  --
+  -- Deleting it is what makes Cancel worth pressing. Leaving the empty
+  -- observation behind is exactly the state that has to be cleaned up by hand
+  -- on the website afterwards, and the photos are left unlinked because
+  -- nothing was ever written to them: recordObservation has not run yet.
+  local function abandon()
+    RenderPhoto.cleanUp(folder)
+
+    if not wasCreated then
+      logger:info("Upload cancelled; left observation "
+        .. tostring(observationId) .. " alone because it already existed")
+      return nil, nil, {}, true
+    end
+
+    onEvent("Cancelling; removing the observation…")
+    local _, deleteErr = api:deleteObservation(observationId)
+    if deleteErr then
+      logger:warn("Could not delete cancelled observation "
+        .. tostring(observationId) .. ": " .. tostring(deleteErr))
+      -- Reported, unlike every other part of a cancel. An observation left on
+      -- iNaturalist is a public record the user believes they just called off,
+      -- and the only way they can find out is being told.
+      return nil, nil, {
+        "The upload was cancelled, but observation " .. tostring(observationId)
+        .. " could not be removed from iNaturalist (" .. tostring(deleteErr)
+        .. "). You may want to delete it there.",
+      }, true
+    end
+
+    logger:info("Upload cancelled; deleted observation " .. tostring(observationId))
+    return nil, nil, {}, true
+  end
+
+  if isCanceled() then
+    return abandon()
   end
 
   local attached = 0
   for i, item in ipairs(rendered) do
+    if isCanceled() then
+      return abandon()
+    end
+
     onEvent("Uploading photo " .. i .. " of " .. #rendered .. "…")
 
     local _, uploadErr = api:uploadPhotoVerified(observationId, item.path, {
-      sleep   = options.sleep,
-      onEvent = onEvent,
+      sleep      = options.sleep,
+      onEvent    = onEvent,
+      isCanceled = isCanceled,
     })
 
-    if uploadErr then
+    if uploadErr == InatAPI.CANCELED then
+      return abandon()
+    elseif uploadErr then
       errors[#errors + 1] = uploadErr
     else
       attached = attached + 1
@@ -554,7 +617,7 @@ function PanelCore.upload(catalog, api, settings, photos, options)
     -- the panel report success.
     errors[#errors + 1] = "Observation " .. tostring(observationId)
       .. " was created but no photo could be attached to it."
-    return nil, nil, errors
+    return nil, nil, errors, false
   end
 
   local url = UploadCore.recordObservation(catalog, photos, observationId, uuid)
@@ -575,7 +638,7 @@ function PanelCore.upload(catalog, api, settings, photos, options)
   end
 
   logger:info("Uploaded " .. attached .. " photo(s) as observation " .. tostring(observationId))
-  return observationId, url, errors
+  return observationId, url, errors, false
 end
 
 --------------------------------------------------------------------------------
@@ -772,7 +835,12 @@ function PanelCore.syncBack(catalog, api, photos, errors)
 
   for _, photo in ipairs(photos or {}) do
     local status, err = SyncCore.syncPhoto(catalog, photo, api)
-    if status == SyncCore.FAILED then
+    -- MISSING counts as a failure here and nowhere else. Everywhere else it
+    -- means the observation was deleted; a second after an upload it almost
+    -- always means the search index has not caught up yet. Either way there is
+    -- nothing to unlink -- the upload that just succeeded is the evidence the
+    -- observation exists -- so it is reported and left alone.
+    if status == SyncCore.FAILED or status == SyncCore.MISSING then
       if errors then errors[#errors + 1] = err end
       logger:warn("Sync-back failed: " .. tostring(err))
     else

@@ -75,13 +75,13 @@ MUTATIONS = [
     ),
     (
         "does not tell the caller which folder to clean up",
-        "  return rendered, failures, folder\nend",
+        "  return rendered, failures, folder, canceled\nend",
         "  return rendered, failures\nend",
     ),
     (
         "ignores the folder the caller supplied",
-        "  local folder = options.folder or RenderPhoto.makeTempFolder()",
-        "  local folder = RenderPhoto.makeTempFolder()",
+        "  local folder     = options.folder or RenderPhoto.makeTempFolder()",
+        "  local folder     = RenderPhoto.makeTempFolder()",
     ),
     (
         "lets a locked file turn a finished upload into an error",
@@ -155,18 +155,18 @@ MUTATIONS = [
     ),
     (
         "builds an export session even when there is nothing to render",
-        "  if not photos or #photos == 0 then\n    return {}, {}, nil\n  end",
+        "  if not photos or #photos == 0 then\n    return {}, {}, nil, false\n  end",
         "  photos = photos or {}",
     ),
     (
         "treats the index as the rendition, the way a one-value loop would",
-        "  for _, rendition in session:renditions() do",
+        "  for index, rendition in session:renditions() do",
         "  for rendition in session:renditions() do",
     ),
     (
         "ignores waitForRender's success flag, so an error message becomes a path",
-        "    local ok, pathOrMessage = rendition:waitForRender()\n    if ok then",
-        "    local ok, pathOrMessage = rendition:waitForRender()\n    if true then",
+        "      local ok, pathOrMessage = rendition:waitForRender()\n      if ok then",
+        "      local ok, pathOrMessage = rendition:waitForRender()\n      if true then",
     ),
     (
         "loses which photo each rendered file came from",
@@ -185,8 +185,8 @@ MUTATIONS = [
     ),
     (
         "shows the user the literal text nil when Lightroom gives no reason",
-        "      local reason = pathOrMessage and tostring(pathOrMessage)\n                     or RenderPhoto.FAILED_MESSAGE",
-        "      local reason = tostring(pathOrMessage)",
+        "        local reason = pathOrMessage and tostring(pathOrMessage)\n                       or RenderPhoto.FAILED_MESSAGE",
+        "        local reason = tostring(pathOrMessage)",
     ),
     (
         "returns no reason when a render yields no renditions at all",
@@ -197,6 +197,33 @@ MUTATIONS = [
         "reports success after a failed suggestion render",
         "  if #rendered == 0 then",
         "  if false then",
+    ),
+    # Stopping partway. The whole point of a cancel is that the slow work stops
+    # happening, so a cancel that is only recorded is not a cancel at all.
+    (
+        "notices the cancel but renders every photo anyway",
+        "    if canceled or isCanceled() then",
+        "    if false then",
+    ),
+    (
+        "checks for a cancel once and then stops looking",
+        "    if canceled or isCanceled() then",
+        "    if canceled then",
+    ),
+    (
+        "lets Lightroom carry on rendering into a folder about to be deleted",
+        "      pcall(function() rendition:skipRender() end)",
+        "      local _ = rendition",
+    ),
+    (
+        "tells the caller the run finished normally after a cancel",
+        "  return rendered, failures, folder, canceled",
+        "  return rendered, failures, folder, false",
+    ),
+    (
+        "says nothing while it works, leaving a long render looking hung",
+        '      onEvent("Rendering photo " .. index .. " of " .. #photos .. "…")',
+        "      local _ = index",
     ),
 ]
 

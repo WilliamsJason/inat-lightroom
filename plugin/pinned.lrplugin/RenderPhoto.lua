@@ -191,15 +191,18 @@ end
 -- RenderPhoto.cleanUp once the upload has finished with the files.
 --
 -- @param photos   List of LrPhoto
--- @param options  maxPixels, settings, folder
--- @return list of { photo = ..., path = ... }, list of error strings, folder
+-- @param options  maxPixels, settings, folder, onEvent, isCanceled
+-- @return list of { photo = ..., path = ... }, list of error strings, folder,
+--         true when the caller asked to stop partway
 function RenderPhoto.render(photos, options)
   if not photos or #photos == 0 then
-    return {}, {}, nil
+    return {}, {}, nil, false
   end
 
   options = options or {}
-  local folder = options.folder or RenderPhoto.makeTempFolder()
+  local folder     = options.folder or RenderPhoto.makeTempFolder()
+  local onEvent    = options.onEvent or function() end
+  local isCanceled = options.isCanceled or function() return false end
 
   local session = LrExportSession {
     photosToExport = photos,
@@ -212,6 +215,7 @@ function RenderPhoto.render(photos, options)
 
   local rendered = {}
   local failures = {}
+  local canceled = false
 
   -- Asking for the renditions is what starts the export; there is no separate
   -- "go" call to make here.
@@ -219,19 +223,35 @@ function RenderPhoto.render(photos, options)
   -- This yields an index alongside the rendition, the same shape as an export
   -- provider's exportContext:renditions. Measured in the host, not assumed:
   -- the probe reported "first=number 1 second=table".
-  for _, rendition in session:renditions() do
-    local ok, pathOrMessage = rendition:waitForRender()
-    if ok then
-      rendered[#rendered + 1] = { photo = rendition.photo, path = pathOrMessage }
+  for index, rendition in session:renditions() do
+    -- The loop is drained rather than broken out of. Abandoning renditions()
+    -- half-way leaves the export session rendering into a folder the caller is
+    -- about to delete; skipRender tells Lightroom to stop instead, which is
+    -- what makes cancelling a folder-sized selection actually stop the work.
+    if canceled or isCanceled() then
+      canceled = true
+      pcall(function() rendition:skipRender() end)
     else
-      local reason = pathOrMessage and tostring(pathOrMessage)
-                     or RenderPhoto.FAILED_MESSAGE
-      failures[#failures + 1] = reason
-      logger:warn("Render failed: " .. reason)
+      onEvent("Rendering photo " .. index .. " of " .. #photos .. "…")
+
+      local ok, pathOrMessage = rendition:waitForRender()
+      if ok then
+        rendered[#rendered + 1] = { photo = rendition.photo, path = pathOrMessage }
+      else
+        local reason = pathOrMessage and tostring(pathOrMessage)
+                       or RenderPhoto.FAILED_MESSAGE
+        failures[#failures + 1] = reason
+        logger:warn("Render failed: " .. reason)
+      end
     end
   end
 
-  return rendered, failures, folder
+  if canceled then
+    logger:info("Rendering stopped early at the user's request after "
+      .. #rendered .. " of " .. #photos .. " photo(s)")
+  end
+
+  return rendered, failures, folder, canceled
 end
 
 --- Delete a folder made by render().

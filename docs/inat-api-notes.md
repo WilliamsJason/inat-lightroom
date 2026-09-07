@@ -715,6 +715,29 @@ Two things the batched form demands that the single form did not:
 The comma between ids arrives percent-encoded as `%2C`. That is correct and the
 API decodes it; test stubs matching on the URL have to decode it too.
 
+## Absent from the index is not the same as deleted
+
+Answering "is this observation still there?" with `/v1/observations` is wrong,
+and wrong in a way that only shows up in the one workflow that matters.
+
+`/v1/observations` is served from a search index that lags writes by minutes.
+For those minutes a brand-new observation is missing from it, and missing looks
+exactly the same as deleted. The plugin syncs immediately after every upload, so
+reading absence there as deletion would mean the sync offering to unlink the
+link the upload had written seconds earlier.
+
+`InatAPI:observationExists` therefore asks the Rails app instead:
+
+    GET https://www.inaturalist.org/observations/{id}.json
+
+That reads the database rather than the index, so it answers about an
+observation created a second ago. It is the same reason `countAttachedPhotos`
+uses that endpoint to verify a photo upload.
+
+It returns three answers, not two: `true`, `false` for a 404 or 410, and
+`nil, err` for anything else. Collapsing "the site was having a bad minute" into
+"deleted" would clear a link to a perfectly good observation.
+
 ## Batch the species too
 
 With observations down to one request, the taxon lookups were the entire

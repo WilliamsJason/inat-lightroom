@@ -42,6 +42,15 @@ SyncCore.UNIDENTIFIED = "unidentified"
 SyncCore.NO_ID        = "no-id"
 SyncCore.FAILED       = "failed"
 
+--- The photo is linked to an observation that iNaturalist no longer has.
+--
+-- Distinct from FAILED because it is not a problem with the run and retrying
+-- will never fix it: the observation was deleted on the website, and the link
+-- in the catalog now points at nothing. Treating it as an error meant a sync
+-- after deleting an accidental upload reported a wall of failures and left the
+-- user to clear every link by hand.
+SyncCore.MISSING      = "missing"
+
 --------------------------------------------------------------------------------
 -- Build keyword hierarchy and return the leaf keyword object
 --------------------------------------------------------------------------------
@@ -405,7 +414,7 @@ end
 --             observation -- so there is nothing to gain by asking again.
 --             `nil` means nobody has looked, and this call does the fetching.
 -- @return status  One of the SyncCore.* codes.
--- @return err     A message, when status is FAILED.
+-- @return err     A message, when status is FAILED or MISSING.
 function SyncCore.syncPhoto(catalog, photo, api, obs)
   local obsId = photo:getPropertyForPlugin(_PLUGIN, "inat_observation_id")
   if not obsId or obsId == "" then
@@ -415,8 +424,17 @@ function SyncCore.syncPhoto(catalog, photo, api, obs)
   local err
   if obs == nil then
     obs, err = api:getObservation(tonumber(obsId))
+    if not obs and InatAPI.isMissing(err) then
+      return SyncCore.MISSING,
+        "Observation " .. obsId .. " no longer exists on iNaturalist"
+    end
   elseif obs == false then
-    obs, err = nil, "it no longer exists or is not visible to you"
+    -- The batch asked for this id and it did not come back. The batch fetch
+    -- itself succeeded, so this is the observation being gone rather than the
+    -- request having failed -- there is no 404 to read because the search
+    -- endpoint answers 200 with a shorter list.
+    return SyncCore.MISSING,
+      "Observation " .. obsId .. " no longer exists or is not visible to you"
   end
   if not obs then
     return SyncCore.FAILED,
@@ -514,8 +532,10 @@ function SyncCore.syncPhotosNow(context, photos, options)
     [SyncCore.SYNCED]       = 0,
     [SyncCore.UNIDENTIFIED] = 0,
     [SyncCore.NO_ID]        = 0,
+    [SyncCore.MISSING]      = 0,
   }
-  local errors = {}
+  local errors  = {}
+  local missing = {}
 
   -- Every observation up front, 200 to a request, rather than one request per
   -- photo. With requests paced a second apart for the rate limit, per-photo
@@ -551,13 +571,30 @@ function SyncCore.syncPhotosNow(context, photos, options)
       errors[#errors + 1] = err
       logger:warn("Sync error for photo " .. i .. ": " .. (err or "?"))
     else
+      if status == SyncCore.MISSING then
+        -- Kept, not just counted. The offer to unlink at the end needs the
+        -- photos themselves, and finding them again would mean a second pass
+        -- over the catalog asking iNaturalist the same questions.
+        missing[#missing + 1] = photo
+        logger:info("Photo " .. i .. ": " .. (err or "observation is gone"))
+      end
       counts[status] = counts[status] + 1
     end
   end
 
   progress:done()
 
-  if options.quiet and #errors == 0 then
+  -- Confirmed after the loop rather than inside it, so the cost is one paced
+  -- request per photo that *looked* missing rather than per photo synced.
+  local unsure
+  missing, unsure = SyncCore.confirmMissing(api, missing)
+  for _, message in ipairs(unsure) do
+    errors[#errors + 1] = message
+  end
+
+  local unlinked = SyncCore.offerToUnlink(catalog, missing)
+
+  if options.quiet and #errors == 0 and #missing == 0 then
     return
   end
 
@@ -566,10 +603,96 @@ function SyncCore.syncPhotosNow(context, photos, options)
     counts[SyncCore.SYNCED], counts[SyncCore.UNIDENTIFIED],
     counts[SyncCore.NO_ID], #errors
   )
+  if #missing > 0 then
+    msg = msg .. string.format("\n\nNo longer on iNaturalist: %d (%s)",
+      #missing,
+      unlinked > 0 and ("unlinked " .. unlinked) or "left linked")
+  end
   if #errors > 0 then
     msg = msg .. "\n\nFirst error:\n" .. errors[1]
   end
   LrDialogs.message("Pinned Sync", msg, #errors > 0 and "warning" or "info")
+end
+
+--- Check each apparently-missing observation against a source that is current.
+--
+-- MUST be called from inside a task.
+--
+-- The batch fetch reads /v1/observations, which is served from a search index
+-- that lags writes by minutes. An observation created a moment ago is simply
+-- not in it yet, and looks exactly like one deleted last year. Offering to
+-- unlink on that evidence would mean a sync run after an upload proposing to
+-- throw away the link it had just written -- so every candidate is asked about
+-- again, on the endpoint that reads the database rather than the index.
+--
+-- An observation that cannot be checked at all is neither: it is not offered
+-- for unlinking, because that would act on a network failure, and it is
+-- reported, because silently synced-nothing is the outcome nobody notices.
+--
+-- @return the photos whose observations are confirmed gone, and a list of
+--         messages for the ones that could not be checked.
+function SyncCore.confirmMissing(api, candidates)
+  local confirmed, unsure = {}, {}
+  if not candidates or #candidates == 0 then return confirmed, unsure end
+
+  -- No way to ask: take the batch's word for it. The alternative is never
+  -- offering to unlink anything, which would make the feature depend on an API
+  -- capability the caller cannot see.
+  if not api.observationExists then return candidates, unsure end
+
+  for _, photo in ipairs(candidates) do
+    local obsId = photo:getPropertyForPlugin(_PLUGIN, "inat_observation_id")
+    local exists, err = api:observationExists(obsId)
+
+    if exists == false then
+      confirmed[#confirmed + 1] = photo
+    elseif exists == nil then
+      unsure[#unsure + 1] = "Could not check whether observation "
+        .. tostring(obsId) .. " still exists: " .. tostring(err or "unknown")
+    else
+      -- It is there after all; the search index had simply not caught up.
+      logger:info("Observation " .. tostring(obsId)
+        .. " is missing from the search index but still exists; left linked")
+    end
+  end
+
+  return confirmed, unsure
+end
+
+--- Offer to clear the links of photos whose observations are gone.
+--
+-- MUST be called from inside a task, and after the progress scope is done: it
+-- is modal, and a modal behind a progress bar is a dialog the user cannot see
+-- and cannot get past.
+--
+-- One question for the whole run, not one per photo. Syncing the catalog after
+-- deleting an accidental upload of a whole folder is exactly the case this
+-- exists for, and answering the same question two hundred times is not a
+-- feature. Nothing is unlinked without being asked, because a photo can also
+-- vanish from the API for reasons that are not deletion -- an account made
+-- private, a temporary outage answering with an empty result -- and an
+-- automatic unlink would quietly discard a real link in those cases.
+--
+-- @return the number of photos actually unlinked.
+function SyncCore.offerToUnlink(catalog, missing)
+  if not missing or #missing == 0 then return 0 end
+
+  local answer = LrDialogs.confirm(
+    "Unlink photos whose observations are gone?",
+    string.format(
+      "%d photo%s linked to an observation that iNaturalist no longer has. "
+      .. "That is what you get after deleting an observation on the website.\n\n"
+      .. "Unlinking clears the link in Lightroom only. Keywords are kept, and "
+      .. "nothing on iNaturalist is touched.",
+      #missing, #missing == 1 and " is" or "s are"),
+    "Unlink All", "Keep Links")
+
+  if answer ~= "ok" then
+    logger:info("Left " .. #missing .. " photo(s) linked to missing observations")
+    return 0
+  end
+
+  return UploadCore.unlink(catalog, missing)
 end
 
 --------------------------------------------------------------------------------

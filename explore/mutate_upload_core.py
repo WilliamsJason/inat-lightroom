@@ -20,13 +20,13 @@ MUTATIONS = [
     (
         "UploadCore",
         "only the first photo of the group is linked",
-        "    for _, photo in ipairs(photos) do\n      photo:setPropertyForPlugin(_PLUGIN, \"inat_observation_id\"",
-        "    for _, photo in ipairs({ photos[1] }) do\n      photo:setPropertyForPlugin(_PLUGIN, \"inat_observation_id\"",
+        "  for _, photo in ipairs(photos) do\n    photo:setPropertyForPlugin(_PLUGIN, \"inat_observation_id\"",
+        "  for _, photo in ipairs({ photos[1] }) do\n    photo:setPropertyForPlugin(_PLUGIN, \"inat_observation_id\"",
     ),
     (
         "UploadCore",
         "the observation UUID is never written",
-        "      if uuid then\n        photo:setPropertyForPlugin(_PLUGIN, \"inat_observation_uuid\", tostring(uuid))\n      end",
+        "    if uuid then\n      photo:setPropertyForPlugin(_PLUGIN, \"inat_observation_uuid\", tostring(uuid))\n    end",
         "",
     ),
     (
@@ -68,7 +68,7 @@ MUTATIONS = [
     (
         "UploadCore",
         "a photo already in this run's group is looked up again",
-        "    if seen[uuid] then\n      return seen[uuid], uuid, nil\n    end",
+        "    if seen[uuid] then\n      return seen[uuid], uuid, nil, false\n    end",
         "",
     ),
     (

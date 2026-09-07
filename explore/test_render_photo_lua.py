@@ -92,14 +92,14 @@ def test_the_temp_folder_is_under_the_system_temp_directory(plugin, render):
 
 
 def test_rendering_reports_the_folder_so_the_caller_can_clean_up(plugin, render):
-    _, _, folder = render["render"](photos(plugin, 1))
+    _, _, folder, _ = render["render"](photos(plugin, 1))
 
     assert folder
     assert folder in plugin.created_directories
 
 
 def test_a_caller_can_supply_its_own_folder(plugin, render):
-    _, _, folder = render["render"](
+    _, _, folder, _ = render["render"](
         photos(plugin, 1), plugin.runtime.table_from({"folder": "/tmp/mine"}))
 
     assert folder == "/tmp/mine"
@@ -283,7 +283,7 @@ def photos(plugin, count):
 
 
 def test_rendering_nothing_is_not_an_error(plugin, render):
-    rendered, failures, _ = render["render"](plugin.runtime.table_from([]))
+    rendered, failures, _, _ = render["render"](plugin.runtime.table_from([]))
 
     assert len(list(rendered.values())) == 0
     assert len(list(failures.values())) == 0
@@ -291,7 +291,7 @@ def test_rendering_nothing_is_not_an_error(plugin, render):
 
 
 def test_it_returns_a_path_for_each_photo(plugin, render):
-    rendered, failures, _ = render["render"](photos(plugin, 2))
+    rendered, failures, _, _ = render["render"](photos(plugin, 2))
 
     assert len(list(failures.values())) == 0
     paths = [entry["path"] for entry in rendered.values()]
@@ -307,7 +307,7 @@ def test_each_result_carries_the_photo_it_came_from(plugin, render):
         plugin.new_photo(inat_observation_id="second"),
     ]
 
-    rendered, _, _ = render["render"](plugin.runtime.table_from(originals))
+    rendered, _, _, _ = render["render"](plugin.runtime.table_from(originals))
 
     # Compared by a value on the photo rather than by identity: the bridge
     # hands out a fresh proxy object each time, so two references to one Lua
@@ -328,12 +328,93 @@ def test_asking_for_renditions_is_what_starts_the_export(plugin, render):
     assert plugin.export_sessions[0]["started"] is True
 
 
+# --- stopping partway ------------------------------------------------------
+#
+# Rendering is the slow half of an upload -- a full-resolution export per photo
+# -- so a whole folder selected by mistake is minutes of work. A cancel that
+# only took effect after the last photo had rendered would be no cancel at all.
+
+
+def cancel_after(n):
+    """An isCanceled() that says no n times and yes from then on."""
+    seen = {"n": 0}
+
+    def canceled():
+        seen["n"] += 1
+        return seen["n"] > n
+
+    return canceled
+
+
+def options(plugin, **values):
+    return plugin.runtime.table_from(values)
+
+
+def test_cancelling_says_so(plugin, render):
+    _, _, _, canceled = render["render"](
+        photos(plugin, 2), options(plugin, isCanceled=lambda: True))
+
+    assert canceled is True
+
+
+def test_cancelling_keeps_what_had_already_rendered(plugin, render):
+    """Reported rather than thrown away, so the caller can decide. It is the
+    caller that knows whether a partial result is any use."""
+    rendered, _, _, canceled = render["render"](
+        photos(plugin, 3), options(plugin, isCanceled=cancel_after(1)))
+
+    assert canceled is True
+    assert len(list(rendered.values())) == 1
+
+
+def test_the_remaining_photos_are_skipped_not_merely_abandoned(plugin, render):
+    """Breaking out of renditions() leaves the export session rendering into a
+    folder the caller is about to delete. skipRender is what actually stops
+    it."""
+    render["render"](photos(plugin, 4), options(plugin, isCanceled=cancel_after(1)))
+
+    assert list(plugin.export_sessions[0]["skipped"].values()) == [2, 3, 4]
+
+
+def test_a_cancelled_render_still_reports_its_folder(plugin, render):
+    """The caller cleans up on the way out, and it can only delete a folder it
+    has been told about."""
+    _, _, folder, _ = render["render"](
+        photos(plugin, 2), options(plugin, isCanceled=lambda: True))
+
+    assert folder in plugin.created_directories
+
+
+def test_not_cancelling_renders_everything(plugin, render):
+    """The guard against a check that is true by accident."""
+    rendered, _, _, canceled = render["render"](
+        photos(plugin, 3), options(plugin, isCanceled=lambda: False))
+
+    assert canceled is False
+    assert len(list(rendered.values())) == 3
+    assert list(plugin.export_sessions[0]["skipped"].values()) == []
+
+
+def test_it_counts_off_the_photos_as_it_goes(plugin, render):
+    """Rendering is the slow half of an upload -- a folder of raws is minutes of
+    it. Without this the panel sits on one message throughout, which is what
+    made an accidental folder upload look frozen rather than busy, and is why
+    there was nothing telling the user a Cancel would be worth pressing."""
+    seen = []
+    render["render"](photos(plugin, 3),
+                     options(plugin, onEvent=lambda message: seen.append(message)))
+
+    assert len(seen) == 3
+    assert "1 of 3" in seen[0]
+    assert "3 of 3" in seen[2]
+
+
 def test_a_failed_render_is_reported_not_returned_as_a_path(plugin, render):
     # waitForRender puts the failure message in the same slot as the path, so
     # ignoring the success flag yields a "path" that is an error string.
     plugin.set_render_failure("Disk full")
 
-    rendered, failures, _ = render["render"](photos(plugin, 1))
+    rendered, failures, _, _ = render["render"](photos(plugin, 1))
 
     assert len(list(rendered.values())) == 0
     assert list(failures.values()) == ["Disk full"]
@@ -389,7 +470,7 @@ def test_a_failed_suggestion_render_always_gives_some_reason(plugin, render):
 def test_a_reasonless_failure_is_reported_as_a_sentence_not_as_nil(plugin, render):
     plugin.set_render_failure()
 
-    _, failures, _ = render["render"](photos(plugin, 1))
+    _, failures, _, _ = render["render"](photos(plugin, 1))
 
     assert list(failures.values()) == [render["FAILED_MESSAGE"]]
 

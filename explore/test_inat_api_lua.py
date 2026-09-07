@@ -654,6 +654,74 @@ def test_upload_fails_when_the_photo_never_attaches(api_pair, tmp_path):
     assert "never attached" in err
 
 
+# --- is it still there -----------------------------------------------------
+#
+# Asked before offering to unlink a photo whose observation did not come back
+# from a batch fetch. It has to be answered by the database rather than the
+# search index, or a just-uploaded observation would look deleted.
+
+
+def test_a_404_means_the_observation_is_gone(api_pair):
+    """The two shapes iNaturalist uses for "no such observation", one from the
+    HTTP layer and one from the body. Anything else is a real failure and must
+    not be mistaken for a deletion."""
+    plugin, api, _fake = api_pair
+
+    assert api.isMissing("HTTP 404") is True
+    assert api.isMissing("observation not found") is True
+    assert api.isMissing("HTTP 500 Internal Server Error") is False
+    assert api.isMissing("timed out") is False
+    assert api.isMissing(None) is False
+
+
+def test_a_deleted_observation_is_reported_as_gone(api_pair):
+    plugin, api, fake = api_pair
+    fake.add("/observations/9.json", {"error": "not found"}, status=404)
+
+    exists, err = plugin.call(api.observationExists, api, 9)
+
+    assert exists is False
+    assert err is None
+
+
+def test_a_gone_observation_counts_as_deleted_too(api_pair):
+    """iNaturalist has answered 410 for records it holds a tombstone for."""
+    plugin, api, fake = api_pair
+    fake.add("/observations/9.json", {"error": "gone"}, status=410)
+
+    assert plugin.call(api.observationExists, api, 9)[0] is False
+
+
+def test_an_observation_that_is_there_is_reported_as_there(api_pair):
+    plugin, api, fake = api_pair
+    fake.add("/observations/9.json", {"id": 9, "observation_photos": []})
+
+    assert plugin.call(api.observationExists, api, 9)[0] is True
+
+
+def test_a_server_error_is_neither_yes_nor_no(api_pair):
+    """The distinction that matters. Reading a 500 as "deleted" would unlink a
+    perfectly good observation because the site was having a bad minute."""
+    plugin, api, fake = api_pair
+    fake.add("/observations/9.json", {"error": "boom"}, status=500)
+
+    exists, err = plugin.call(api.observationExists, api, 9)
+
+    assert exists is None
+    assert err is not None
+
+
+def test_it_asks_the_database_not_the_search_index(api_pair):
+    """/v1/observations is served from an index that lags writes by minutes, so
+    it cannot answer this question at all."""
+    plugin, api, fake = api_pair
+    fake.add("/observations/9.json", {"id": 9})
+
+    plugin.call(api.observationExists, api, 9)
+
+    assert "www.inaturalist.org/observations/9.json" in fake.requests[-1]["url"]
+
+
 def test_upload_reports_a_missing_file_clearly(api_pair):
     plugin, api, fake = api_pair
 
@@ -661,6 +729,73 @@ def test_upload_reports_a_missing_file_clearly(api_pair):
 
     assert result is None
     assert "Cannot open file" in err
+
+
+# --- stopping a verified upload --------------------------------------------
+#
+# Verification is the slow part: up to three attempts of six five-second polls
+# each, per photo. A cancel that was only noticed between photos would leave
+# the user waiting the better part of a minute per frame after asking to stop.
+
+
+def test_a_cancelled_upload_never_asks_the_server_anything(api_pair, tmp_path):
+    plugin, api, fake = api_pair
+    photo = tmp_path / "photo.jpg"
+    photo.write_bytes(b"data")
+
+    result, err = plugin.call(
+        api.uploadPhotoVerified, api, 9, str(photo),
+        plugin.runtime.table_from({"isCanceled": lambda: True}))
+
+    assert result is None
+    assert err == api.CANCELED
+    assert fake.requests == []
+
+
+def test_a_cancel_during_verification_stops_the_polling(api_pair, tmp_path):
+    """The upload itself has already happened; what is left is waiting. The
+    caller deletes the whole observation afterwards, so waiting to find out
+    whether this photo attached is time spent on a result nobody will read."""
+    plugin, api, fake = api_pair
+    photo = tmp_path / "photo.jpg"
+    photo.write_bytes(b"data")
+
+    polls = {"n": 0}
+
+    def handler(method, url, body, _headers):
+        fake.requests.append({"method": method, "url": url, "body": body})
+        if "observations/9.json" in url:
+            polls["n"] += 1
+            # Never attaches, so the only way out is the cancel.
+            return json.dumps({"observation_photos": []}), {"status": 200}
+        return json.dumps({"id": 500}), {"status": 200}
+
+    plugin.set_http_handler(handler)
+
+    # False for the entry check and the first attempt, true once polling starts.
+    checks = {"n": 0}
+
+    def canceled():
+        checks["n"] += 1
+        return checks["n"] > 2
+
+    result, err = plugin.call(
+        api.uploadPhotoVerified, api, 9, str(photo),
+        plugin.runtime.table_from({"isCanceled": canceled}))
+
+    assert result is None
+    assert err == api.CANCELED
+    # The baseline count, and nothing like the eighteen polls a full run of
+    # three attempts would make.
+    assert polls["n"] == 1
+
+
+def test_a_cancel_is_not_reported_as_a_failure(api_pair, tmp_path):
+    """The sentinel is what lets the caller tell "the user stopped this" from
+    "this broke", and only one of those is worth a dialog."""
+    plugin, api, fake = api_pair
+
+    assert api.CANCELED != "Photo upload failed"
 
 
 # ---------------------------------------------------------------------------

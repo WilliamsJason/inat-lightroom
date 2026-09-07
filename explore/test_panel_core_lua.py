@@ -121,6 +121,12 @@ def fake_api(plugin, **options):
             return {}, nil
           end
 
+          function api:deleteObservation(id)
+            record("delete", id)
+            if opts.deleteError then return nil, opts.deleteError end
+            return {}, nil
+          end
+
           function api:scoreObservation(id)
             record("scoreObservation", id)
             if opts.scoreError then return nil, opts.scoreError end
@@ -384,10 +390,11 @@ def test_asking_with_no_photo_says_so(plugin, core):
 # ---------------------------------------------------------------------------
 
 
-def upload(plugin, core, photos, api, **overrides):
+def upload(plugin, core, photos, api, options=None, **overrides):
     return core["upload"](plugin.catalog, api, settings(plugin, **overrides),
                           plugin.runtime.table_from(
-                              {i + 1: p for i, p in enumerate(photos)}))
+                              {i + 1: p for i, p in enumerate(photos)}),
+                          plugin.runtime.table_from(options or {}))
 
 
 def test_the_whole_selection_becomes_one_observation(plugin, core):
@@ -396,7 +403,7 @@ def test_the_whole_selection_becomes_one_observation(plugin, core):
     photos = [plugin.new_photo(), plugin.new_photo(), plugin.new_photo()]
     api, calls = fake_api(plugin)
 
-    obs_id, url, errors = upload(plugin, core, photos, api)
+    obs_id, url, errors, _ = upload(plugin, core, photos, api)
 
     assert obs_id == 4242
     assert methods(calls).count("create") == 1
@@ -440,7 +447,7 @@ def test_a_failed_upload_does_not_record_an_empty_observation(plugin, core):
     photo = plugin.new_photo()
     api, _ = fake_api(plugin, uploadError="the connection dropped")
 
-    obs_id, _, errors = upload(plugin, core, [photo], api)
+    obs_id, _, errors, _ = upload(plugin, core, [photo], api)
 
     assert obs_id is None
     assert photo["_props"]["inat_observation_id"] is None
@@ -454,7 +461,7 @@ def test_one_failed_photo_out_of_several_still_records_the_link(plugin, core):
     photos = [plugin.new_photo(), plugin.new_photo(), plugin.new_photo()]
     api, _ = fake_api(plugin, uploadFailAfter=2)
 
-    obs_id, _, errors = upload(plugin, core, photos, api)
+    obs_id, _, errors, _ = upload(plugin, core, photos, api)
 
     assert obs_id == 4242
     for photo in photos:
@@ -470,7 +477,7 @@ def test_nothing_selected_is_refused(plugin, core):
     failed", which sends somebody looking for a problem with their photo."""
     api, calls = fake_api(plugin)
 
-    obs_id, _, errors = upload(plugin, core, [], api)
+    obs_id, _, errors, _ = upload(plugin, core, [], api)
 
     assert obs_id is None
     assert methods(calls) == []
@@ -484,7 +491,7 @@ def test_a_render_that_produces_nothing_never_creates_an_observation(plugin, cor
     plugin.set_render_failure("no renditions")
     api, calls = fake_api(plugin)
 
-    obs_id, _, _ = upload(plugin, core, [plugin.new_photo()], api)
+    obs_id, _, _, _ = upload(plugin, core, [plugin.new_photo()], api)
 
     assert obs_id is None
     assert "create" not in methods(calls)
@@ -511,7 +518,7 @@ def test_a_project_failure_does_not_fail_the_upload(plugin, core):
     invite a second upload of something that already worked."""
     api, _ = fake_api(plugin, projectError="not a member of that project")
 
-    obs_id, _, errors = upload(plugin, core, [plugin.new_photo()], api,
+    obs_id, _, errors, _ = upload(plugin, core, [plugin.new_photo()], api,
                                inat_project_id="12345")
 
     assert obs_id == 4242
@@ -567,11 +574,147 @@ def test_a_sync_that_fails_does_not_undo_the_upload(plugin, core):
     photo = plugin.new_photo()
     api, _ = fake_api(plugin)  # getObservation returns nil
 
-    obs_id, _, errors = upload(plugin, core, [photo], api)
+    obs_id, _, errors, _ = upload(plugin, core, [photo], api)
 
     assert obs_id == 4242
     assert photo["_props"]["inat_observation_id"] == "4242"
     assert len(strings(errors)) > 0
+
+
+# ---------------------------------------------------------------------------
+# Cancelling an upload
+# ---------------------------------------------------------------------------
+#
+# The case this exists for, verbatim: Upload was pressed with a whole folder
+# selected instead of one photo. There was no way to stop it, and undoing it
+# afterwards meant deleting the observation on the website and then clearing
+# the link off every photo by hand. So cancelling has to do both halves --
+# leave nothing behind on iNaturalist and leave nothing written in the catalog.
+
+
+def cancel_after(n):
+    """An isCanceled() that says no n times and yes from then on."""
+    calls = {"n": 0}
+
+    def canceled():
+        calls["n"] += 1
+        return calls["n"] > n
+
+    return canceled
+
+
+def test_cancelling_before_the_observation_exists_creates_nothing(plugin, core):
+    api, calls = fake_api(plugin)
+
+    obs_id, url, errors, canceled = upload(
+        plugin, core, [plugin.new_photo()], api,
+        options={"isCanceled": lambda: True})
+
+    assert canceled is True
+    assert obs_id is None
+    assert url is None
+    assert strings(errors) == []
+    assert methods(calls) == []
+
+
+def test_cancelling_still_deletes_the_rendered_files(plugin, core):
+    """The temp folder is this plugin's own; nobody else will ever remove it."""
+    api, _ = fake_api(plugin)
+
+    upload(plugin, core, [plugin.new_photo()], api,
+           options={"isCanceled": lambda: True})
+
+    assert len(plugin.deleted_paths) == 1
+
+
+def test_cancelling_stops_the_render_rather_than_draining_it(plugin, core):
+    """A folder-sized selection is minutes of exporting. A cancel that only
+    took effect once every photo had been rendered would be a cancel in name."""
+    api, _ = fake_api(plugin)
+    photos = [plugin.new_photo() for _ in range(4)]
+
+    upload(plugin, core, photos, api, options={"isCanceled": cancel_after(1)})
+
+    # First rendered, the rest skipped -- not simply never asked for.
+    assert list(plugin.export_sessions[0]["skipped"].values()) == [2, 3, 4]
+
+
+def test_cancelling_after_the_observation_exists_deletes_it(plugin, core):
+    """The heart of it. An empty observation left on iNaturalist is exactly the
+    thing the user then has to go and delete by hand."""
+    api, calls = fake_api(plugin)
+
+    obs_id, _, _, canceled = upload(
+        plugin, core, [plugin.new_photo()], api,
+        options={"isCanceled": cancel_after(2)})
+
+    assert canceled is True
+    assert obs_id is None
+    assert "delete" in methods(calls)
+    assert call_named(calls, "delete") == [4242]
+
+
+def test_a_cancelled_upload_leaves_the_photos_unlinked(plugin, core):
+    """Nothing to clean up in the catalog afterwards, which was the other half
+    of the manual work."""
+    photo = plugin.new_photo()
+    api, _ = fake_api(plugin)
+
+    upload(plugin, core, [photo], api, options={"isCanceled": cancel_after(2)})
+
+    assert photo["_props"]["inat_observation_id"] in (None, "")
+
+
+def test_cancelling_does_not_delete_an_observation_it_did_not_create(plugin, core):
+    """Re-uploading to an existing observation is the same button. Cancelling
+    there means "stop adding photos", not "destroy the record"."""
+    photo = plugin.new_photo(inat_observation_uuid="known-uuid")
+    api, calls = fake_api(plugin,
+                          found=deep(plugin, {"id": 4242, "uuid": "known-uuid"}))
+
+    _, _, _, canceled = upload(plugin, core, [photo], api,
+                               options={"isCanceled": cancel_after(2)})
+
+    assert canceled is True
+    assert "delete" not in methods(calls)
+
+
+def test_a_cancel_that_cannot_tidy_up_says_so(plugin, core):
+    """Silence here would leave a public observation the user believes they
+    called off, and no way to find out."""
+    api, _ = fake_api(plugin, deleteError="the server said no")
+
+    _, _, errors, canceled = upload(plugin, core, [plugin.new_photo()], api,
+                                    options={"isCanceled": cancel_after(2)})
+
+    assert canceled is True
+    assert "4242" in strings(errors)[0]
+
+
+def test_cancelling_stops_before_the_next_photo_uploads(plugin, core):
+    """Not after all of them. Each photo is an upload plus a verification poll,
+    so carrying on to the end of the list is most of the wait the user asked to
+    stop."""
+    api, calls = fake_api(plugin)
+    photos = [plugin.new_photo() for _ in range(3)]
+
+    # Renders three, creates the observation, uploads one, then stops.
+    upload(plugin, core, photos, api, options={"isCanceled": cancel_after(6)})
+
+    assert len(call_named(calls, "upload")) == 1
+
+
+def test_an_uncancelled_upload_still_records_the_link(plugin, core):
+    """The guard against a cancel check that is always true by accident."""
+    photo = plugin.new_photo()
+    api, _ = fake_api(plugin, observation=deep(plugin, OBSERVATION))
+
+    obs_id, _, _, canceled = upload(plugin, core, [photo], api,
+                                    options={"isCanceled": lambda: False})
+
+    assert canceled is False
+    assert obs_id == 4242
+    assert photo["_props"]["inat_observation_id"] == "4242"
 
 
 # ---------------------------------------------------------------------------

@@ -43,6 +43,28 @@ local API_V1   = "https://api.inaturalist.org/v1"
 local InatAPI = {}
 InatAPI.__index = InatAPI
 
+--- The error a call returns when the caller's isCanceled() said to stop.
+--
+-- A sentinel rather than a sentence, because callers have to be able to tell
+-- "the user pressed Cancel" apart from "the upload failed" without matching on
+-- prose. It is never shown: a cancel is not a failure and reporting one as an
+-- error is how a deliberate act comes to look like a bug.
+InatAPI.CANCELED = "canceled"
+
+--- True when an error means the observation is not there any more.
+--
+-- Two shapes say the same thing. A single fetch that 404s comes back through
+-- handleResponse as "…failed with HTTP 404: …"; one that answers 200 with an
+-- empty result set -- which is what the search index does for an observation
+-- deleted on the website -- comes back from getObservation as "not found".
+-- Both mean the link in the catalog points at nothing, and neither is a
+-- network problem worth retrying.
+function InatAPI.isMissing(err)
+  if type(err) ~= "string" then return false end
+  return err:find("HTTP 404", 1, true) ~= nil
+      or err:find("not found", 1, true) ~= nil
+end
+
 -- v2 is used for exactly one call: listing observations. It is the only
 -- endpoint here that returns thousands of rows, and the only one where v2's
 -- `fields` parameter is worth the difference in response shape. See
@@ -933,6 +955,35 @@ function InatAPI:countAttachedPhotos(observationId)
   return #photos, nil
 end
 
+--- Does iNaturalist still have this observation?
+--
+-- MUST be called from inside a task.
+--
+-- Deliberately the Rails endpoint, not /v1/observations. v1 is served from a
+-- search index that lags writes by minutes, so it reports a just-created
+-- observation as absent -- which is indistinguishable, from the outside, from
+-- one the user deleted last week. Anything that acts on "this is gone" has to
+-- ask something that knows now, or a sync run straight after an upload would
+-- offer to unlink the observation it had just made.
+--
+-- @return true when it is there, false when it certainly is not, and nil plus
+--         an error when the question could not be answered -- which callers
+--         must not read as either.
+function InatAPI:observationExists(observationId)
+  local url = WWW_BASE .. "/observations/" .. tostring(observationId) .. ".json"
+  local payload, err = apiGet(url, nil, self.token)
+  if payload then return true, nil end
+
+  -- 410 as well as 404: iNaturalist has answered Gone for records it still
+  -- holds a tombstone for, and Gone is a stronger statement of the same thing.
+  if InatAPI.isMissing(err)
+    or (type(err) == "string" and err:find("HTTP 410", 1, true) ~= nil) then
+    return false, nil
+  end
+
+  return nil, err
+end
+
 --- Upload a photo and confirm it actually attached, retrying if it did not.
 --
 -- @param observationId  Numeric observation ID
@@ -943,7 +994,10 @@ end
 --                         sleep      function(seconds) used to wait; pass
 --                                    LrTasks.sleep from the calling task
 --                         onEvent    function(message) progress callback
--- @return the upload response, or nil plus an error message
+--                         isCanceled function() -> boolean, checked between
+--                                    attempts and between polls
+-- @return the upload response, or nil plus an error message. When the caller
+--         cancelled, the error is InatAPI.CANCELED.
 function InatAPI:uploadPhotoVerified(observationId, filePath, options)
   options = options or {}
 
@@ -952,6 +1006,9 @@ function InatAPI:uploadPhotoVerified(observationId, filePath, options)
   local pollWait  = options.pollSeconds or 5
   local sleep     = options.sleep
   local onEvent   = options.onEvent or function() end
+  local isCanceled = options.isCanceled or function() return false end
+
+  if isCanceled() then return nil, InatAPI.CANCELED end
 
   local baseline, countErr = self:countAttachedPhotos(observationId)
   if not baseline then
@@ -963,6 +1020,8 @@ function InatAPI:uploadPhotoVerified(observationId, filePath, options)
   local lastError
 
   for attempt = 1, attempts do
+    if isCanceled() then return nil, InatAPI.CANCELED end
+
     local response, err = self:uploadPhoto(observationId, filePath)
 
     if not response then
@@ -972,7 +1031,13 @@ function InatAPI:uploadPhotoVerified(observationId, filePath, options)
       onEvent(string.format("Attempt %d of %d accepted, verifying...", attempt, attempts))
 
       for _ = 1, pollTries do
+        -- Checked before the sleep as well as after it. Verification is the
+        -- slowest part of an upload -- six polls of five seconds each, per
+        -- photo -- so a cancel that only landed between attempts would leave
+        -- the user waiting half a minute per photo after asking to stop.
+        if isCanceled() then return nil, InatAPI.CANCELED end
         if sleep then sleep(pollWait) end
+        if isCanceled() then return nil, InatAPI.CANCELED end
 
         local current = self:countAttachedPhotos(observationId)
         if current and current > baseline then

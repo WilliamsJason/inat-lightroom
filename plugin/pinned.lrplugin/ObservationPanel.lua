@@ -65,7 +65,10 @@ local WINDOW_ID = "com.github.inat-lightroom.observationPanel"
 -- So the key carries a number, and **making the panel a different size means
 -- bumping it**. The cost is that the window reopens in its default position
 -- once, which is cheap next to a panel stuck at a width nobody chose.
-local FRAME_KEY = WINDOW_ID .. ".frame2"
+--
+-- frame3: the Cancel button joined the upload row, which is wider than what
+-- frame2 measured.
+local FRAME_KEY = WINDOW_ID .. ".frame3"
 
 local OBSERVATION_URL = "https://www.inaturalist.org/observations/"
 
@@ -541,9 +544,26 @@ function ObservationPanel.contents(f, props, actions)
       spacing = f:control_spacing(),
       f:push_button {
         title   = LrView.bind("uploadTitle"),
-        enabled = LrView.bind("hasPhoto"),
+        -- Off while one is already running. The panel's buttons do not block
+        -- the window, so without this a second click starts a second upload
+        -- against the same selection and makes a duplicate observation.
+        enabled = LrView.bind {
+          keys      = { "hasPhoto", "uploading" },
+          operation = function(_, values)
+            return values.hasPhoto and not values.uploading
+          end,
+        },
         action  = actions.uploadOrUpdate,
         width   = 180,
+      },
+      -- Always present rather than appearing mid-upload. A button that shows
+      -- up only once there is something to cancel is a button nobody knows is
+      -- there until they need it, which is the moment they are least able to
+      -- go looking.
+      f:push_button {
+        title   = "Cancel",
+        enabled = LrView.bind("uploading"),
+        action  = actions.cancelUpload,
       },
       f:push_button {
         title   = "Sync guess to Metadata tags",
@@ -801,10 +821,29 @@ function ObservationPanel.uploadOrUpdate(props)
   -- made in the popup and not written down here would simply not be sent.
   PanelCore.recordAccuracy(catalog, photos, accuracy)
 
-  local observationId, _, errors = PanelCore.upload(catalog, api, settings, photos, {
-    sleep   = LrTasks.sleep,
-    onEvent = function(message) props.suggestionStatus = message end,
+  -- The flag is cleared here rather than by the Cancel button, so a cancel left
+  -- over from a previous run cannot stop the next one before it starts.
+  props.uploadCanceled = false
+  props.uploading      = true
+
+  local observationId, _, errors, canceled = PanelCore.upload(catalog, api, settings, photos, {
+    sleep      = LrTasks.sleep,
+    onEvent    = function(message) props.suggestionStatus = message end,
+    isCanceled = function() return props.uploadCanceled == true end,
   })
+
+  props.uploading = false
+
+  if canceled then
+    -- No modal. The user asked for this, so telling them it happened in a box
+    -- they have to dismiss is making them acknowledge their own decision. The
+    -- exception is a cancel that could not finish tidying up, which is news.
+    if #errors > 0 then
+      LrDialogs.message("Pinned Upload", table.concat(errors, "\n"), "warning")
+    end
+    props.suggestionStatus = "Upload cancelled."
+    return
+  end
 
   if not observationId then
     LrDialogs.message("Pinned Upload",
@@ -831,6 +870,24 @@ function ObservationPanel.uploadOrUpdate(props)
   end
 
   props.suggestionStatus = "Uploaded as observation " .. tostring(observationId) .. "."
+end
+
+--- Ask the upload in progress to stop.
+--
+-- Sets a flag rather than doing anything itself. The upload runs on its own
+-- task and is the only thing that knows what it has created so far, so it is
+-- the only thing that can undo it; this just tells it to, at the next point
+-- where stopping is safe.
+--
+-- Not on a task, deliberately. Setting one property must not queue behind the
+-- upload's own task, or pressing Cancel would take effect only once the thing
+-- being cancelled had finished.
+function ObservationPanel.cancelUpload(props)
+  if not props.uploading then return false end
+
+  props.uploadCanceled   = true
+  props.suggestionStatus = "Cancelling…"
+  return true
 end
 
 --- File the chosen suggestion's taxonomy in the catalog, and tell nobody.
@@ -938,6 +995,8 @@ function ObservationPanel.show()
       -- Every bound property the view reads has to exist before the window is
       -- built, including one title and one link caption per suggestion row.
       props.suggestionStatus = ""
+      props.uploading        = false
+      props.uploadCanceled   = false
       ObservationPanel.clearSuggestions(props)
 
       refresh()
@@ -954,6 +1013,12 @@ function ObservationPanel.show()
             ObservationPanel.uploadOrUpdate(props)
             refresh()
           end)
+        end,
+
+        -- Not on a task. It only sets a flag, and starting a task to do that
+        -- would put it behind the upload it is meant to interrupt.
+        cancelUpload = function()
+          ObservationPanel.cancelUpload(props)
         end,
 
         applyLocally = function()
