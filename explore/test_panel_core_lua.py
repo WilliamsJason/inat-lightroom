@@ -1184,7 +1184,7 @@ def test_a_rank_every_candidate_agrees_on_says_so(plugin, core):
     candidate is right -- and that is the row's whole selling point."""
     rows = core["coarserRows"](top_hit(plugin), ancestor(plugin), None)
 
-    assert all("agreed by every suggestion" in note for note in notes_of(rows))
+    assert all("agreed by top suggestions" in note for note in notes_of(rows))
 
 
 def test_a_rank_below_the_common_ancestor_names_what_it_contains(plugin, core):
@@ -1201,7 +1201,7 @@ def test_a_rank_below_the_common_ancestor_names_what_it_contains(plugin, core):
 
     assert ranks_of(rows) == ["genus", "family", "order"]
     assert rows[1]["note"] == "genus, containing Ischnura erratica"
-    assert "agreed by every suggestion" in rows[2]["note"]
+    assert "agreed by top suggestions" in rows[2]["note"]
 
 
 def test_a_coarser_row_carries_no_invented_score(plugin, core):

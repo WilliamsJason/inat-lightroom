@@ -566,7 +566,7 @@ function ObservationPanel.contents(f, props, actions)
         action  = actions.cancelUpload,
       },
       f:push_button {
-        title   = "Sync guess to Metadata tags",
+        title   = "Update photo tags",
         enabled = LrView.bind("hasSuggestion"),
         action  = actions.applyLocally,
       },

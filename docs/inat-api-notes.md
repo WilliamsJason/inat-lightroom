@@ -567,8 +567,8 @@ which, at a 40% score, is exactly what is in doubt. Walking up from
 `common_ancestor` assumes only what every candidate already agrees on.
 
 So the ladder the plugin offers is built from `common_ancestor` and its
-`ancestors` wherever it can be, and those rows say *"agreed by every
-suggestion"*. Below the common ancestor it does walk up from the top result —
+`ancestors` wherever it can be, and those rows say *"agreed by top
+suggestions"*. Below the common ancestor it does walk up from the top result —
 that is the only place a genus can come from once the model has settled on one —
 and those rows say *"containing &lt;top result&gt;"* instead, so the assumption is
 on screen rather than buried. Both are offered whatever the score is: somebody

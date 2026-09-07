@@ -656,7 +656,7 @@ MUTATIONS = [
     (
         "ObservationPanel",
         "the local-apply button is dropped from the window",
-        '        title   = "Sync guess to Metadata tags",',
+        '        title   = "Update photo tags",',
         '        title   = "",',
     ),
     (

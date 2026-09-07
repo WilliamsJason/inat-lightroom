@@ -263,7 +263,7 @@ having in front of you rather than one the plugin makes for you.
 
 Each row says where it came from, because the two sources are not equally safe:
 
-- *"agreed by every suggestion"* — the taxon is at or above iNaturalist's own
+- *"agreed by top suggestions"* — the taxon is at or above iNaturalist's own
   `common_ancestor`, the most specific taxon its model is confident about across
   *all* the candidates. If five results argue about the species but all sit in
   one genus, that genus is the honest answer, and it is the one the website
@@ -284,7 +284,7 @@ than to argue down.
 
 ### Using a suggestion without publishing anything
 
-**Sync guess to Metadata tags** sits next to the upload button and does not
+**Update photo tags** sits next to the upload button and does not
 upload: it writes the chosen taxon's full keyword hierarchy and taxon fields into
 the catalog and tells iNaturalist nothing. For the frames worth filing under the
 right name and not worth publishing — a duplicate, a soft focus, something
