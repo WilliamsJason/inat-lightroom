@@ -400,6 +400,30 @@ end
 -- Asking for suggestions
 --------------------------------------------------------------------------------
 
+--- Render the photo and score the JPEG.
+--
+-- MUST be called from inside a task.
+--
+-- @return payload, error message
+local function scoreRendered(api, photo)
+  local path, renderErr, folder = RenderPhoto.renderForSuggestions(photo)
+  if not path then
+    return nil, renderErr
+  end
+
+  -- Location and date are not decoration here. Sent as multipart fields they
+  -- collapse the candidate list dramatically, because a species from the wrong
+  -- hemisphere stops being plausible. Sent as query parameters iNaturalist
+  -- returns 200 and ignores them -- see InatAPI:scoreImage.
+  local latitude, longitude = UploadCore.locationOf(photo)
+
+  local payload, err = api:scoreImage(path, latitude, longitude,
+    UploadCore.observedOnFor(photo))
+
+  RenderPhoto.cleanUp(folder)
+  return payload, err
+end
+
 --- Suggest taxa for a photo.
 --
 -- MUST be called from inside a task: it renders and makes HTTP calls.
@@ -420,22 +444,14 @@ function PanelCore.getSuggestions(api, photo)
   local obsId = UploadCore.pluginField(photo, "inat_observation_id")
   if obsId then
     payload, err = api:scoreObservation(tonumber(obsId))
-  else
-    local path, renderErr, folder = RenderPhoto.renderForSuggestions(photo)
-    if not path then
-      return nil, renderErr
-    end
+  end
 
-    -- Location and date are not decoration here. Sent as multipart fields they
-    -- collapse the candidate list dramatically, because a species from the wrong
-    -- hemisphere stops being plausible. Sent as query parameters iNaturalist
-    -- returns 200 and ignores them -- see InatAPI:scoreImage.
-    local latitude, longitude = UploadCore.locationOf(photo)
-
-    payload, err = api:scoreImage(path, latitude, longitude,
-      UploadCore.observedOnFor(photo))
-
-    RenderPhoto.cleanUp(folder)
+  -- The link is a shortcut, never a requirement. A remembered id that
+  -- iNaturalist will not score -- deleted there, or a photo somebody else
+  -- owns -- must not cost the user the suggestions they could always have had
+  -- from the pixels in front of them.
+  if not payload then
+    payload, err = scoreRendered(api, photo)
   end
 
   if not payload then return nil, err end
