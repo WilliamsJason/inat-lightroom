@@ -955,7 +955,7 @@ def test_the_panel_offers_the_button_that_files_a_name_locally(plugin, panel):
 
     titles = button_titles(show(plugin, panel))
 
-    assert "Sync guess to Metadata tags" in titles
+    assert "Update photo tags" in titles
 
 
 def test_looking_a_guess_up_is_not_a_button_any_more(plugin, panel):
@@ -976,7 +976,7 @@ def test_filing_a_name_waits_for_a_chosen_suggestion(plugin, panel):
     args = show(plugin, panel)
 
     button = [b for b in of_type(args["contents"], "push_button")
-              if b["title"] == "Sync guess to Metadata tags"][0]
+              if b["title"] == "Update photo tags"][0]
     assert button["enabled"]["__bind"] == "hasSuggestion"
 
 

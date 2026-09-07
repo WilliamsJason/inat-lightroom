@@ -102,7 +102,7 @@ function PanelCore.describeSuggestion(row)
 end
 
 --- Why a coarser row is safe to pick: every candidate sits inside it.
-PanelCore.AGREED_NOTE = "agreed by every suggestion"
+PanelCore.AGREED_NOTE = "agreed by top suggestions"
 
 --- A taxon's lineage as a list, kingdom first, the taxon itself last.
 function PanelCore.chainOf(taxon)

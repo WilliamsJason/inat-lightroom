@@ -478,8 +478,8 @@ rather than hidden:
 
 - **At or above the vision response's `common_ancestor`** — the most specific
   taxon the model is confident about *across all candidates* — nothing is being
-  assumed about which candidate is right. Those rows read *"agreed by every
-  suggestion"*.
+  assumed about which candidate is right. Those rows read *"agreed by top
+  suggestions"*.
 - **Below it**, the rungs come from the top candidate's own lineage and are only
   right if that candidate is. They read *"containing Ischnura erratica"*, so the
   assumption is named instead of dressed up as agreement.
