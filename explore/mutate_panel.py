@@ -119,8 +119,8 @@ MUTATIONS = [
     (
         "PanelCore",
         "each photo becomes its own observation",
-        "  local seen = {}\n  local observationId, uuid, resolveErr =\n    UploadCore.resolveObservation(api, settings, photos[1], seen, errors)",
-        "  local seen = {}\n  local observationId, uuid, resolveErr\n  for _, photo in ipairs(photos) do\n    observationId, uuid, resolveErr =\n      UploadCore.resolveObservation(api, settings, photo, {}, errors)\n  end",
+        "  local seen = {}\n  local observationId, uuid, resolveErr, wasCreated =\n    UploadCore.resolveObservation(api, settings, photos[1], seen, errors)",
+        "  local seen = {}\n  local observationId, uuid, resolveErr, wasCreated\n  for _, photo in ipairs(photos) do\n    observationId, uuid, resolveErr, wasCreated =\n      UploadCore.resolveObservation(api, settings, photo, {}, errors)\n  end",
     ),
     (
         "PanelCore",
@@ -143,7 +143,7 @@ MUTATIONS = [
     (
         "PanelCore",
         "an empty selection is uploaded anyway",
-        "  if not photos or #photos == 0 then\n    return nil, nil, { \"Select at least one photo first.\" }\n  end",
+        "  if not photos or #photos == 0 then\n    return nil, nil, { \"Select at least one photo first.\" }, false\n  end",
         "",
     ),
     (
@@ -676,6 +676,99 @@ MUTATIONS = [
         "the chosen rank and score are never recorded, so nothing can be warned about",
         "  props.suggestionRank    = row.rank\n  props.suggestionScore   = row.combined_score",
         "",
+    ),
+
+    # --- calling off an upload ----------------------------------------------
+    #
+    # The case this was written for: Upload pressed with a whole folder
+    # selected instead of one photo. Every one of these turns Cancel back into
+    # a button that changes nothing, or into one that destroys more than it
+    # should.
+    (
+        "PanelCore",
+        "the cancel is noticed only after every photo has been uploaded",
+        "  local attached = 0\n  for i, item in ipairs(rendered) do\n    if isCanceled() then\n      return abandon()\n    end",
+        "  local attached = 0\n  for i, item in ipairs(rendered) do",
+    ),
+    (
+        "PanelCore",
+        "a cancel during a render still goes on to create the observation",
+        "  if renderCanceled or isCanceled() then\n    RenderPhoto.cleanUp(folder)",
+        "  if false then\n    RenderPhoto.cleanUp(folder)",
+    ),
+    (
+        "PanelCore",
+        "the observation the cancelled run created is left on iNaturalist",
+        "    local _, deleteErr = api:deleteObservation(observationId)",
+        "    local _, deleteErr = nil, nil",
+    ),
+    (
+        "PanelCore",
+        "cancelling a re-upload deletes an observation it did not create",
+        "    if not wasCreated then",
+        "    if false then",
+    ),
+    (
+        "PanelCore",
+        "a failed cleanup is swallowed, so a live observation is never mentioned",
+        "    if deleteErr then\n      logger:warn(\"Could not delete cancelled observation \"",
+        "    if false then\n      logger:warn(\"Could not delete cancelled observation \"",
+    ),
+    (
+        "PanelCore",
+        "the cancel is reported to the caller as an ordinary finish",
+        "    logger:info(\"Upload cancelled; deleted observation \" .. tostring(observationId))\n    return nil, nil, {}, true",
+        "    logger:info(\"Upload cancelled; deleted observation \" .. tostring(observationId))\n    return nil, nil, {}, false",
+    ),
+    (
+        "PanelCore",
+        "the photo uploader is never told the run was called off",
+        "      isCanceled = isCanceled,\n    })\n\n    if uploadErr == InatAPI.CANCELED then",
+        "      isCanceled = nil,\n    })\n\n    if uploadErr == InatAPI.CANCELED then",
+    ),
+    (
+        "PanelCore",
+        "a cancel reported by the uploader is filed as an upload error",
+        "    if uploadErr == InatAPI.CANCELED then\n      return abandon()\n    elseif uploadErr then",
+        "    if false then\n      return abandon()\n    elseif uploadErr then",
+    ),
+
+    # --- observations that are no longer there -------------------------------
+    (
+        "SyncCore",
+        "a deleted observation is reported as a failure the user must fix by hand",
+        "    return SyncCore.MISSING,\n      \"Observation \" .. obsId .. \" no longer exists or is not visible to you\"",
+        "    return SyncCore.FAILED,\n      \"Observation \" .. obsId .. \" no longer exists or is not visible to you\"",
+    ),
+    (
+        "SyncCore",
+        "a 404 from a single fetch is not recognised as a deleted observation",
+        "    if not obs and InatAPI.isMissing(err) then",
+        "    if false then",
+    ),
+    (
+        "SyncCore",
+        "the missing photos are counted but never kept, so nothing can be offered",
+        "  local unlinked = SyncCore.offerToUnlink(catalog, missing)",
+        "  local unlinked = SyncCore.offerToUnlink(catalog, {})",
+    ),
+    (
+        "SyncCore",
+        "photos are unlinked without being asked",
+        "  if answer ~= \"ok\" then\n    logger:info(\"Left \" .. #missing .. \" photo(s) linked to missing observations\")\n    return 0\n  end",
+        "",
+    ),
+    (
+        "SyncCore",
+        "the search index is trusted, so a just-uploaded photo is offered for unlinking",
+        "    if exists == false then\n      confirmed[#confirmed + 1] = photo",
+        "    if true then\n      confirmed[#confirmed + 1] = photo",
+    ),
+    (
+        "SyncCore",
+        "an unanswerable check counts as a deletion",
+        "    elseif exists == nil then\n      unsure[#unsure + 1] = \"Could not check whether observation \"",
+        "    elseif false then\n      unsure[#unsure + 1] = \"Could not check whether observation \"",
     ),
 ]
 

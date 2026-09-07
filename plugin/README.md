@@ -146,6 +146,12 @@ rendering first.
 
 The other buttons:
 
+- **Cancel** — stop an upload that is under way. It sits beside the upload
+  button and is greyed out until there is something to stop. Pressing it stops
+  the rendering, stops uploading photos, and deletes the observation the run had
+  just created on iNaturalist, so nothing is left behind and no photo is linked.
+  An observation that was already there — the case where you were adding photos
+  to one you made earlier — is left alone.
 - **Sync** — pull the current community determination for the selection.
 - **Set on Map** — switch to Lightroom's Map module to give the photo a
   location. See below for why this is worth doing.
@@ -352,6 +358,26 @@ A freshly created observation has no community taxon until somebody identifies
 it, so **Not identified yet** is the normal result for anything just uploaded.
 It is reported separately from errors, and the sync still records the
 observation's UUID, URL and quality grade.
+
+### Observations that are no longer there
+
+Deleting an observation on the iNaturalist website leaves the Lightroom photos
+pointing at nothing. That used to be a wall of sync errors and a link to clear
+by hand on every photo.
+
+A sync now recognises it. Photos whose observation iNaturalist no longer has are
+counted separately from errors, and at the end of the run the sync offers to
+**Unlink All** of them — one question for the whole run, so clearing up after
+deleting an accidental folder-sized upload is one click rather than one per
+photo. Declining leaves everything linked; nothing is unlinked without being
+asked, and unlinking clears the Lightroom link only, keeping the keywords.
+
+Every candidate is double-checked against iNaturalist before it is offered,
+because an observation is also absent from the search index for the first few
+minutes of its life. Without that check, syncing right after an upload would
+offer to throw away the link it had just written. Anything that cannot be
+checked — the site is down, the request timed out — is reported as an error and
+left linked.
 
 ### Where the keywords go
 

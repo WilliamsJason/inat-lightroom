@@ -483,6 +483,82 @@ def test_there_is_no_view_button_any_more(plugin, panel):
     assert "View on iNaturalist" not in titles
 
 
+# --- stopping an upload ----------------------------------------------------
+#
+# A folder-wide upload started by accident used to have no way out: every photo
+# in it was uploaded, linked, and then had to be unlinked by hand.
+
+
+def cancel_button(args):
+    return [b for b in of_type(args["contents"], "push_button")
+            if b["title"] == "Cancel"][0]
+
+
+def test_there_is_a_cancel_button(plugin, panel):
+    args = show(plugin, panel)
+
+    assert cancel_button(args) is not None
+
+
+def test_the_cancel_button_is_there_before_it_is_needed(plugin, panel):
+    """Not created when an upload starts. A control that appears only once
+    there is something to cancel is one nobody knows about until the moment
+    they are least able to go looking for it."""
+    args = show(plugin, panel)
+    button = cancel_button(args)
+
+    # Disabled, rather than absent, when nothing is running.
+    assert button["enabled"]["__bind"] == "uploading"
+    assert args["contents"]["bind_to_object"]["uploading"] is False
+
+
+def test_the_upload_button_goes_quiet_while_one_is_running(plugin, panel):
+    """The panel's buttons do not block the window, so without this a second
+    click starts a second upload and makes a duplicate observation."""
+    args = show(plugin, panel)
+    button = [b for b in of_type(args["contents"], "push_button")
+              if hasattr(b["title"], "keys")
+              and b["title"]["__bind"] == "uploadTitle"][0]
+    keys = button["enabled"]["__bind"]["keys"]
+
+    assert set(keys.values()) == {"hasPhoto", "uploading"}
+    operation = button["enabled"]["__bind"]["operation"]
+    values = plugin.runtime.table_from({"hasPhoto": True, "uploading": True})
+    assert operation(None, values) is False
+    values["uploading"] = False
+    assert operation(None, values) is True
+
+
+def test_cancelling_asks_the_upload_to_stop(plugin, panel):
+    props = plugin.runtime.table_from({"uploading": True,
+                                       "uploadCanceled": False})
+
+    assert plugin.call(panel.cancelUpload, props)[0] is True
+    assert props["uploadCanceled"] is True
+
+
+def test_cancelling_says_so_straight_away(plugin, panel):
+    """The upload checks the flag only at the points where stopping is safe, so
+    there is a gap between the click and anything visibly happening. Silence in
+    that gap reads as a button that did not work."""
+    props = plugin.runtime.table_from({"uploading": True,
+                                       "uploadCanceled": False})
+
+    plugin.call(panel.cancelUpload, props)
+
+    assert "ancel" in props["suggestionStatus"]
+
+
+def test_cancelling_when_nothing_is_running_does_nothing(plugin, panel):
+    """A flag left set by an idle click would stop the next upload before it
+    started, which looks exactly like the button being broken."""
+    props = plugin.runtime.table_from({"uploading": False,
+                                       "uploadCanceled": False})
+
+    assert plugin.call(panel.cancelUpload, props)[0] is False
+    assert props["uploadCanceled"] is False
+
+
 # ---------------------------------------------------------------------------
 # Actions
 # ---------------------------------------------------------------------------
