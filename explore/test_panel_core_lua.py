@@ -123,6 +123,9 @@ def fake_api(plugin, **options):
 
           function api:scoreObservation(id)
             record("scoreObservation", id)
+            if opts.scoreObservationError then
+              return nil, opts.scoreObservationError
+            end
             if opts.scoreError then return nil, opts.scoreError end
             return opts.score or { results = {} }, nil
           end
@@ -340,6 +343,32 @@ def test_scoring_cleans_up_the_rendered_file(plugin, core):
     core["getSuggestions"](api, plugin.new_photo())
 
     assert len(plugin.deleted_paths) == 1
+
+
+def test_a_dead_link_still_gets_suggestions_from_the_photo(plugin, core):
+    """The observation was deleted on iNaturalist, so score_observation 404s.
+    The pixels are still here, and they are what the user asked about."""
+    photo = plugin.new_photo(inat_observation_id="4242")
+    api, calls = fake_api(
+        plugin, scoreObservationError="GET .../score_observation/4242 "
+                                      "failed with HTTP 404: {}")
+
+    result, err = core["getSuggestions"](api, photo)
+
+    assert err is None
+    assert result is not None
+    assert methods(calls) == ["scoreObservation", "scoreImage"]
+
+
+def test_a_dead_link_that_also_fails_to_score_reports_the_error(plugin, core):
+    photo = plugin.new_photo(inat_observation_id="4242")
+    api, _ = fake_api(plugin, scoreObservationError="gone",
+                      scoreError="the vision service is down")
+
+    result, err = core["getSuggestions"](api, photo)
+
+    assert result is None
+    assert "vision service" in err
 
 
 def test_a_failed_render_reports_rather_than_scoring_nothing(plugin, core):

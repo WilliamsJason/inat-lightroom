@@ -268,7 +268,11 @@ routes.** A linked photo can be scored by `GET /computervision/score_observation
 — iNaturalist already holds the image, no render, and scoring the observation's
 own photos is a better question than scoring a fresh JPEG of one of them. Only
 an unlinked photo needs `RenderPhoto.renderForSuggestions` and
-`score_image`, and that render is cleaned up afterwards.
+`score_image`, and that render is cleaned up afterwards. The linked route is a
+shortcut rather than a requirement: when `score_observation` fails — the
+observation was deleted on iNaturalist, or belongs to somebody else — the render
+path runs anyway, because a stale id must not cost the user suggestions the
+pixels in front of them could always have answered.
 
 **The suggestions are hand-built rows, not a list control.** A `simple_list` row
 is a string and can carry nothing else, so a per-row link out to iNaturalist is
