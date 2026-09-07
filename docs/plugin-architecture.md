@@ -279,7 +279,7 @@ is a string and can carry nothing else, so a per-row link out to iNaturalist is
 impossible in one; the button that used to do that job for whichever row was
 chosen is gone in favour of a **View ↗** at the end of every row. Hand-built rows
 scale badly — the SDK notes describe a thousand of them as unusable — but there
-are never more than `SUGGESTION_LIMIT` (8).
+are never more than `SUGGESTION_LIMIT` (10).
 
 A presented view tree is fixed, so `PanelCore.suggestionSlots` always returns
 exactly that many slots and the surplus are blank in both title and link: an
@@ -466,28 +466,41 @@ does: `Set-Clipboard` on Windows, `pbcopy` on macOS.
 
 ### Offering a rank the evidence supports
 
-`PanelCore.fallbackRows` prepends coarser taxa to the suggestion list when the
-top `combined_score` is below `CONFIDENT_SCORE` (75).
+`PanelCore.coarserRows` prepends coarser taxa to every suggestion list,
+confident or not. `CONFIDENT_SCORE` (75) no longer gates them: it now only
+decides whether committing a *species* asks for confirmation. A score is a claim
+about a species, and 80% sure of a species is 20% sure of nothing in particular
+— whether to step back a rank is the photographer's call, not a threshold's.
 
-The source is the vision response's `common_ancestor` — the most specific taxon
-the model is confident about *across all candidates* — and its `ancestors`,
-filtered to `FALLBACK_RANKS` (`order`, `family`, `genus`). Two properties follow
-from that choice and neither is incidental:
+Two lineages feed the ladder, filtered to `FALLBACK_RANKS` (`order`, `family`,
+`genus`), and the difference between them is written into each row's `note`
+rather than hidden:
 
-- **It never descends below the common ancestor.** Offering the top result's
-  genus would assume the top result's lineage is right, which is precisely what
-  a 40% score doubts. Everything at or above the common ancestor is agreed on by
-  every candidate.
-- **It carries no score.** These are not rows the model ranked. A percentage
-  beside one would be a number nobody computed, so the row carries a `note` and
-  `describeSuggestion` renders that in place of a percentage.
+- **At or above the vision response's `common_ancestor`** — the most specific
+  taxon the model is confident about *across all candidates* — nothing is being
+  assumed about which candidate is right. Those rows read *"agreed by every
+  suggestion"*.
+- **Below it**, the rungs come from the top candidate's own lineage and are only
+  right if that candidate is. They read *"containing Ischnura erratica"*, so the
+  assumption is named instead of dressed up as agreement.
+
+Neither carries a score. These are not rows the model ranked, so a percentage
+beside one would be a number nobody computed; the row carries a `note` and
+`describeSuggestion` renders that in place of a percentage. A taxon already
+among the candidates is never repeated as a coarser row — one taxon must not
+look like two choices.
 
 Ordered finest-first and inserted at the head of the list, because the most
 specific defensible answer is the one most people want and a safer option below
-eight species is one nobody scrolls to. The `/taxa/{id}` fetch for the lineage
-happens only when the list is unconfident, so a confident answer pays nothing.
+ten species is one nobody scrolls to. `SUGGESTION_LIMIT` rose from 8 to 10 for
+the same reason: three coarse rows against eight slots left too few species.
 
-`InatAPI.summariseSuggestions` now returns `rows, commonAncestor`. It previously
+One `/taxa/{id}` fetch pays for the whole ladder in the ordinary case. The top
+candidate's lineage passes through the common ancestor, so `chainHas` finds it
+there and the ancestor's own lineage is never asked for; the second fetch only
+happens when the response is malformed enough that it is missing.
+
+`InatAPI.summariseSuggestions` returns `rows, commonAncestor`. It previously
 discarded the ancestor entirely, which left the picker with nothing to fall back
 to but the guess already under suspicion.
 

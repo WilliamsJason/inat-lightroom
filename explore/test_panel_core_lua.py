@@ -148,6 +148,8 @@ def fake_api(plugin, **options):
 
           function api:getTaxon(id)
             record("getTaxon", id)
+            -- Per-id answers, for the callers that fetch more than one taxon.
+            if opts.taxa and opts.taxa[id] then return opts.taxa[id], nil end
             return opts.taxon, nil
           end
 
@@ -981,90 +983,168 @@ def ranks_of(rows):
     return [rows[i]["rank"] for i in range(1, len(rows) + 1)]
 
 
-def test_a_confident_list_is_offered_no_fallback(plugin, core):
-    """Offering an escape hatch beside a 98% answer would make every
-    identification look like a guess."""
-    assert len(core["fallbackRows"](ancestor(plugin), 98)) == 0
+def notes_of(rows):
+    return [rows[i]["note"] for i in range(1, len(rows) + 1)]
 
 
-def test_an_unconfident_list_gets_coarser_options(plugin, core):
-    assert ranks_of(core["fallbackRows"](ancestor(plugin), 40)) == [
-        "genus", "family", "order"]
+def top_hit(plugin, rank="species", name="Ischnura erratica", ancestors=None):
+    """The best-scoring candidate, with its lineage as /taxa/{id} returns it."""
+    return deep(plugin, {
+        "id": 103486,
+        "name": name,
+        "rank": rank,
+        "ancestors": ancestors if ancestors is not None else [
+            {"id": 1, "name": "Animalia", "rank": "kingdom"},
+            {"id": 47158, "name": "Insecta", "rank": "class"},
+            {"id": 47792, "name": "Odonata", "rank": "order"},
+            {"id": 47208, "name": "Zygoptera", "rank": "suborder"},
+            {"id": 47209, "name": "Coenagrionidae", "rank": "family"},
+            {"id": 52054, "name": "Ischnura", "rank": "genus",
+             "preferred_common_name": "Forktails"},
+        ],
+    })
+
+
+def species_rows(plugin, score=40, taxon_id=103486):
+    return deep(plugin, [{"taxon_id": taxon_id, "name": "Ischnura erratica",
+                          "rank": "species", "combined_score": score}])
+
+
+def test_a_confident_list_still_offers_coarser_ranks(plugin, core):
+    """80% sure of a species is one photo in five filed under a wrong name. The
+    genus above it is very often right where the species is not, and whether to
+    take that trade is the photographer's call, not a threshold's."""
+    rows = core["coarserRows"](top_hit(plugin), ancestor(plugin),
+                               species_rows(plugin, score=98))
+
+    assert ranks_of(rows) == ["genus", "family", "order"]
 
 
 def test_the_most_specific_safe_option_comes_first(plugin, core):
     """It is the one most people want: the finest rank still defensible. Put
     the order first and the useful answer is the one nobody reads."""
-    assert ranks_of(core["fallbackRows"](ancestor(plugin), 40))[0] == "genus"
+    rows = core["coarserRows"](top_hit(plugin), ancestor(plugin), None)
 
-
-def test_the_ladder_never_goes_below_the_common_ancestor(plugin, core):
-    """The whole justification for these rows is that every candidate agrees at
-    or above the common ancestor. A genus taken from the top result's lineage
-    would assume that result is right -- exactly what a 40% score doubts."""
-    family = ancestor(plugin, rank="family", name="Coenagrionidae", ancestors=[
-        {"id": 1, "name": "Animalia", "rank": "kingdom"},
-        {"id": 47158, "name": "Insecta", "rank": "class"},
-        {"id": 47792, "name": "Odonata", "rank": "order"},
-    ])
-
-    rows = core["fallbackRows"](family, 40)
-
-    assert "genus" not in ranks_of(rows)
-    assert ranks_of(rows) == ["family", "order"]
+    assert ranks_of(rows)[0] == "genus"
 
 
 def test_intermediate_ranks_are_left_out(plugin, core):
     """Suborder and superfamily are real ranks and useless as choices. A list
     with all of them is a taxonomy lesson, not a decision."""
-    assert "suborder" not in ranks_of(core["fallbackRows"](ancestor(plugin), 40))
+    rows = core["coarserRows"](top_hit(plugin), ancestor(plugin), None)
+
+    assert "suborder" not in ranks_of(rows)
 
 
-def test_a_fallback_row_says_why_it_is_there(plugin, core):
-    rows = core["fallbackRows"](ancestor(plugin), 40)
+def test_a_rank_every_candidate_agrees_on_says_so(plugin, core):
+    """At or above the common ancestor, nothing is being assumed about which
+    candidate is right -- and that is the row's whole selling point."""
+    rows = core["coarserRows"](top_hit(plugin), ancestor(plugin), None)
 
-    assert rows[1]["note"] and "agreed" in rows[1]["note"]
+    assert all("agreed by every suggestion" in note for note in notes_of(rows))
 
 
-def test_a_fallback_row_carries_no_invented_score(plugin, core):
+def test_a_rank_below_the_common_ancestor_names_what_it_contains(plugin, core):
+    """The genus of the top candidate is only right if the top candidate is,
+    and a row that quietly claimed the model agreed would be a lie. It is still
+    offered: it is exactly what someone stepping back one rank wants."""
+    family = ancestor(plugin, rank="family", name="Coenagrionidae", ancestors=[
+        {"id": 1, "name": "Animalia", "rank": "kingdom"},
+        {"id": 47792, "name": "Odonata", "rank": "order"},
+    ])
+    family["id"] = 47209
+
+    rows = core["coarserRows"](top_hit(plugin), family, None)
+
+    assert ranks_of(rows) == ["genus", "family", "order"]
+    assert rows[1]["note"] == "genus, containing Ischnura erratica"
+    assert "agreed by every suggestion" in rows[2]["note"]
+
+
+def test_a_coarser_row_carries_no_invented_score(plugin, core):
     """These are not candidates the model ranked. A percentage beside one would
     be a number nobody computed."""
-    rows = core["fallbackRows"](ancestor(plugin), 40)
+    rows = core["coarserRows"](top_hit(plugin), ancestor(plugin), None)
 
     assert rows[1]["combined_score"] is None
     assert "%" not in core["describeSuggestion"](rows[1])
 
 
-def test_no_common_ancestor_means_no_fallback(plugin, core):
-    """The model had no confident shared ancestor, so there is nothing honest
-    to offer."""
-    assert len(core["fallbackRows"](None, 40)) == 0
+def test_a_taxon_already_in_the_list_is_not_offered_twice(plugin, core):
+    """The model itself suggested the genus, with a score. Repeating it as a
+    scoreless coarser row makes one taxon look like two choices."""
+    rows = deep(plugin, [{"taxon_id": 52054, "name": "Ischnura",
+                          "rank": "genus", "combined_score": 61}])
+
+    coarser = core["coarserRows"](top_hit(plugin), ancestor(plugin), rows)
+
+    assert ranks_of(coarser) == ["family", "order"]
 
 
-def test_an_empty_list_still_gets_the_fallback(plugin, core):
-    """No score at all is the least confident case there is, not the most."""
-    assert len(core["fallbackRows"](ancestor(plugin), None)) == 3
+def test_no_candidate_lineage_falls_back_to_the_common_ancestor(plugin, core):
+    """An empty result list, or one whose top row has no id. The ancestor is
+    still a ladder worth offering."""
+    rows = core["coarserRows"](None, ancestor(plugin), None)
+
+    assert ranks_of(rows) == ["genus", "family", "order"]
+
+
+def test_nothing_to_walk_means_nothing_to_offer(plugin, core):
+    assert len(core["coarserRows"](None, None, None)) == 0
 
 
 def test_the_fallbacks_go_above_the_species(plugin, core):
-    api, _ = fake_api(plugin, taxon=ancestor(plugin))
-    rows = deep(plugin, [{"taxon_id": 1, "name": "Ischnura erratica",
-                          "rank": "species", "combined_score": 40}])
+    api, _ = fake_api(plugin, taxon=top_hit(plugin))
+    rows = species_rows(plugin, score=40)
 
     combined = core["withFallbacks"](api, rows, ancestor(plugin))
 
     assert ranks_of(combined) == ["genus", "family", "order", "species"]
 
 
-def test_a_confident_list_is_passed_straight_through(plugin, core):
-    api, calls = fake_api(plugin, taxon=ancestor(plugin))
-    rows = deep(plugin, [{"taxon_id": 1, "name": "Ischnura erratica",
-                          "rank": "species", "combined_score": 98}])
+def test_a_confident_list_gets_the_same_ladder(plugin, core):
+    """The one thing this change is for: at 98% the coarser ranks used to
+    vanish, so wanting the genus meant typing it by hand."""
+    api, _ = fake_api(plugin, taxon=top_hit(plugin))
+    rows = species_rows(plugin, score=98)
 
     combined = core["withFallbacks"](api, rows, ancestor(plugin))
 
-    assert ranks_of(combined) == ["species"]
-    assert "getTaxon" not in methods(calls), "no lineage is worth fetching here"
+    assert ranks_of(combined) == ["genus", "family", "order", "species"]
+
+
+def test_one_lineage_answers_both_questions(plugin, core):
+    """The common ancestor is on the top candidate's lineage in every ordinary
+    response, so the ladder comes out of a single /taxa/{id} -- the ancestor's
+    own lineage is never worth asking for."""
+    api, calls = fake_api(plugin, taxon=top_hit(plugin))
+    bare = deep(plugin, {"id": 52054, "name": "Ischnura", "rank": "genus"})
+
+    core["withFallbacks"](api, species_rows(plugin), bare)
+
+    assert methods(calls).count("getTaxon") == 1
+
+
+def test_a_common_ancestor_off_the_lineage_is_fetched_too(plugin, core):
+    """It should not happen, and if it does the agreed rungs are still worth
+    more than the assumed ones."""
+    stray = deep(plugin, {"id": 999999, "name": "Elsewhere", "rank": "genus"})
+
+    api, calls = fake_api(plugin, taxon=top_hit(plugin))
+
+    core["withFallbacks"](api, species_rows(plugin), stray)
+
+    assert methods(calls).count("getTaxon") == 2
+
+
+def test_the_top_candidate_is_looked_up_by_its_own_id(plugin, core):
+    """Fetching the ancestor's lineage twice would give a ladder that stops at
+    the ancestor -- the old behaviour, silently."""
+    api, calls = fake_api(plugin, taxon=top_hit(plugin))
+
+    core["withFallbacks"](api, species_rows(plugin), ancestor(plugin))
+
+    assert call_named(calls, "getTaxon")[0] == 103486
 
 
 # ---------------------------------------------------------------------------
