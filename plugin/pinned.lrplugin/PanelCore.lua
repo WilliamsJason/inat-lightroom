@@ -31,19 +31,29 @@ local PanelCore = {}
 --- How many suggestions to show. iNaturalist returns ten or so and the tail of
 -- the list is noise; a short list that fits without scrolling is more useful
 -- than a complete one.
-PanelCore.SUGGESTION_LIMIT = 8
+--
+-- Ten rather than eight because the coarser ranks now sit at the head of every
+-- list. Three of them against a limit of eight would leave five candidates,
+-- which is fewer species than the model usually has anything useful to say
+-- about.
+PanelCore.SUGGESTION_LIMIT = 10
 
 --- The score at or above which a species-level answer stands on its own.
 --
--- Below it the picker offers coarser ranks and the upload asks for confirmation.
--- iNaturalist's own site makes the same move -- it stops naming a species and
--- says "we're pretty sure this is in the genus ..." -- and the number is a
--- judgement call rather than anything the API publishes.
+-- Below it the upload asks for confirmation before committing a species. iNat's
+-- own site makes the same move -- it stops naming a species and says "we're
+-- pretty sure this is in the genus ..." -- and the number is a judgement call
+-- rather than anything the API publishes.
 --
 -- The asymmetry that sets it: a genus-level record that is right is useful
 -- forever, and a species-level record that is wrong is worse than useless,
 -- because somebody downstream trusts it. So the threshold sits high enough to
 -- catch a confident-looking guess.
+--
+-- It no longer gates the coarser ranks. Those are offered against every list,
+-- confident or not: 80% is still one photo in five filed under the wrong name,
+-- and whether that is worth taking is the photographer's call, not a
+-- threshold's.
 PanelCore.CONFIDENT_SCORE = 75
 
 --- Ranks worth offering as a fallback, coarsest first.
@@ -91,55 +101,126 @@ function PanelCore.describeSuggestion(row)
   return name
 end
 
---- The coarser taxa worth offering when no species-level answer is convincing.
---
--- @param commonAncestor  The vision response's common ancestor, fetched with
---                        its `ancestors` so there is a ladder to walk.
--- @param topScore        The best combined_score in the list.
--- @return A list of rows in the same shape as a suggestion, finest first.
---
--- Built from the common ancestor's own lineage and nothing else, which is what
--- keeps it honest: the common ancestor is the most specific taxon the model is
--- confident about across every candidate, so it and everything above it are
--- agreed on by the whole list. Walking *down* from it -- say, offering the top
--- result's genus -- would assume the top result's lineage is the right one,
--- which at 40% is precisely what is in doubt.
---
--- Empty when something already scores well: a confident answer needs no
--- fallback, and offering one anyway would make every identification look
--- uncertain.
-function PanelCore.fallbackRows(commonAncestor, topScore)
-  if not commonAncestor then return {} end
-  if tonumber(topScore) and tonumber(topScore) >= PanelCore.CONFIDENT_SCORE then
-    return {}
+--- Why a coarser row is safe to pick: every candidate sits inside it.
+PanelCore.AGREED_NOTE = "agreed by top suggestions"
+
+--- A taxon's lineage as a list, kingdom first, the taxon itself last.
+function PanelCore.chainOf(taxon)
+  if not taxon then return {} end
+
+  local chain = {}
+  for _, ancestor in ipairs(taxon.ancestors or {}) do
+    chain[#chain + 1] = ancestor
+  end
+  chain[#chain + 1] = taxon
+
+  return chain
+end
+
+--- True when `id` is somewhere on this taxon's lineage, or is the taxon itself.
+function PanelCore.chainHas(taxon, id)
+  if id == nil then return false end
+
+  for _, link in ipairs(PanelCore.chainOf(taxon)) do
+    if link.id == id then return true end
   end
 
+  return false
+end
+
+--- The coarser taxa to offer above the candidates.
+--
+-- @param topTaxon        The best-scoring candidate, carrying its `ancestors`.
+-- @param commonAncestor  The vision response's common ancestor. Its own
+--                        `ancestors` are only needed when it is not already on
+--                        the top candidate's lineage.
+-- @param rows            The candidate rows, so nothing is offered twice.
+-- @return A list of rows in the same shape as a suggestion, finest first.
+--
+-- Offered against every list, however confident. A score is a claim about a
+-- species, and 80% sure of a species is 20% sure of nothing in particular --
+-- the genus above it is very often right where the species is not. Whether to
+-- take that trade is the photographer's call, and the picker's job is to make
+-- the coarser answer available rather than to decide it is unnecessary.
+--
+-- Two lineages feed it, and the difference between them is recorded in each
+-- row's note rather than hidden:
+--
+--   * At or above the common ancestor, every candidate agrees -- that is what
+--     the common ancestor means -- so those rows are as safe as the list gets.
+--   * Below it, the rungs come from the top candidate's own lineage, and they
+--     assume the top candidate is in the right genus. That assumption is the
+--     whole point when the model is confident, and it is worth naming when it
+--     is not, so the note says which taxon the rung contains.
+function PanelCore.coarserRows(topTaxon, commonAncestor, rows)
   local wanted = {}
   for _, rank in ipairs(PanelCore.FALLBACK_RANKS) do wanted[rank] = true end
 
-  local chain = {}
-  for _, taxon in ipairs(commonAncestor.ancestors or {}) do
-    chain[#chain + 1] = taxon
+  -- A taxon already in the list is not an alternative to it.
+  local taken = {}
+  for _, row in ipairs(rows or {}) do
+    if row.taxon_id then taken[row.taxon_id] = true end
   end
-  chain[#chain + 1] = commonAncestor
 
-  local rows = {}
-  for i = #chain, 1, -1 do
-    local taxon = chain[i]
-    if taxon and taxon.id and wanted[taxon.rank] then
-      rows[#rows + 1] = {
-        taxon_id    = taxon.id,
-        name        = taxon.name,
-        rank        = taxon.rank,
-        common_name = taxon.preferred_common_name,
-        -- No score. These are not candidates the model ranked, and a percentage
-        -- next to one would be a number nobody computed.
-        note        = taxon.rank .. ", agreed by every suggestion",
-      }
+  local topName = topTaxon and (topTaxon.name or topTaxon.preferred_common_name)
+
+  local out, seen = {}, {}
+
+  -- @param agreedThrough  The last index in this chain that every candidate
+  --                       agrees on. Everything finer is the top candidate's
+  --                       guess about its own lineage.
+  local function collect(chain, agreedThrough)
+    for i = #chain, 1, -1 do
+      local taxon = chain[i]
+      if taxon and taxon.id and wanted[taxon.rank]
+        and not taken[taxon.id] and not seen[taxon.id] then
+        seen[taxon.id] = true
+
+        local why = PanelCore.AGREED_NOTE
+        if i > agreedThrough then
+          -- Below the common ancestor nothing agreed on this rung, so the note
+          -- must not say it did -- even for a taxon whose name never arrived.
+          why = topName and ("containing " .. topName) or "from the top suggestion"
+        end
+
+        out[#out + 1] = {
+          taxon_id    = taxon.id,
+          name        = taxon.name,
+          rank        = taxon.rank,
+          common_name = taxon.preferred_common_name,
+          -- No score. These are not candidates the model ranked, and a
+          -- percentage next to one would be a number nobody computed.
+          note        = taxon.rank .. ", " .. why,
+        }
+      end
     end
   end
 
-  return rows
+  local topChain = PanelCore.chainOf(topTaxon)
+
+  local agreedThrough = 0
+  local ancestorId = commonAncestor and commonAncestor.id
+  for i, link in ipairs(topChain) do
+    if link.id == ancestorId then agreedThrough = i end
+  end
+
+  collect(topChain, agreedThrough)
+
+  -- Only reached when the common ancestor was not on the top candidate's
+  -- lineage -- a malformed response, or no candidates at all. Everything on it
+  -- is agreed on by definition.
+  local ancestorChain = PanelCore.chainOf(commonAncestor)
+  collect(ancestorChain, #ancestorChain)
+
+  -- Finest first: it is the option most people want, and an order at the top
+  -- buries the genus below it.
+  local fineness = {}
+  for i, rank in ipairs(PanelCore.FALLBACK_RANKS) do fineness[rank] = i end
+  table.sort(out, function(a, b)
+    return (fineness[a.rank] or 0) > (fineness[b.rank] or 0)
+  end)
+
+  return out
 end
 
 --- The case against claiming this taxon, if there is one.
@@ -165,9 +246,10 @@ function PanelCore.confidenceWarning(row)
   return string.format(
     "iNaturalist's model is only %.0f%% confident that this is %s.\n\n" ..
     "A wrong species-level identification is harder to undo than a vague one, " ..
-    "because other people build on it. If you are not sure, Get Suggestions " ..
-    "again and pick the genus or family instead -- a coarser record that is " ..
-    "right is worth more than a precise one that is wrong.",
+    "because other people build on it. If you are not sure, the genus and " ..
+    "order for this photo are waiting at the top of the suggestion list -- a " ..
+    "coarser record that is right is worth more than a precise one that is " ..
+    "wrong.",
     score, name)
 end
 
@@ -400,6 +482,30 @@ end
 -- Asking for suggestions
 --------------------------------------------------------------------------------
 
+--- Render the photo and score the JPEG.
+--
+-- MUST be called from inside a task.
+--
+-- @return payload, error message
+local function scoreRendered(api, photo)
+  local path, renderErr, folder = RenderPhoto.renderForSuggestions(photo)
+  if not path then
+    return nil, renderErr
+  end
+
+  -- Location and date are not decoration here. Sent as multipart fields they
+  -- collapse the candidate list dramatically, because a species from the wrong
+  -- hemisphere stops being plausible. Sent as query parameters iNaturalist
+  -- returns 200 and ignores them -- see InatAPI:scoreImage.
+  local latitude, longitude = UploadCore.locationOf(photo)
+
+  local payload, err = api:scoreImage(path, latitude, longitude,
+    UploadCore.observedOnFor(photo))
+
+  RenderPhoto.cleanUp(folder)
+  return payload, err
+end
+
 --- Suggest taxa for a photo.
 --
 -- MUST be called from inside a task: it renders and makes HTTP calls.
@@ -420,22 +526,14 @@ function PanelCore.getSuggestions(api, photo)
   local obsId = UploadCore.pluginField(photo, "inat_observation_id")
   if obsId then
     payload, err = api:scoreObservation(tonumber(obsId))
-  else
-    local path, renderErr, folder = RenderPhoto.renderForSuggestions(photo)
-    if not path then
-      return nil, renderErr
-    end
+  end
 
-    -- Location and date are not decoration here. Sent as multipart fields they
-    -- collapse the candidate list dramatically, because a species from the wrong
-    -- hemisphere stops being plausible. Sent as query parameters iNaturalist
-    -- returns 200 and ignores them -- see InatAPI:scoreImage.
-    local latitude, longitude = UploadCore.locationOf(photo)
-
-    payload, err = api:scoreImage(path, latitude, longitude,
-      UploadCore.observedOnFor(photo))
-
-    RenderPhoto.cleanUp(folder)
+  -- The link is a shortcut, never a requirement. A remembered id that
+  -- iNaturalist will not score -- deleted there, or a photo somebody else
+  -- owns -- must not cost the user the suggestions they could always have had
+  -- from the pixels in front of them.
+  if not payload then
+    payload, err = scoreRendered(api, photo)
   end
 
   if not payload then return nil, err end
@@ -444,24 +542,37 @@ function PanelCore.getSuggestions(api, photo)
   return PanelCore.withFallbacks(api, rows, commonAncestor), nil
 end
 
---- Put the coarser options at the top of the list, when there should be any.
+--- Put the coarser options at the top of the list.
 --
--- MUST be called from inside a task: it may fetch the ancestor's lineage.
+-- MUST be called from inside a task: it fetches lineages.
 --
 -- At the top rather than the bottom because that is where the answer the user
--- should probably pick belongs. A safer choice below eight species is one
--- nobody scrolls to.
+-- should probably pick belongs. A safer choice below ten species is one nobody
+-- scrolls to.
+--
+-- One `/taxa/{id}` fetch in the ordinary case: the top candidate's lineage
+-- passes through the common ancestor, so the whole ladder comes out of it. The
+-- second fetch only happens when it does not.
 function PanelCore.withFallbacks(api, rows, commonAncestor)
   rows = rows or {}
 
-  local topScore = rows[1] and tonumber(rows[1].combined_score)
-  if not commonAncestor then return rows end
-  if topScore and topScore >= PanelCore.CONFIDENT_SCORE then return rows end
+  local top = rows[1]
+  local topTaxon
+  if top and top.taxon_id then
+    topTaxon = SyncCore.withAncestors(api, {
+      id                    = top.taxon_id,
+      name                  = top.name,
+      rank                  = top.rank,
+      preferred_common_name = top.common_name,
+    })
+  end
 
-  -- Only now is the extra request worth making. A confident list never pays for
-  -- a lineage it will not show.
-  local fallbacks = PanelCore.fallbackRows(
-    SyncCore.withAncestors(api, commonAncestor), topScore)
+  local ancestor = commonAncestor
+  if ancestor and not PanelCore.chainHas(topTaxon, ancestor.id) then
+    ancestor = SyncCore.withAncestors(api, ancestor)
+  end
+
+  local fallbacks = PanelCore.coarserRows(topTaxon, ancestor, rows)
 
   local combined = {}
   for _, row in ipairs(fallbacks) do combined[#combined + 1] = row end
@@ -489,26 +600,39 @@ end
 -- frames were taken of it.
 --
 -- @param options  onEvent(message) progress callback, sleep for the upload
---                 verifier
--- @return observationId, url, list of error strings
+--                 verifier, isCanceled() checked at every step
+-- @return observationId, url, list of error strings, true when the user
+--         cancelled partway
 function PanelCore.upload(catalog, api, settings, photos, options)
   options  = options or {}
   settings = settings or {}
-  local onEvent = options.onEvent or function() end
+  local onEvent    = options.onEvent or function() end
+  local isCanceled = options.isCanceled or function() return false end
 
   if not photos or #photos == 0 then
-    return nil, nil, { "Select at least one photo first." }
+    return nil, nil, { "Select at least one photo first." }, false
   end
 
   local errors = {}
 
   onEvent("Rendering " .. #photos .. " photo(s)…")
-  local rendered, renderFailures, folder = RenderPhoto.render(photos, {
-    settings = settings,
+  local rendered, renderFailures, folder, renderCanceled = RenderPhoto.render(photos, {
+    settings   = settings,
+    onEvent    = onEvent,
+    isCanceled = isCanceled,
   })
 
   for _, failure in ipairs(renderFailures) do
     errors[#errors + 1] = failure
+  end
+
+  -- Nothing has been created on iNaturalist yet, so a cancel here is free:
+  -- delete the JPEGs and go, without the render failures, which are only
+  -- interesting when the run was meant to finish.
+  if renderCanceled or isCanceled() then
+    RenderPhoto.cleanUp(folder)
+    logger:info("Upload cancelled before the observation was created")
+    return nil, nil, {}, true
   end
 
   if #rendered == 0 then
@@ -516,30 +640,80 @@ function PanelCore.upload(catalog, api, settings, photos, options)
     if #errors == 0 then
       errors[#errors + 1] = RenderPhoto.FAILED_MESSAGE
     end
-    return nil, nil, errors
+    return nil, nil, errors, false
   end
 
   onEvent("Creating the observation…")
   local seen = {}
-  local observationId, uuid, resolveErr =
+  local observationId, uuid, resolveErr, wasCreated =
     UploadCore.resolveObservation(api, settings, photos[1], seen, errors)
 
   if not observationId then
     RenderPhoto.cleanUp(folder)
     errors[#errors + 1] = resolveErr or "Could not create the observation."
-    return nil, nil, errors
+    return nil, nil, errors, false
+  end
+
+  --- Undo as much of this run as it is ours to undo.
+  --
+  -- Only an observation this call created is deleted. Re-uploading to one that
+  -- already existed is the other half of the same button, and there a cancel
+  -- means "stop adding photos", not "destroy the record I made last week" --
+  -- which is why resolveObservation has to say which of the two happened.
+  --
+  -- Deleting it is what makes Cancel worth pressing. Leaving the empty
+  -- observation behind is exactly the state that has to be cleaned up by hand
+  -- on the website afterwards, and the photos are left unlinked because
+  -- nothing was ever written to them: recordObservation has not run yet.
+  local function abandon()
+    RenderPhoto.cleanUp(folder)
+
+    if not wasCreated then
+      logger:info("Upload cancelled; left observation "
+        .. tostring(observationId) .. " alone because it already existed")
+      return nil, nil, {}, true
+    end
+
+    onEvent("Cancelling; removing the observation…")
+    local _, deleteErr = api:deleteObservation(observationId)
+    if deleteErr then
+      logger:warn("Could not delete cancelled observation "
+        .. tostring(observationId) .. ": " .. tostring(deleteErr))
+      -- Reported, unlike every other part of a cancel. An observation left on
+      -- iNaturalist is a public record the user believes they just called off,
+      -- and the only way they can find out is being told.
+      return nil, nil, {
+        "The upload was cancelled, but observation " .. tostring(observationId)
+        .. " could not be removed from iNaturalist (" .. tostring(deleteErr)
+        .. "). You may want to delete it there.",
+      }, true
+    end
+
+    logger:info("Upload cancelled; deleted observation " .. tostring(observationId))
+    return nil, nil, {}, true
+  end
+
+  if isCanceled() then
+    return abandon()
   end
 
   local attached = 0
   for i, item in ipairs(rendered) do
+    if isCanceled() then
+      return abandon()
+    end
+
     onEvent("Uploading photo " .. i .. " of " .. #rendered .. "…")
 
     local _, uploadErr = api:uploadPhotoVerified(observationId, item.path, {
-      sleep   = options.sleep,
-      onEvent = onEvent,
+      sleep      = options.sleep,
+      onEvent    = onEvent,
+      isCanceled = isCanceled,
     })
 
-    if uploadErr then
+    if uploadErr == InatAPI.CANCELED then
+      return abandon()
+    elseif uploadErr then
       errors[#errors + 1] = uploadErr
     else
       attached = attached + 1
@@ -554,7 +728,7 @@ function PanelCore.upload(catalog, api, settings, photos, options)
     -- the panel report success.
     errors[#errors + 1] = "Observation " .. tostring(observationId)
       .. " was created but no photo could be attached to it."
-    return nil, nil, errors
+    return nil, nil, errors, false
   end
 
   local url = UploadCore.recordObservation(catalog, photos, observationId, uuid)
@@ -575,7 +749,7 @@ function PanelCore.upload(catalog, api, settings, photos, options)
   end
 
   logger:info("Uploaded " .. attached .. " photo(s) as observation " .. tostring(observationId))
-  return observationId, url, errors
+  return observationId, url, errors, false
 end
 
 --------------------------------------------------------------------------------
@@ -772,7 +946,12 @@ function PanelCore.syncBack(catalog, api, photos, errors)
 
   for _, photo in ipairs(photos or {}) do
     local status, err = SyncCore.syncPhoto(catalog, photo, api)
-    if status == SyncCore.FAILED then
+    -- MISSING counts as a failure here and nowhere else. Everywhere else it
+    -- means the observation was deleted; a second after an upload it almost
+    -- always means the search index has not caught up yet. Either way there is
+    -- nothing to unlink -- the upload that just succeeded is the evidence the
+    -- observation exists -- so it is reported and left alone.
+    if status == SyncCore.FAILED or status == SyncCore.MISSING then
       if errors then errors[#errors + 1] = err end
       logger:warn("Sync-back failed: " .. tostring(err))
     else

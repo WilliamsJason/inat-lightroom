@@ -55,9 +55,11 @@ section:
 - The update finishes installing **when you quit Lightroom**, and is in use the
   next time you start it.
 
-The plugin also checks once a day on its own and tells you once about each new
-version. Untick **Check for updates automatically** to stop that; the button
-still works.
+The plugin also checks once a day on its own. When it finds a new version it
+offers it once, in a dialog with **Update** and **Later** — **Update** does the
+same download-verify-stage as the button above, so a new version is two clicks
+from wherever you happen to be. Untick **Check for updates automatically** to
+stop the check; the buttons still work.
 
 Nothing is installed without you clicking it. If your plugin folder is
 read-only the plugin says so rather than failing half way — download the release
@@ -153,6 +155,12 @@ rendering first.
 
 The other buttons:
 
+- **Cancel** — stop an upload that is under way. It sits beside the upload
+  button and is greyed out until there is something to stop. Pressing it stops
+  the rendering, stops uploading photos, and deletes the observation the run had
+  just created on iNaturalist, so nothing is left behind and no photo is linked.
+  An observation that was already there — the case where you were adding photos
+  to one you made earlier — is left alone.
 - **Sync** — pull the current community determination for the selection.
 - **Set on Map** — switch to Lightroom's Map module to give the photo a
   location. See below for why this is worth doing.
@@ -257,30 +265,35 @@ back if the API returns it to you as the owner.
 
 ### Picking a rank you can defend
 
-Suggestions come back with a confidence score. When the best one is under 75%,
-the plugin puts coarser options at the **top** of the list — genus, family,
-order — each marked *"agreed by every suggestion"*.
+Every suggestion list opens with the coarser options — genus, family, order —
+above the species, whatever the top score is. 80% sure of a species is one photo
+in five filed under a wrong name, and stepping back a rank is a choice worth
+having in front of you rather than one the plugin makes for you.
 
-Those come from iNaturalist's own `common_ancestor`: the most specific taxon its
-model is confident about across *all* the candidates. If five results argue
-about the species but all sit in one genus, that genus is the honest answer, and
-it is the one the website itself falls back to. The ladder is never built by
-walking up from the top result, because at 40% that result's family is exactly
-what is in doubt — and it never offers a rank finer than the common ancestor.
+Each row says where it came from, because the two sources are not equally safe:
+
+- *"agreed by top suggestions"* — the taxon is at or above iNaturalist's own
+  `common_ancestor`, the most specific taxon its model is confident about across
+  *all* the candidates. If five results argue about the species but all sit in
+  one genus, that genus is the honest answer, and it is the one the website
+  itself falls back to.
+- *"containing Ischnura erratica"* — the rung comes from the top candidate's own
+  lineage, below the common ancestor. It is only right if that candidate is in
+  the right genus, so the note names it instead of implying the model agreed.
 
 They sit at the top rather than the bottom because a safer choice listed below
-eight species is one nobody scrolls to.
+ten species is one nobody scrolls to.
 
-For the same reason, identifying something as a **species** on a score below 75%
-asks for confirmation first — on upload and on update, since an observation that
-already exists is a published record, not a safer place to be wrong. Choosing
-the genus instead is never questioned. A coarse record that is right is worth
-more than a precise one that is wrong, and it is much easier for somebody else
-to refine than to argue down.
+Identifying something as a **species** on a score below 75% asks for
+confirmation first — on upload and on update, since an observation that already
+exists is a published record, not a safer place to be wrong. Choosing the genus
+instead is never questioned. A coarse record that is right is worth more than a
+precise one that is wrong, and it is much easier for somebody else to refine
+than to argue down.
 
 ### Using a suggestion without publishing anything
 
-**Sync guess to Metadata tags** sits next to the upload button and does not
+**Update photo tags** sits next to the upload button and does not
 upload: it writes the chosen taxon's full keyword hierarchy and taxon fields into
 the catalog and tells iNaturalist nothing. For the frames worth filing under the
 right name and not worth publishing — a duplicate, a soft focus, something
@@ -354,6 +367,26 @@ A freshly created observation has no community taxon until somebody identifies
 it, so **Not identified yet** is the normal result for anything just uploaded.
 It is reported separately from errors, and the sync still records the
 observation's UUID, URL and quality grade.
+
+### Observations that are no longer there
+
+Deleting an observation on the iNaturalist website leaves the Lightroom photos
+pointing at nothing. That used to be a wall of sync errors and a link to clear
+by hand on every photo.
+
+A sync now recognises it. Photos whose observation iNaturalist no longer has are
+counted separately from errors, and at the end of the run the sync offers to
+**Unlink All** of them — one question for the whole run, so clearing up after
+deleting an accidental folder-sized upload is one click rather than one per
+photo. Declining leaves everything linked; nothing is unlinked without being
+asked, and unlinking clears the Lightroom link only, keeping the keywords.
+
+Every candidate is double-checked against iNaturalist before it is offered,
+because an observation is also absent from the search index for the first few
+minutes of its life. Without that check, syncing right after an upload would
+offer to throw away the link it had just written. Anything that cannot be
+checked — the site is down, the request timed out — is reported as an error and
+left linked.
 
 ### Where the keywords go
 

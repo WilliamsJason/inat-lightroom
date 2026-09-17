@@ -48,9 +48,9 @@ Settings.DEFAULTS = {
   --
   -- On by default: a plugin that talks to a live API is worth keeping current,
   -- and the check is one request a day. Checking is all it does -- installing
-  -- an update stays a button in the Plug-in Manager, because replacing the
-  -- code that touches someone's catalog while they are not looking is not a
-  -- default anyone chose.
+  -- an update is always a button someone pressed, in the Plug-in Manager or in
+  -- the dialog the check raises, because replacing the code that touches
+  -- someone's catalog while they are not looking is not a default anyone chose.
   update_check_automatically = true,
 
   -- Bookkeeping rather than settings. They live here so that everything stored

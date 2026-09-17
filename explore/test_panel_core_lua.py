@@ -121,8 +121,17 @@ def fake_api(plugin, **options):
             return {}, nil
           end
 
+          function api:deleteObservation(id)
+            record("delete", id)
+            if opts.deleteError then return nil, opts.deleteError end
+            return {}, nil
+          end
+
           function api:scoreObservation(id)
             record("scoreObservation", id)
+            if opts.scoreObservationError then
+              return nil, opts.scoreObservationError
+            end
             if opts.scoreError then return nil, opts.scoreError end
             return opts.score or { results = {} }, nil
           end
@@ -145,6 +154,8 @@ def fake_api(plugin, **options):
 
           function api:getTaxon(id)
             record("getTaxon", id)
+            -- Per-id answers, for the callers that fetch more than one taxon.
+            if opts.taxa and opts.taxa[id] then return opts.taxa[id], nil end
             return opts.taxon, nil
           end
 
@@ -342,6 +353,32 @@ def test_scoring_cleans_up_the_rendered_file(plugin, core):
     assert len(plugin.deleted_paths) == 1
 
 
+def test_a_dead_link_still_gets_suggestions_from_the_photo(plugin, core):
+    """The observation was deleted on iNaturalist, so score_observation 404s.
+    The pixels are still here, and they are what the user asked about."""
+    photo = plugin.new_photo(inat_observation_id="4242")
+    api, calls = fake_api(
+        plugin, scoreObservationError="GET .../score_observation/4242 "
+                                      "failed with HTTP 404: {}")
+
+    result, err = core["getSuggestions"](api, photo)
+
+    assert err is None
+    assert result is not None
+    assert methods(calls) == ["scoreObservation", "scoreImage"]
+
+
+def test_a_dead_link_that_also_fails_to_score_reports_the_error(plugin, core):
+    photo = plugin.new_photo(inat_observation_id="4242")
+    api, _ = fake_api(plugin, scoreObservationError="gone",
+                      scoreError="the vision service is down")
+
+    result, err = core["getSuggestions"](api, photo)
+
+    assert result is None
+    assert "vision service" in err
+
+
 def test_a_failed_render_reports_rather_than_scoring_nothing(plugin, core):
     plugin.set_render_failure("the disk is full")
     api, calls = fake_api(plugin)
@@ -384,10 +421,11 @@ def test_asking_with_no_photo_says_so(plugin, core):
 # ---------------------------------------------------------------------------
 
 
-def upload(plugin, core, photos, api, **overrides):
+def upload(plugin, core, photos, api, options=None, **overrides):
     return core["upload"](plugin.catalog, api, settings(plugin, **overrides),
                           plugin.runtime.table_from(
-                              {i + 1: p for i, p in enumerate(photos)}))
+                              {i + 1: p for i, p in enumerate(photos)}),
+                          plugin.runtime.table_from(options or {}))
 
 
 def test_the_whole_selection_becomes_one_observation(plugin, core):
@@ -396,7 +434,7 @@ def test_the_whole_selection_becomes_one_observation(plugin, core):
     photos = [plugin.new_photo(), plugin.new_photo(), plugin.new_photo()]
     api, calls = fake_api(plugin)
 
-    obs_id, url, errors = upload(plugin, core, photos, api)
+    obs_id, url, errors, _ = upload(plugin, core, photos, api)
 
     assert obs_id == 4242
     assert methods(calls).count("create") == 1
@@ -440,7 +478,7 @@ def test_a_failed_upload_does_not_record_an_empty_observation(plugin, core):
     photo = plugin.new_photo()
     api, _ = fake_api(plugin, uploadError="the connection dropped")
 
-    obs_id, _, errors = upload(plugin, core, [photo], api)
+    obs_id, _, errors, _ = upload(plugin, core, [photo], api)
 
     assert obs_id is None
     assert photo["_props"]["inat_observation_id"] is None
@@ -454,7 +492,7 @@ def test_one_failed_photo_out_of_several_still_records_the_link(plugin, core):
     photos = [plugin.new_photo(), plugin.new_photo(), plugin.new_photo()]
     api, _ = fake_api(plugin, uploadFailAfter=2)
 
-    obs_id, _, errors = upload(plugin, core, photos, api)
+    obs_id, _, errors, _ = upload(plugin, core, photos, api)
 
     assert obs_id == 4242
     for photo in photos:
@@ -470,7 +508,7 @@ def test_nothing_selected_is_refused(plugin, core):
     failed", which sends somebody looking for a problem with their photo."""
     api, calls = fake_api(plugin)
 
-    obs_id, _, errors = upload(plugin, core, [], api)
+    obs_id, _, errors, _ = upload(plugin, core, [], api)
 
     assert obs_id is None
     assert methods(calls) == []
@@ -484,7 +522,7 @@ def test_a_render_that_produces_nothing_never_creates_an_observation(plugin, cor
     plugin.set_render_failure("no renditions")
     api, calls = fake_api(plugin)
 
-    obs_id, _, _ = upload(plugin, core, [plugin.new_photo()], api)
+    obs_id, _, _, _ = upload(plugin, core, [plugin.new_photo()], api)
 
     assert obs_id is None
     assert "create" not in methods(calls)
@@ -511,7 +549,7 @@ def test_a_project_failure_does_not_fail_the_upload(plugin, core):
     invite a second upload of something that already worked."""
     api, _ = fake_api(plugin, projectError="not a member of that project")
 
-    obs_id, _, errors = upload(plugin, core, [plugin.new_photo()], api,
+    obs_id, _, errors, _ = upload(plugin, core, [plugin.new_photo()], api,
                                inat_project_id="12345")
 
     assert obs_id == 4242
@@ -567,11 +605,147 @@ def test_a_sync_that_fails_does_not_undo_the_upload(plugin, core):
     photo = plugin.new_photo()
     api, _ = fake_api(plugin)  # getObservation returns nil
 
-    obs_id, _, errors = upload(plugin, core, [photo], api)
+    obs_id, _, errors, _ = upload(plugin, core, [photo], api)
 
     assert obs_id == 4242
     assert photo["_props"]["inat_observation_id"] == "4242"
     assert len(strings(errors)) > 0
+
+
+# ---------------------------------------------------------------------------
+# Cancelling an upload
+# ---------------------------------------------------------------------------
+#
+# The case this exists for, verbatim: Upload was pressed with a whole folder
+# selected instead of one photo. There was no way to stop it, and undoing it
+# afterwards meant deleting the observation on the website and then clearing
+# the link off every photo by hand. So cancelling has to do both halves --
+# leave nothing behind on iNaturalist and leave nothing written in the catalog.
+
+
+def cancel_after(n):
+    """An isCanceled() that says no n times and yes from then on."""
+    calls = {"n": 0}
+
+    def canceled():
+        calls["n"] += 1
+        return calls["n"] > n
+
+    return canceled
+
+
+def test_cancelling_before_the_observation_exists_creates_nothing(plugin, core):
+    api, calls = fake_api(plugin)
+
+    obs_id, url, errors, canceled = upload(
+        plugin, core, [plugin.new_photo()], api,
+        options={"isCanceled": lambda: True})
+
+    assert canceled is True
+    assert obs_id is None
+    assert url is None
+    assert strings(errors) == []
+    assert methods(calls) == []
+
+
+def test_cancelling_still_deletes_the_rendered_files(plugin, core):
+    """The temp folder is this plugin's own; nobody else will ever remove it."""
+    api, _ = fake_api(plugin)
+
+    upload(plugin, core, [plugin.new_photo()], api,
+           options={"isCanceled": lambda: True})
+
+    assert len(plugin.deleted_paths) == 1
+
+
+def test_cancelling_stops_the_render_rather_than_draining_it(plugin, core):
+    """A folder-sized selection is minutes of exporting. A cancel that only
+    took effect once every photo had been rendered would be a cancel in name."""
+    api, _ = fake_api(plugin)
+    photos = [plugin.new_photo() for _ in range(4)]
+
+    upload(plugin, core, photos, api, options={"isCanceled": cancel_after(1)})
+
+    # First rendered, the rest skipped -- not simply never asked for.
+    assert list(plugin.export_sessions[0]["skipped"].values()) == [2, 3, 4]
+
+
+def test_cancelling_after_the_observation_exists_deletes_it(plugin, core):
+    """The heart of it. An empty observation left on iNaturalist is exactly the
+    thing the user then has to go and delete by hand."""
+    api, calls = fake_api(plugin)
+
+    obs_id, _, _, canceled = upload(
+        plugin, core, [plugin.new_photo()], api,
+        options={"isCanceled": cancel_after(2)})
+
+    assert canceled is True
+    assert obs_id is None
+    assert "delete" in methods(calls)
+    assert call_named(calls, "delete") == [4242]
+
+
+def test_a_cancelled_upload_leaves_the_photos_unlinked(plugin, core):
+    """Nothing to clean up in the catalog afterwards, which was the other half
+    of the manual work."""
+    photo = plugin.new_photo()
+    api, _ = fake_api(plugin)
+
+    upload(plugin, core, [photo], api, options={"isCanceled": cancel_after(2)})
+
+    assert photo["_props"]["inat_observation_id"] in (None, "")
+
+
+def test_cancelling_does_not_delete_an_observation_it_did_not_create(plugin, core):
+    """Re-uploading to an existing observation is the same button. Cancelling
+    there means "stop adding photos", not "destroy the record"."""
+    photo = plugin.new_photo(inat_observation_uuid="known-uuid")
+    api, calls = fake_api(plugin,
+                          found=deep(plugin, {"id": 4242, "uuid": "known-uuid"}))
+
+    _, _, _, canceled = upload(plugin, core, [photo], api,
+                               options={"isCanceled": cancel_after(2)})
+
+    assert canceled is True
+    assert "delete" not in methods(calls)
+
+
+def test_a_cancel_that_cannot_tidy_up_says_so(plugin, core):
+    """Silence here would leave a public observation the user believes they
+    called off, and no way to find out."""
+    api, _ = fake_api(plugin, deleteError="the server said no")
+
+    _, _, errors, canceled = upload(plugin, core, [plugin.new_photo()], api,
+                                    options={"isCanceled": cancel_after(2)})
+
+    assert canceled is True
+    assert "4242" in strings(errors)[0]
+
+
+def test_cancelling_stops_before_the_next_photo_uploads(plugin, core):
+    """Not after all of them. Each photo is an upload plus a verification poll,
+    so carrying on to the end of the list is most of the wait the user asked to
+    stop."""
+    api, calls = fake_api(plugin)
+    photos = [plugin.new_photo() for _ in range(3)]
+
+    # Renders three, creates the observation, uploads one, then stops.
+    upload(plugin, core, photos, api, options={"isCanceled": cancel_after(6)})
+
+    assert len(call_named(calls, "upload")) == 1
+
+
+def test_an_uncancelled_upload_still_records_the_link(plugin, core):
+    """The guard against a cancel check that is always true by accident."""
+    photo = plugin.new_photo()
+    api, _ = fake_api(plugin, observation=deep(plugin, OBSERVATION))
+
+    obs_id, _, _, canceled = upload(plugin, core, [photo], api,
+                                    options={"isCanceled": lambda: False})
+
+    assert canceled is False
+    assert obs_id == 4242
+    assert photo["_props"]["inat_observation_id"] == "4242"
 
 
 # ---------------------------------------------------------------------------
@@ -952,90 +1126,168 @@ def ranks_of(rows):
     return [rows[i]["rank"] for i in range(1, len(rows) + 1)]
 
 
-def test_a_confident_list_is_offered_no_fallback(plugin, core):
-    """Offering an escape hatch beside a 98% answer would make every
-    identification look like a guess."""
-    assert len(core["fallbackRows"](ancestor(plugin), 98)) == 0
+def notes_of(rows):
+    return [rows[i]["note"] for i in range(1, len(rows) + 1)]
 
 
-def test_an_unconfident_list_gets_coarser_options(plugin, core):
-    assert ranks_of(core["fallbackRows"](ancestor(plugin), 40)) == [
-        "genus", "family", "order"]
+def top_hit(plugin, rank="species", name="Ischnura erratica", ancestors=None):
+    """The best-scoring candidate, with its lineage as /taxa/{id} returns it."""
+    return deep(plugin, {
+        "id": 103486,
+        "name": name,
+        "rank": rank,
+        "ancestors": ancestors if ancestors is not None else [
+            {"id": 1, "name": "Animalia", "rank": "kingdom"},
+            {"id": 47158, "name": "Insecta", "rank": "class"},
+            {"id": 47792, "name": "Odonata", "rank": "order"},
+            {"id": 47208, "name": "Zygoptera", "rank": "suborder"},
+            {"id": 47209, "name": "Coenagrionidae", "rank": "family"},
+            {"id": 52054, "name": "Ischnura", "rank": "genus",
+             "preferred_common_name": "Forktails"},
+        ],
+    })
+
+
+def species_rows(plugin, score=40, taxon_id=103486):
+    return deep(plugin, [{"taxon_id": taxon_id, "name": "Ischnura erratica",
+                          "rank": "species", "combined_score": score}])
+
+
+def test_a_confident_list_still_offers_coarser_ranks(plugin, core):
+    """80% sure of a species is one photo in five filed under a wrong name. The
+    genus above it is very often right where the species is not, and whether to
+    take that trade is the photographer's call, not a threshold's."""
+    rows = core["coarserRows"](top_hit(plugin), ancestor(plugin),
+                               species_rows(plugin, score=98))
+
+    assert ranks_of(rows) == ["genus", "family", "order"]
 
 
 def test_the_most_specific_safe_option_comes_first(plugin, core):
     """It is the one most people want: the finest rank still defensible. Put
     the order first and the useful answer is the one nobody reads."""
-    assert ranks_of(core["fallbackRows"](ancestor(plugin), 40))[0] == "genus"
+    rows = core["coarserRows"](top_hit(plugin), ancestor(plugin), None)
 
-
-def test_the_ladder_never_goes_below_the_common_ancestor(plugin, core):
-    """The whole justification for these rows is that every candidate agrees at
-    or above the common ancestor. A genus taken from the top result's lineage
-    would assume that result is right -- exactly what a 40% score doubts."""
-    family = ancestor(plugin, rank="family", name="Coenagrionidae", ancestors=[
-        {"id": 1, "name": "Animalia", "rank": "kingdom"},
-        {"id": 47158, "name": "Insecta", "rank": "class"},
-        {"id": 47792, "name": "Odonata", "rank": "order"},
-    ])
-
-    rows = core["fallbackRows"](family, 40)
-
-    assert "genus" not in ranks_of(rows)
-    assert ranks_of(rows) == ["family", "order"]
+    assert ranks_of(rows)[0] == "genus"
 
 
 def test_intermediate_ranks_are_left_out(plugin, core):
     """Suborder and superfamily are real ranks and useless as choices. A list
     with all of them is a taxonomy lesson, not a decision."""
-    assert "suborder" not in ranks_of(core["fallbackRows"](ancestor(plugin), 40))
+    rows = core["coarserRows"](top_hit(plugin), ancestor(plugin), None)
+
+    assert "suborder" not in ranks_of(rows)
 
 
-def test_a_fallback_row_says_why_it_is_there(plugin, core):
-    rows = core["fallbackRows"](ancestor(plugin), 40)
+def test_a_rank_every_candidate_agrees_on_says_so(plugin, core):
+    """At or above the common ancestor, nothing is being assumed about which
+    candidate is right -- and that is the row's whole selling point."""
+    rows = core["coarserRows"](top_hit(plugin), ancestor(plugin), None)
 
-    assert rows[1]["note"] and "agreed" in rows[1]["note"]
+    assert all("agreed by top suggestions" in note for note in notes_of(rows))
 
 
-def test_a_fallback_row_carries_no_invented_score(plugin, core):
+def test_a_rank_below_the_common_ancestor_names_what_it_contains(plugin, core):
+    """The genus of the top candidate is only right if the top candidate is,
+    and a row that quietly claimed the model agreed would be a lie. It is still
+    offered: it is exactly what someone stepping back one rank wants."""
+    family = ancestor(plugin, rank="family", name="Coenagrionidae", ancestors=[
+        {"id": 1, "name": "Animalia", "rank": "kingdom"},
+        {"id": 47792, "name": "Odonata", "rank": "order"},
+    ])
+    family["id"] = 47209
+
+    rows = core["coarserRows"](top_hit(plugin), family, None)
+
+    assert ranks_of(rows) == ["genus", "family", "order"]
+    assert rows[1]["note"] == "genus, containing Ischnura erratica"
+    assert "agreed by top suggestions" in rows[2]["note"]
+
+
+def test_a_coarser_row_carries_no_invented_score(plugin, core):
     """These are not candidates the model ranked. A percentage beside one would
     be a number nobody computed."""
-    rows = core["fallbackRows"](ancestor(plugin), 40)
+    rows = core["coarserRows"](top_hit(plugin), ancestor(plugin), None)
 
     assert rows[1]["combined_score"] is None
     assert "%" not in core["describeSuggestion"](rows[1])
 
 
-def test_no_common_ancestor_means_no_fallback(plugin, core):
-    """The model had no confident shared ancestor, so there is nothing honest
-    to offer."""
-    assert len(core["fallbackRows"](None, 40)) == 0
+def test_a_taxon_already_in_the_list_is_not_offered_twice(plugin, core):
+    """The model itself suggested the genus, with a score. Repeating it as a
+    scoreless coarser row makes one taxon look like two choices."""
+    rows = deep(plugin, [{"taxon_id": 52054, "name": "Ischnura",
+                          "rank": "genus", "combined_score": 61}])
+
+    coarser = core["coarserRows"](top_hit(plugin), ancestor(plugin), rows)
+
+    assert ranks_of(coarser) == ["family", "order"]
 
 
-def test_an_empty_list_still_gets_the_fallback(plugin, core):
-    """No score at all is the least confident case there is, not the most."""
-    assert len(core["fallbackRows"](ancestor(plugin), None)) == 3
+def test_no_candidate_lineage_falls_back_to_the_common_ancestor(plugin, core):
+    """An empty result list, or one whose top row has no id. The ancestor is
+    still a ladder worth offering."""
+    rows = core["coarserRows"](None, ancestor(plugin), None)
+
+    assert ranks_of(rows) == ["genus", "family", "order"]
+
+
+def test_nothing_to_walk_means_nothing_to_offer(plugin, core):
+    assert len(core["coarserRows"](None, None, None)) == 0
 
 
 def test_the_fallbacks_go_above_the_species(plugin, core):
-    api, _ = fake_api(plugin, taxon=ancestor(plugin))
-    rows = deep(plugin, [{"taxon_id": 1, "name": "Ischnura erratica",
-                          "rank": "species", "combined_score": 40}])
+    api, _ = fake_api(plugin, taxon=top_hit(plugin))
+    rows = species_rows(plugin, score=40)
 
     combined = core["withFallbacks"](api, rows, ancestor(plugin))
 
     assert ranks_of(combined) == ["genus", "family", "order", "species"]
 
 
-def test_a_confident_list_is_passed_straight_through(plugin, core):
-    api, calls = fake_api(plugin, taxon=ancestor(plugin))
-    rows = deep(plugin, [{"taxon_id": 1, "name": "Ischnura erratica",
-                          "rank": "species", "combined_score": 98}])
+def test_a_confident_list_gets_the_same_ladder(plugin, core):
+    """The one thing this change is for: at 98% the coarser ranks used to
+    vanish, so wanting the genus meant typing it by hand."""
+    api, _ = fake_api(plugin, taxon=top_hit(plugin))
+    rows = species_rows(plugin, score=98)
 
     combined = core["withFallbacks"](api, rows, ancestor(plugin))
 
-    assert ranks_of(combined) == ["species"]
-    assert "getTaxon" not in methods(calls), "no lineage is worth fetching here"
+    assert ranks_of(combined) == ["genus", "family", "order", "species"]
+
+
+def test_one_lineage_answers_both_questions(plugin, core):
+    """The common ancestor is on the top candidate's lineage in every ordinary
+    response, so the ladder comes out of a single /taxa/{id} -- the ancestor's
+    own lineage is never worth asking for."""
+    api, calls = fake_api(plugin, taxon=top_hit(plugin))
+    bare = deep(plugin, {"id": 52054, "name": "Ischnura", "rank": "genus"})
+
+    core["withFallbacks"](api, species_rows(plugin), bare)
+
+    assert methods(calls).count("getTaxon") == 1
+
+
+def test_a_common_ancestor_off_the_lineage_is_fetched_too(plugin, core):
+    """It should not happen, and if it does the agreed rungs are still worth
+    more than the assumed ones."""
+    stray = deep(plugin, {"id": 999999, "name": "Elsewhere", "rank": "genus"})
+
+    api, calls = fake_api(plugin, taxon=top_hit(plugin))
+
+    core["withFallbacks"](api, species_rows(plugin), stray)
+
+    assert methods(calls).count("getTaxon") == 2
+
+
+def test_the_top_candidate_is_looked_up_by_its_own_id(plugin, core):
+    """Fetching the ancestor's lineage twice would give a ladder that stops at
+    the ancestor -- the old behaviour, silently."""
+    api, calls = fake_api(plugin, taxon=top_hit(plugin))
+
+    core["withFallbacks"](api, species_rows(plugin), ancestor(plugin))
+
+    assert call_named(calls, "getTaxon")[0] == 103486
 
 
 # ---------------------------------------------------------------------------

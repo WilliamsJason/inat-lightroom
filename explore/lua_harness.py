@@ -384,6 +384,14 @@ stubs.LrDialogs = {
       { title = title, message = message, style = style }
   end,
 
+  -- The transient toast. Recorded alongside the modals because it is the only
+  -- evidence that something told the user work had started, and "nothing
+  -- appeared to happen" is the failure it exists to prevent.
+  showBezel = function(message, duration)
+    dialogMessages[#dialogMessages + 1] =
+      { title = "", message = message, style = "bezel", duration = duration }
+  end,
+
   -- Records the args and answers whatever the test told it to, defaulting to
   -- Cancel. Recording matters as much as the answer: the wording a dialog is
   -- built with, and the state its property table starts in, are the parts a
@@ -931,6 +939,7 @@ stubs.LrExportSession = function(params)
     settings = params.exportSettings,
     photos = photos,
     started = false,
+    skipped = {},
   }
 
   function session:countRenditions() return #photos end
@@ -944,11 +953,19 @@ stubs.LrExportSession = function(params)
       local photo = photos[index]
       if not photo then return nil end
 
+      local this = index
       local rendition = {
         photo = photo,
         waitForRender = function()
           if renderFailing then return false, renderFailureMessage end
-          return true, "/tmp/lr-export/" .. tostring(index) .. ".jpg"
+          return true, "/tmp/lr-export/" .. tostring(this) .. ".jpg"
+        end,
+        -- The real one tells the export not to bother with this photo. Recorded
+        -- rather than ignored, because "did cancelling actually stop the work"
+        -- is not answerable from the rendered list alone -- a loop that broke
+        -- out early and one that skipped the rest look identical from there.
+        skipRender = function(_, message)
+          session.skipped[#session.skipped + 1] = this
         end,
       }
       -- Yields index alongside the rendition, the way an export provider's

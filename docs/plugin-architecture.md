@@ -268,14 +268,18 @@ routes.** A linked photo can be scored by `GET /computervision/score_observation
 — iNaturalist already holds the image, no render, and scoring the observation's
 own photos is a better question than scoring a fresh JPEG of one of them. Only
 an unlinked photo needs `RenderPhoto.renderForSuggestions` and
-`score_image`, and that render is cleaned up afterwards.
+`score_image`, and that render is cleaned up afterwards. The linked route is a
+shortcut rather than a requirement: when `score_observation` fails — the
+observation was deleted on iNaturalist, or belongs to somebody else — the render
+path runs anyway, because a stale id must not cost the user suggestions the
+pixels in front of them could always have answered.
 
 **The suggestions are hand-built rows, not a list control.** A `simple_list` row
 is a string and can carry nothing else, so a per-row link out to iNaturalist is
 impossible in one; the button that used to do that job for whichever row was
 chosen is gone in favour of a **View ↗** at the end of every row. Hand-built rows
 scale badly — the SDK notes describe a thousand of them as unusable — but there
-are never more than `SUGGESTION_LIMIT` (8).
+are never more than `SUGGESTION_LIMIT` (10).
 
 A presented view tree is fixed, so `PanelCore.suggestionSlots` always returns
 exactly that many slots and the surplus are blank in both title and link: an
@@ -462,28 +466,41 @@ does: `Set-Clipboard` on Windows, `pbcopy` on macOS.
 
 ### Offering a rank the evidence supports
 
-`PanelCore.fallbackRows` prepends coarser taxa to the suggestion list when the
-top `combined_score` is below `CONFIDENT_SCORE` (75).
+`PanelCore.coarserRows` prepends coarser taxa to every suggestion list,
+confident or not. `CONFIDENT_SCORE` (75) no longer gates them: it now only
+decides whether committing a *species* asks for confirmation. A score is a claim
+about a species, and 80% sure of a species is 20% sure of nothing in particular
+— whether to step back a rank is the photographer's call, not a threshold's.
 
-The source is the vision response's `common_ancestor` — the most specific taxon
-the model is confident about *across all candidates* — and its `ancestors`,
-filtered to `FALLBACK_RANKS` (`order`, `family`, `genus`). Two properties follow
-from that choice and neither is incidental:
+Two lineages feed the ladder, filtered to `FALLBACK_RANKS` (`order`, `family`,
+`genus`), and the difference between them is written into each row's `note`
+rather than hidden:
 
-- **It never descends below the common ancestor.** Offering the top result's
-  genus would assume the top result's lineage is right, which is precisely what
-  a 40% score doubts. Everything at or above the common ancestor is agreed on by
-  every candidate.
-- **It carries no score.** These are not rows the model ranked. A percentage
-  beside one would be a number nobody computed, so the row carries a `note` and
-  `describeSuggestion` renders that in place of a percentage.
+- **At or above the vision response's `common_ancestor`** — the most specific
+  taxon the model is confident about *across all candidates* — nothing is being
+  assumed about which candidate is right. Those rows read *"agreed by top
+  suggestions"*.
+- **Below it**, the rungs come from the top candidate's own lineage and are only
+  right if that candidate is. They read *"containing Ischnura erratica"*, so the
+  assumption is named instead of dressed up as agreement.
+
+Neither carries a score. These are not rows the model ranked, so a percentage
+beside one would be a number nobody computed; the row carries a `note` and
+`describeSuggestion` renders that in place of a percentage. A taxon already
+among the candidates is never repeated as a coarser row — one taxon must not
+look like two choices.
 
 Ordered finest-first and inserted at the head of the list, because the most
 specific defensible answer is the one most people want and a safer option below
-eight species is one nobody scrolls to. The `/taxa/{id}` fetch for the lineage
-happens only when the list is unconfident, so a confident answer pays nothing.
+ten species is one nobody scrolls to. `SUGGESTION_LIMIT` rose from 8 to 10 for
+the same reason: three coarse rows against eight slots left too few species.
 
-`InatAPI.summariseSuggestions` now returns `rows, commonAncestor`. It previously
+One `/taxa/{id}` fetch pays for the whole ladder in the ordinary case. The top
+candidate's lineage passes through the common ancestor, so `chainHas` finds it
+there and the ancestor's own lineage is never asked for; the second fetch only
+happens when the response is malformed enough that it is missing.
+
+`InatAPI.summariseSuggestions` returns `rows, commonAncestor`. It previously
 discarded the ancestor entirely, which left the picker with nothing to fall back
 to but the guess already under suspicion.
 
@@ -990,9 +1007,9 @@ accurately.
 ### Checking is automatic; installing is not
 
 The check runs once a day from `LrInitPlugin`, after a delay, in its own task,
-and can be switched off in the Plug-in Manager. Installing stays a button.
-Replacing the code that touches someone's catalog while they are not looking is
-not a default anyone chose.
+and can be switched off in the Plug-in Manager. Installing stays something
+someone pressed. Replacing the code that touches someone's catalog while they
+are not looking is not a default anyone chose.
 
 A failed check resolves to "could not check", never to a silence that reads as
 "nothing new", and the timestamp is written whether or not the check succeeded —
@@ -1000,11 +1017,28 @@ recording only successes turns an offline week into a request on every launch,
 which is the behaviour rate limits exist to punish. When there is something new,
 the user is told once per version rather than once per launch.
 
+That one interruption is a confirmation with **Update** and **Later**, and
+**Update** stages the release there and then. It first offered **Show Me** and
+opened the releases page instead, which reads as helpful and is not: having
+agreed to update, you were handed a browser tab, and still had to find **File →
+Plug-in Manager**, press **Check for Updates**, and press **Download and
+Install** — three steps to reach a thing the plugin was already holding. The
+dialog now does the update; the releases page is a button in the Plug-in Manager
+for anyone who wants to read the notes before installing.
+
+Because that button is the dialog's whole offer, `UpdateCore.shouldNotify`
+declines to interrupt about a release it cannot install — one published by hand,
+with no archive attached. Nothing is recorded as notified in that case, so the
+offer still arrives if the archive appears later, and the Plug-in Manager says
+so in the meantime.
+
 The UI lives in the **Plug-in Manager** (`LrPluginInfoProvider`), which is the
 one Lightroom surface that is about the plugin rather than about photos, and
 where people already go to install and enable one. The settings window is about
 what an observation says, and the floating panel is about the photo in front of
-you; neither is about the plugin.
+you; neither is about the plugin. There is no SDK call that opens the Plug-in
+Manager, which is the other reason the dialog does the work rather than pointing
+at it.
 
 ## What comes next
 

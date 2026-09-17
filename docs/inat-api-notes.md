@@ -587,13 +587,19 @@ lineage. Walking up from result #1 assumes result #1 is in the right family —
 which, at a 40% score, is exactly what is in doubt. Walking up from
 `common_ancestor` assumes only what every candidate already agrees on.
 
-So the rank ladder the plugin offers is built from `common_ancestor` and its
-`ancestors`, never from a single result, and it never descends below it.
+So the ladder the plugin offers is built from `common_ancestor` and its
+`ancestors` wherever it can be, and those rows say *"agreed by top
+suggestions"*. Below the common ancestor it does walk up from the top result —
+that is the only place a genus can come from once the model has settled on one —
+and those rows say *"containing &lt;top result&gt;"* instead, so the assumption is
+on screen rather than buried. Both are offered whatever the score is: somebody
+who wants the genus behind a 90% species should not have to type it by hand.
 
 `/v1/taxa/{id}` supplies the ladder: the response carries an `ancestors` array
 from `kingdom` downwards, including intermediate ranks (`subphylum`, `suborder`,
 `superfamily`) that are real but useless as choices — the plugin keeps only
-`order`, `family` and `genus`.
+`order`, `family` and `genus`. One fetch covers both sources, because the top
+result's lineage passes through the common ancestor.
 
 Two things this does **not** establish:
 
@@ -735,6 +741,29 @@ Two things the batched form demands that the single form did not:
 
 The comma between ids arrives percent-encoded as `%2C`. That is correct and the
 API decodes it; test stubs matching on the URL have to decode it too.
+
+## Absent from the index is not the same as deleted
+
+Answering "is this observation still there?" with `/v1/observations` is wrong,
+and wrong in a way that only shows up in the one workflow that matters.
+
+`/v1/observations` is served from a search index that lags writes by minutes.
+For those minutes a brand-new observation is missing from it, and missing looks
+exactly the same as deleted. The plugin syncs immediately after every upload, so
+reading absence there as deletion would mean the sync offering to unlink the
+link the upload had written seconds earlier.
+
+`InatAPI:observationExists` therefore asks the Rails app instead:
+
+    GET https://www.inaturalist.org/observations/{id}.json
+
+That reads the database rather than the index, so it answers about an
+observation created a second ago. It is the same reason `countAttachedPhotos`
+uses that endpoint to verify a photo upload.
+
+It returns three answers, not two: `true`, `false` for a 404 or 410, and
+`nil, err` for anything else. Collapsing "the site was having a bad minute" into
+"deleted" would clear a link to a perfectly good observation.
 
 ## Batch the species too
 

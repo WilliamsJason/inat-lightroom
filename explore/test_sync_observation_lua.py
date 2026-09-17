@@ -89,6 +89,21 @@ def observation_handler(plugin, responses, refuse=None):
             return "<html>Too many requests</html>", plugin.runtime.table_from(
                 {"status": 429})
 
+        # Before the declared routes, not after. This is the check that asks
+        # whether an observation still exists at all, and it deliberately reads
+        # the database rather than the search index -- so a test that declares
+        # an id as answering with an empty result set (which is what the index
+        # says about a deleted observation) must still get a 404 here, or the
+        # stub would be modelling the very lag the check exists to see past.
+        match = re.search(r"/observations/(\d+)\.json", url)
+        if match:
+            if match.group(1) in by_id:
+                return json.dumps({"id": int(match.group(1)),
+                                   "observation_photos": []}), \
+                    plugin.runtime.table_from({"status": 200})
+            return "<html>Not Found</html>", plugin.runtime.table_from(
+                {"status": 404})
+
         # Explicit routes win, so a test can say exactly what a batch replies.
         for fragment, payload in responses.items():
             if fragment in url:
@@ -428,7 +443,10 @@ def test_one_failing_photo_does_not_stop_the_rest():
 
     summary = plugin.dialogs[-1]["message"]
     assert "Synced: 1" in summary
-    assert "Errors: 1" in summary
+    # Not an error. The run did everything it could, and the one photo it could
+    # not sync is reported as what it is: a link pointing at nothing.
+    assert "Errors: 0" in summary
+    assert "No longer on iNaturalist: 1" in summary
 
 
 def test_nothing_selected_is_a_message_not_a_crash():
@@ -710,7 +728,7 @@ def test_photos_sharing_an_observation_are_fetched_once():
 
 
 def test_an_observation_that_no_longer_exists_is_reported_not_skipped():
-    """A deleted id simply does not come back. That is this photo's error."""
+    """A deleted id simply does not come back. That is this photo's news."""
     plugin = make_plugin({"/observations/999": observation(community=DAMSELFLY)})
     plugin.set_target_photos([
         plugin.new_photo(inat_observation_id="888"),
@@ -721,7 +739,125 @@ def test_an_observation_that_no_longer_exists_is_reported_not_skipped():
 
     summary = plugin.dialogs[-1]["message"]
     assert "Synced: 1" in summary
-    assert "Errors: 1" in summary
+    assert "No longer on iNaturalist: 1" in summary
+
+
+# --- observations deleted on the website -----------------------------------
+#
+# The case these exist for: an upload made against a whole folder by accident,
+# deleted on the website, and every photo in the folder left pointing at an
+# observation that is not there. Clearing those links by hand is the work this
+# is meant to remove, so the offer has to be one question for the whole run.
+
+
+def missing_and_present():
+    """One photo whose observation is gone, one whose observation is fine."""
+    plugin = make_plugin({"/observations/999": observation(community=DAMSELFLY)})
+    gone = plugin.new_photo(inat_observation_id="888",
+                            inat_observation_url="https://example/888")
+    kept = plugin.new_photo(inat_observation_id="999")
+    plugin.set_target_photos([gone, kept])
+    return plugin, gone, kept
+
+
+def test_a_missing_observation_offers_to_unlink():
+    plugin, _, _ = missing_and_present()
+
+    run_sync(plugin)
+
+    offers = [d for d in plugin.dialogs if d.get("style") == "confirm"]
+    assert len(offers) == 1
+    assert "1 photo is" in offers[0]["message"]
+
+
+def test_one_offer_covers_every_missing_photo():
+    """The whole point. Two hundred photos from one bad upload is one question,
+    not two hundred."""
+    plugin = make_plugin({})
+    plugin.set_target_photos(
+        [plugin.new_photo(inat_observation_id="888") for _ in range(4)])
+
+    run_sync(plugin)
+
+    offers = [d for d in plugin.dialogs if d.get("style") == "confirm"]
+    assert len(offers) == 1
+    assert "4 photos are" in offers[0]["message"]
+
+
+def test_accepting_the_offer_clears_the_link():
+    plugin, gone, kept = missing_and_present()
+    plugin.set_confirm_answer("ok")
+
+    run_sync(plugin)
+
+    assert gone["_props"]["inat_observation_id"] == ""
+    assert gone["_props"]["inat_observation_url"] == ""
+    # The photo that synced normally is untouched by any of this.
+    assert kept["_props"]["inat_observation_id"] == "999"
+
+
+def test_declining_the_offer_leaves_the_link_alone():
+    """Nothing is unlinked without being asked, so "no" has to mean no."""
+    plugin, gone, _ = missing_and_present()
+    plugin.set_confirm_answer("cancel")
+
+    run_sync(plugin)
+
+    assert gone["_props"]["inat_observation_id"] == "888"
+    assert "left linked" in plugin.dialogs[-1]["message"]
+
+
+def test_an_observation_the_index_has_not_caught_up_with_is_left_alone():
+    """The trap. /v1/observations is a search index that lags writes by
+    minutes, so a just-uploaded observation is absent from it while being
+    perfectly real. Offering to unlink on that evidence would mean a sync after
+    an upload proposing to discard the link it had only just written."""
+    plugin = LuaPlugin()
+    auth = plugin.require("InatAuth")
+    plugin.call(auth["storeApiToken"], make_jwt(FUTURE))
+
+    def handler(method, url, body=None, headers=None):
+        # The database says yes; the index answers with nothing at all.
+        if "/observations/888.json" in url:
+            return json.dumps({"id": 888, "observation_photos": []}), \
+                plugin.runtime.table_from({"status": 200})
+        return json.dumps({"results": []}), \
+            plugin.runtime.table_from({"status": 200})
+
+    plugin.set_http_handler(handler)
+    photo = plugin.new_photo(inat_observation_id="888")
+    plugin.set_target_photos([photo])
+    plugin.set_confirm_answer("ok")
+
+    run_sync(plugin)
+
+    assert [d for d in plugin.dialogs if d.get("style") == "confirm"] == []
+    assert photo["_props"]["inat_observation_id"] == "888"
+
+
+def test_an_unanswerable_check_is_an_error_not_an_unlink():
+    """A network failure is not evidence that anything was deleted."""
+    plugin = LuaPlugin()
+    auth = plugin.require("InatAuth")
+    plugin.call(auth["storeApiToken"], make_jwt(FUTURE))
+
+    def handler(method, url, body=None, headers=None):
+        if "/observations/888.json" in url:
+            return "<html>Server error</html>", \
+                plugin.runtime.table_from({"status": 500})
+        return json.dumps({"results": []}), \
+            plugin.runtime.table_from({"status": 200})
+
+    plugin.set_http_handler(handler)
+    photo = plugin.new_photo(inat_observation_id="888")
+    plugin.set_target_photos([photo])
+    plugin.set_confirm_answer("ok")
+
+    run_sync(plugin)
+
+    assert [d for d in plugin.dialogs if d.get("style") == "confirm"] == []
+    assert photo["_props"]["inat_observation_id"] == "888"
+    assert "Errors: 1" in plugin.dialogs[-1]["message"]
 
 
 def test_each_photo_gets_its_own_observation_not_the_next_one_along():

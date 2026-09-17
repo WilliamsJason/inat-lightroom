@@ -207,7 +207,7 @@ def test_a_photo_with_no_uuid_gets_a_new_observation(plugin, upload):
     )
     seen = plugin.eval("{}")
 
-    obs_id, uuid, err = upload["resolveObservation"](
+    obs_id, uuid, err, _ = upload["resolveObservation"](
         api, settings(plugin), plugin.new_photo(), seen
     )
 
@@ -226,10 +226,10 @@ def test_photos_sharing_a_uuid_go_into_one_observation(plugin, upload):
     seen = plugin.eval("{}")
     config = settings(plugin)
 
-    first_id, _, _ = upload["resolveObservation"](
+    first_id, _, _, _ = upload["resolveObservation"](
         api, config, plugin.new_photo(inat_observation_uuid="shared"), seen
     )
-    second_id, _, _ = upload["resolveObservation"](
+    second_id, _, _, _ = upload["resolveObservation"](
         api, config, plugin.new_photo(inat_observation_uuid="shared"), seen
     )
 
@@ -245,12 +245,62 @@ def test_a_previously_uploaded_photo_reuses_its_observation(plugin, upload):
     )
     seen = plugin.eval("{}")
 
-    obs_id, uuid, err = upload["resolveObservation"](
+    obs_id, uuid, err, _ = upload["resolveObservation"](
         api, settings(plugin), plugin.new_photo(inat_observation_uuid="known"), seen
     )
 
     assert (obs_id, uuid, err) == (99, "known", None)
     assert methods(calls) == ["find", "update"]
+
+
+# --- who made it -----------------------------------------------------------
+#
+# The caller has to be able to undo its own work without undoing anyone else's.
+# Cancelling an upload deletes the observation on iNaturalist, and "was this
+# observation created a second ago or does it date from last year" is not a
+# question the id can answer -- so this is the only place that knows.
+
+
+def test_a_new_observation_reports_that_it_was_created(plugin, upload):
+    api, _ = fake_api(
+        plugin, created=plugin.runtime.table_from({"id": 42, "uuid": "abc"}))
+
+    *_, created = upload["resolveObservation"](
+        api, settings(plugin), plugin.new_photo(), plugin.eval("{}"))
+
+    assert created is True
+
+
+def test_an_observation_that_was_already_there_is_not_reported_as_created(
+        plugin, upload):
+    """Deleting this one on a cancel would destroy a record the user made on
+    some earlier day and has been adding photos to since."""
+    api, _ = fake_api(
+        plugin, found=plugin.runtime.table_from({"id": 99, "uuid": "known"}))
+
+    *_, created = upload["resolveObservation"](
+        api, settings(plugin),
+        plugin.new_photo(inat_observation_uuid="known"), plugin.eval("{}"))
+
+    assert created is False
+
+
+def test_the_second_photo_of_a_group_did_not_create_anything_either(
+        plugin, upload):
+    """Only the call that actually made it says so. Otherwise a six-frame
+    observation would claim to have been created six times."""
+    api, _ = fake_api(
+        plugin, created=plugin.runtime.table_from({"id": 7, "uuid": "shared"}))
+    seen = plugin.eval("{}")
+    config = settings(plugin)
+
+    *_, first = upload["resolveObservation"](
+        api, config, plugin.new_photo(inat_observation_uuid="shared"), seen)
+    *_, second = upload["resolveObservation"](
+        api, config, plugin.new_photo(inat_observation_uuid="shared"), seen)
+
+    assert first is True
+    assert second is False
 
 
 def test_re_uploading_pushes_the_photos_current_details(plugin, upload):
@@ -300,7 +350,7 @@ def test_a_failed_update_warns_but_still_returns_the_observation(plugin, upload)
     )
     warnings = plugin.eval("{}")
 
-    obs_id, _, err = upload["resolveObservation"](
+    obs_id, _, err, _ = upload["resolveObservation"](
         api, settings(plugin), plugin.new_photo(inat_observation_uuid="known"),
         plugin.eval("{}"), warnings
     )
@@ -319,7 +369,7 @@ def test_an_observation_deleted_on_the_website_is_recreated(plugin, upload):
     )
     seen = plugin.eval("{}")
 
-    obs_id, uuid, err = upload["resolveObservation"](
+    obs_id, uuid, err, _ = upload["resolveObservation"](
         api, settings(plugin), plugin.new_photo(inat_observation_uuid="orphan"), seen
     )
 
@@ -333,7 +383,7 @@ def test_an_observation_deleted_on_the_website_is_recreated(plugin, upload):
 def test_a_failed_create_reports_the_reason(plugin, upload):
     api, _ = fake_api(plugin, created=None)
 
-    obs_id, _, err = upload["resolveObservation"](
+    obs_id, _, err, _ = upload["resolveObservation"](
         api, settings(plugin), plugin.new_photo(), plugin.eval("{}")
     )
 

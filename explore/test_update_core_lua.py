@@ -238,6 +238,16 @@ def test_it_does_not_interrupt_you_about_a_version_you_have():
     assert core.shouldNotify(result, "") is False
 
 
+def test_it_does_not_interrupt_you_about_something_it_cannot_install():
+    plugin, core, _fake = make(release=release_json(assets=False))
+    result, _err = plugin.call(core.check)
+
+    assert core.shouldNotify(result, "") is False, (
+        "the dialog offers one button and that button installs; there is "
+        "nothing for it to do with a release published by hand"
+    )
+
+
 def test_the_startup_check_does_not_run_inline(pair):
     plugin, core, fake = pair
     plugin.call(core.checkOnStartup)
@@ -268,14 +278,106 @@ def test_the_startup_check_remembers_what_it_told_you(pair):
     assert plugin.prefs["update_notified_tag"] == "v9.9.9"
 
 
-def test_the_startup_check_never_installs_anything(pair):
+def _stub_install(plugin, core, *, succeeds):
+    """Replace the install step with one that records and answers to order.
+
+    The real one writes into the installed plugin folder, which the harness
+    does not have; what these tests are about is what the dialog does with the
+    answer, not the staging that UpdateInstall's own tests cover.
+    """
+    calls = plugin.eval("function() return {} end")()
+    core.install = plugin.eval(
+        """
+        function(calls, succeeds)
+          return function(result)
+            calls[#calls + 1] = result
+            if succeeds then return true end
+            return nil, "the download did not match its checksum"
+          end
+        end
+        """
+    )(calls, succeeds)
+    return calls
+
+
+def test_the_startup_check_never_installs_unasked(pair):
+    plugin, core, _fake = pair
+    calls = _stub_install(plugin, core, succeeds=True)
+
+    # The harness answers "cancel" unless a test says otherwise, so this is
+    # someone pressing Later.
+    plugin.call(core.checkOnStartup)
+    plugin.run_pending_tasks()
+
+    assert len(calls) == 0, (
+        "checking is automatic and installing is not: a plugin that replaces "
+        "itself unasked changes what your catalog does while you are away"
+    )
+
+
+def test_the_startup_dialog_offers_the_update_itself(pair):
     plugin, core, _fake = pair
     plugin.call(core.checkOnStartup)
     plugin.run_pending_tasks()
 
-    assert plugin.executed_commands == [], (
-        "checking is automatic and installing is not: a plugin that replaces "
-        "itself unasked changes what your catalog does while you are away"
+    offer = plugin.dialogs[0]
+    assert offer["style"] == "confirm"
+    assert "9.9.9" in offer["message"]
+    assert plugin.opened_urls == [], (
+        "a browser is a detour: the plugin can do the update here, and the "
+        "releases page is a button in the Plug-in Manager for anyone who "
+        "wants to read the notes first"
+    )
+
+
+def test_pressing_update_stages_the_release(pair):
+    plugin, core, _fake = pair
+    calls = _stub_install(plugin, core, succeeds=True)
+    plugin.set_confirm_answer("ok")
+
+    plugin.call(core.checkOnStartup)
+    plugin.run_pending_tasks()
+
+    assert len(calls) == 1, (
+        "the whole point of the button is that it does the update"
+    )
+    assert any(d["style"] == "bezel" for d in plugin.dialogs), (
+        "the dialog is gone by then, and a second of nothing reads as a "
+        "button that did not work"
+    )
+    assert "quit" in plugin.dialogs[-1]["message"].lower(), (
+        "having pressed Update, you are owed the one fact that matters: it "
+        "takes effect when you quit"
+    )
+
+
+def test_a_failed_install_from_the_dialog_says_so(pair):
+    plugin, core, _fake = pair
+    _stub_install(plugin, core, succeeds=False)
+    plugin.set_confirm_answer("ok")
+
+    plugin.call(core.checkOnStartup)
+    plugin.run_pending_tasks()
+
+    assert "Could not install" in plugin.dialogs[-1]["message"], (
+        "silence after pressing a button reads as success, and this one "
+        "leaves the old version running"
+    )
+    assert "checksum" in plugin.dialogs[-1]["message"]
+
+
+def test_a_release_with_no_archive_does_not_interrupt():
+    plugin, core, _fake = make(release=release_json(assets=False))
+    plugin.call(core.checkOnStartup)
+    plugin.run_pending_tasks()
+
+    assert plugin.dialogs == [], (
+        "the dialog's offer is a button that installs; a release published by "
+        "hand has nothing to install, so it waits in the Plug-in Manager"
+    )
+    assert not plugin.prefs["update_notified_tag"], (
+        "nothing was said, so the offer must still arrive if the archive is "
+        "attached later"
     )
 
 

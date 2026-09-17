@@ -167,13 +167,14 @@ end
 --                  back to the server or create a duplicate.
 -- @param warnings  Collects things worth telling the user that are not bad
 --                  enough to fail the photo.
--- @return observation id, uuid, error message
+-- @return observation id, uuid, error message, true when this call created the
+--         observation rather than finding one that already existed
 function UploadCore.resolveObservation(api, settings, photo, seen, warnings)
   local uuid = pluginField(photo, "inat_observation_uuid")
 
   if uuid then
     if seen[uuid] then
-      return seen[uuid], uuid, nil
+      return seen[uuid], uuid, nil, false
     end
 
     -- The photo has been uploaded before, or was grouped with one that had.
@@ -182,7 +183,7 @@ function UploadCore.resolveObservation(api, settings, photo, seen, warnings)
     -- one under the same UUID.
     local existing, lookupErr = api:findObservationByUuid(uuid)
     if lookupErr then
-      return nil, nil, lookupErr
+      return nil, nil, lookupErr, false
     end
     if existing then
       seen[uuid] = existing.id
@@ -203,7 +204,7 @@ function UploadCore.resolveObservation(api, settings, photo, seen, warnings)
         end
       end
 
-      return existing.id, uuid, nil
+      return existing.id, uuid, nil, false
     end
   end
 
@@ -214,7 +215,7 @@ function UploadCore.resolveObservation(api, settings, photo, seen, warnings)
 
   local created, createErr = api:createObservation(params)
   if not created then
-    return nil, nil, createErr
+    return nil, nil, createErr, false
   end
 
   local resolvedUuid = created.uuid or uuid
@@ -222,7 +223,7 @@ function UploadCore.resolveObservation(api, settings, photo, seen, warnings)
     seen[resolvedUuid] = created.id
   end
 
-  return created.id, resolvedUuid, nil
+  return created.id, resolvedUuid, nil, true
 end
 
 --------------------------------------------------------------------------------
