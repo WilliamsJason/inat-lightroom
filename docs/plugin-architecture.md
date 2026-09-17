@@ -661,58 +661,137 @@ and an early return would drop them precisely then.
 
 ## Authentication
 
-The plugin stores the iNaturalist token in **Lightroom's encrypted password
-store** (`LrPasswords`), which is backed by the OS credential vault. Today that
-token is pasted by hand from
-<https://www.inaturalist.org/users/api_token> and expires after 24 hours.
+The plugin stores iNaturalist credentials in **Lightroom's encrypted password
+store** (`LrPasswords`), which is backed by the OS credential vault.
 
-The replacement is OAuth with PKCE, which was checked against iNaturalist's
-live endpoints: they run Doorkeeper 5.6.6 with S256 PKCE enabled, and an
-application registered with **Confidential unchecked** is a public client — so
-there is **no client secret to ship**, which is the thing that usually makes
-OAuth impossible for a distributed plugin.
+There are two ways in, and the difference between them is how often the user
+has to do anything.
+
+**Browser sign-in (OAuth 2.0, authorization code + PKCE).** The default. The
+application is registered and approved, and the flow lives in
+`InatOAuth.lua`. iNaturalist runs Doorkeeper 5.6.6 with S256 PKCE enabled, and
+the application is registered with **Confidential unchecked** — a public
+client, so there is **no client secret to ship**, which is the thing that
+usually makes OAuth impossible for a distributed plugin. The `client_id` is a
+plain string in the source and that is correct: it names the application, it
+does not authorise anything.
+
+The user signs in once. The resulting OAuth access token never expires, and
+`InatAuth` quietly exchanges it for a fresh 24-hour JWT whenever the old one
+runs out.
+
+**A pasted API token.** Kept as a fallback, not deprecated. It needs no
+approved application at all, which makes it the answer if `LrDigest` is ever
+unavailable (see below), if the application is suspended, or if someone would
+rather not authorize anything. It expires after 24 hours and cannot refresh
+itself, because there is nothing to refresh it from.
+
+### The flow
+
+```
+  startSignIn()   verifier = sha256(entropy); challenge = base64url(sha256(verifier))
+                  browser -> /oauth/authorize?code_challenge=…&code_challenge_method=S256
+  user signs in   on iNaturalist; the plugin never sees the password
+  redirect        lightroom://com.github.inat-lightroom/authorization-redirect?code=…
+                  -> URLHandler.lua -> InatOAuth.handleRedirect()
+  exchangeCode()  POST /oauth/token with code + code_verifier, no secret
+                  -> OAuth access token, stored, never expires
+  getToken()      GET /users/api_token with the OAuth token -> 24-hour JWT
+```
 
 The redirect comes back through the same `lightroom://` mechanism the plugin
-already uses:
-`lightroom://com.github.inat-lightroom/authorization-redirect?code=…`, handled
-by `URLHandler.lua`. No `LrSocket` listener and no local port.
+already used for the Metadata panel's fake buttons. No `LrSocket` listener and
+no local port — which matters, because the SDK gives a plugin neither an HTTP
+server nor a way to claim a loopback port.
 
-That needs an approved iNaturalist application, and since 2022 those are
-reviewed by hand: the account must be two months old with ten or more improving
-identifications for other people in the past month. Registration is in
-progress; revisit around October 2026.
+### SHA-256 is available, but not where the documentation says
 
-### What to register, and why the two fields are not free choices
+PKCE/S256 needs SHA-256, and Lightroom's Lua is 5.1 with no bitwise operators
+and no crypto in the standard library.
 
-Two values on the application form are fixed by decisions already made in this
+**[verified]** `LrDigest` exists and is importable. It is absent from the SDK
+reference and absent from `substrate.dll` where the documented namespaces
+live; it is in **`ftp_client.dll`**, listed in that toolkit's `AgExports`
+table beside `LrFtp` — and `LrFtp` is public and documented. Being in
+`AgExports` is what makes a name reachable by `import`, so the two stand or
+fall together. Underneath is a C module, `WFDigestImpl`, wrapping OpenSSL:
+the binary carries `SHA256_Init`, `SHA256_Update`, `SHA256_Final`,
+`EVP_sha256` and the matching SHA1 and HMAC entry points.
+
+That is an inference from a binary rather than a promise from Adobe, so
+`Sha256.lua` does not trust it. It probes the plausible call shapes and makes
+the winner hash `"abc"`, comparing against the FIPS 180-4 test vector. A
+missing namespace, a changed return type or a wrong shape all land in the same
+place: `Sha256.available()` returns false with a reason, sign-in refuses to
+start, and the dialog points at the pasted-token path instead of failing
+halfway through an authorization.
+
+rcloran's `lr-inaturalist-publish` bundles a ~500-line pure-Lua SHA-256 rather
+than using `LrDigest`. That also works and is the fallback if this ever stops
+being importable — the known-answer check is what would tell us.
+
+**[verified]** `LrUUID` is in `substrate.dll` (`AgUUID_generateUUID_L`), the
+plugin loader itself, so it is always present. That matters for entropy: the
+same precedent plugin shells out to `cscript uuid.vbs` and reads the result
+back through a temp file, then XORs it with a Lua PRNG precisely because that
+file is interceptable. Nothing here leaves the process. Adobe does not document
+how `generateUUID` is seeded, so it is not trusted alone — several UUIDs are
+mixed with the clock, a monotonic timer, a table address and the PRNG, and the
+result is hashed. That is no weaker than the best single input, which is the
+only guarantee available without a documented CSPRNG.
+
+### The verifier is stored, not held in memory
+
+`lr-inaturalist-publish` keeps its verifier in the publish dialog's property
+table and tells the user not to close the window. Simpler, and it loses the
+sign-in if the window closes, if Lightroom restarts while the browser is open,
+or if iNaturalist asks the user to confirm their email first.
+
+So it goes in `LrPasswords` with a timestamp in prefs, and is refused after 30
+minutes or the moment it is redeemed — whichever comes first. The cost is a
+single-use secret briefly at rest in the credential vault, which is where the
+token it becomes was going to live anyway.
+
+A redirect that arrives with no pending verifier is refused outright rather
+than exchanged. That is the case PKCE exists for: another application on the
+machine registering the same URL scheme and racing for the code.
+
+Authorization codes are kept out of the log. `URLHandler` redacts the query
+string of any URL it logs, because logs get attached to bug reports.
+
+### What was registered, and why the two fields were not free choices
+
+Two values on the application form were fixed by decisions already made in this
 repository, and both are awkward to change afterwards.
 
 **Redirect URI** — `lightroom://com.github.inat-lightroom/authorization-redirect`
 
 The host part is `LrToolkitIdentifier` from `Info.lua`, because that is what
 Lightroom routes `lightroom://` URLs by. Registering it pins the identifier:
-from that point on, renaming `LrToolkitIdentifier` breaks the redirect until
-the application is re-registered, on top of orphaning every custom metadata
-field already written to photos. The identifier was left as
-`com.github.inat-lightroom` through the rename to "Pinned for iNaturalist"
-partly for this reason — see `Info.lua`.
+renaming `LrToolkitIdentifier` now breaks the redirect until the application is
+re-registered, on top of orphaning every custom metadata field already written
+to photos. The identifier was left as `com.github.inat-lightroom` through the
+rename to "Pinned for iNaturalist" partly for this reason — see `Info.lua`.
+`InatOAuth.redirectUri()` builds it from `PluginUrls` rather than writing it
+out, so the two cannot drift apart.
 
-**Application name** — `Pinned for iNaturalist`
+Doorkeeper compares the redirect URI as a whole string, and
+**[verified]** `force_ssl_in_redirect_uri false` in iNaturalist's Doorkeeper
+initializer is what allows a non-HTTPS scheme to be registered at all.
 
-This one is user-facing, which is easy to miss on a form that otherwise looks
-administrative. Doorkeeper shows the application name on the authorization
-screen — *"Pinned for iNaturalist would like access to your account"* — which
-someone reads at the moment they are deciding whether to trust this with their
-iNaturalist account. It has to match `LrPluginName` exactly. A mismatch there
-is the same confusion the rename set out to remove, reappearing at the worst
-possible moment: a name nobody recognises, asking for account access, is
+**Application name** — user-facing, which is easy to miss on a form that
+otherwise looks administrative. Doorkeeper shows the application name on the
+authorization screen — *"… would like access to your account"* — which someone
+reads at the moment they are deciding whether to trust this with their
+iNaturalist account. A name nobody recognises, asking for account access, is
 indistinguishable from something hostile.
 
 Leave **Confidential unchecked**, per above — that is what makes this a public
 client with no secret to ship.
 
-Until then there is no second option in the dialog, and that is deliberate.
-There used to be: an OAuth application form taking an app id, secret,
+### What is deliberately not offered
+
+There used to be an OAuth application form taking an app id, secret,
 iNaturalist username and password, using the password grant to mint a
 never-expiring access token. It was implemented and it worked. It was removed
 before the repository went public for two reasons. iNaturalist recommends
@@ -720,13 +799,20 @@ against the password grant, and particularly against it in distributed
 applications, because it requires the user to type their account password into
 third-party software — the exact problem PKCE exists to solve. And the app id
 and secret are per-application, so with manual review every user would have
-needed their own approved application before the fields did anything.
+needed their own approved application before the fields did anything. PKCE has
+neither problem: one approved application, no secret, and every user
+authenticating against it as themselves.
 
-`InatAuth.clear()` erases the token. It briefly also erased the keys that form
-wrote, on the theory that removing the feature should not strand a password in
-the credential vault; that was dropped once it was certain nobody had ever
-stored one. A test in `explore/test_settings_dialog_lua.py` walks the Account
-tab and fails if any field binds to those names again.
+`InatAuth.clear()` erases both tokens and any sign-in in progress. It briefly
+also erased the keys that form wrote, on the theory that removing the feature
+should not strand a password in the credential vault; that was dropped once it
+was certain nobody had ever stored one. A test in
+`explore/test_settings_dialog_lua.py` walks the Account tab and fails if any
+field binds to those names again.
+
+Signing out is local. iNaturalist keeps its own list of authorized
+applications, and nothing the plugin does removes it from that list — the
+dialog says so rather than implying otherwise.
 
 ---
 
@@ -929,10 +1015,7 @@ you; neither is about the plugin.
   `f:view { place = "overlapping" }` and `f:picture`. Draggable handles are
   impossible — `LrView` has no canvas and no mouse coordinates.
 
-**OAuth**, once the iNaturalist application is approved (revisit October 2026).
-Register it as `Pinned for iNaturalist` with the redirect URI
-`lightroom://com.github.inat-lightroom/authorization-redirect`; both are
-constrained, see [Authentication](#authentication).
+**OAuth** is done — see [Authentication](#authentication).
 
 **The Comments panel** is now out of reach, and it was the panel this whole
 design started out trying to sit next to. Only a publish service can fill it

@@ -50,22 +50,51 @@ local function doPanel()
   require("ObservationPanel").show()
 end
 
+--- Finish an OAuth sign-in.
+--
+-- This is the action the whole URLHandler mechanism was kept for. iNaturalist
+-- redirects the browser to lightroom://com.github.inat-lightroom/authorization-redirect
+-- with either a "code" or an "error", the OS hands it to Lightroom, and
+-- Lightroom hands it here.
+--
+-- The parameters are passed on rather than interpreted: deciding what a
+-- redirect means, and doing the token exchange, belongs with the rest of the
+-- flow in InatOAuth.
+local function doAuthorizationRedirect(_, params)
+  require("InatOAuth").handleRedirect(params)
+end
+
 local handlers = {
   sync  = doSync,
   link  = doLink,
   panel = doPanel,
+  ["authorization-redirect"] = doAuthorizationRedirect,
 }
 
 --------------------------------------------------------------------------------
 -- Entry point
 --------------------------------------------------------------------------------
 
+--- A URL with its query string replaced, for logging.
+--
+-- The authorization redirect carries a single-use OAuth code in its query
+-- string. Logs get attached to bug reports, so the code must not be in one --
+-- and the query string is never the interesting part of a URL that failed to
+-- parse anyway.
+local function redacted(url)
+  local text = tostring(url)
+  if text:find("?", 1, true) then
+    return (text:gsub("%?.*$", "?<redacted>"))
+  end
+  return text
+end
+
 return {
   URLHandler = function(url)
     local action = PluginUrls.parse(url)
 
     if not action then
-      logger:warn("Ignoring URL that is not ours: " .. tostring(url))
+      logger:warn("Ignoring URL that is not ours: " .. redacted(url))
       return
     end
 
@@ -78,6 +107,6 @@ return {
     end
 
     logger:info("Plugin URL action: " .. action)
-    handler()
+    handler(url, PluginUrls.parseParams(url))
   end,
 }

@@ -65,6 +65,58 @@ function PluginUrls.parse(url)
 end
 
 --------------------------------------------------------------------------------
+-- Query parameters
+--------------------------------------------------------------------------------
+
+--- Percent-decode one value from a query string.
+--
+-- "+" becomes a space as well as %20, because a form-encoded redirect is
+-- allowed to use either and iNaturalist's error descriptions are sentences.
+local function urlDecode(value)
+  value = value:gsub("+", " ")
+  return (value:gsub("%%(%x%x)", function(hex)
+    return string.char(tonumber(hex, 16))
+  end))
+end
+
+--- The query parameters of a URL Lightroom handed us, decoded.
+--
+-- Always a table, empty when there is no query string, so callers can index it
+-- without checking. Returned separately from parse() because the action and
+-- the parameters are wanted by different code: the handler dispatches on one
+-- and the OAuth redirect reads the other.
+--
+-- Written as its own function rather than folded into parse() so the OAuth
+-- redirect can be tested with a URL and no Lightroom.
+--
+-- Keys are matched narrowly -- "code", "error", "error_description" and the
+-- like -- but nothing is filtered here; an unexpected parameter is simply
+-- carried through and ignored by whoever reads it.
+function PluginUrls.parseParams(url)
+  local params = {}
+  if type(url) ~= "string" then
+    return params
+  end
+
+  local query = url:match("%?(.*)$")
+  if not query or query == "" then
+    return params
+  end
+
+  -- Split on & first and = second. Doing it in one pattern goes wrong the
+  -- moment a value legitimately contains "=", which a base64url-ish
+  -- authorization code can.
+  for pair in query:gmatch("[^&]+") do
+    local key, value = pair:match("^([^=]+)=?(.*)$")
+    if key and key ~= "" then
+      params[urlDecode(key)] = urlDecode(value or "")
+    end
+  end
+
+  return params
+end
+
+--------------------------------------------------------------------------------
 -- Reading an observation ID a user typed or pasted
 --------------------------------------------------------------------------------
 

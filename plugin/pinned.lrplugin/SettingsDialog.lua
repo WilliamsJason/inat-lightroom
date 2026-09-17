@@ -36,6 +36,7 @@ local LrTasks           = import "LrTasks"
 local LrView            = import "LrView"
 
 local InatAuth = require "InatAuth"
+local InatOAuth = require "InatOAuth"
 local Jobs     = require "Jobs"
 local Settings = require "Settings"
 local logger   = require "Log"
@@ -73,6 +74,14 @@ SettingsDialog.METADATA_ITEMS = {
 
 --- Describe the freshness of the stored token in plain language.
 local function tokenStatusText()
+  -- Signed in through the browser, the JWT's age is bookkeeping rather than
+  -- news: it is refreshed silently whenever it runs out, so telling someone
+  -- it expires in six hours invites them to do something about it when there
+  -- is nothing to do.
+  if InatAuth.isSignedIn() then
+    return "Signed in to iNaturalist. Pinned keeps itself signed in."
+  end
+
   local remaining = InatAuth.tokenSecondsRemaining()
   if not remaining then
     return "No token stored yet."
@@ -111,10 +120,54 @@ local function accountTab(f, props, actions)
       f:separator { fill_horizontal = 1 },
       f:spacer { height = 6 },
 
-      f:static_text { title = "Option 1: Paste an API token", font = "<system/bold>" },
+      -- Browser sign-in leads, because it is the one that ends the daily
+      -- ritual. The pasted token stays below it rather than being removed:
+      -- it needs no registered application, so it is what still works if
+      -- LrDigest turns out to be missing, if the application is ever
+      -- suspended, or if someone simply does not want to authorize anything.
+      f:static_text {
+        title = "Option 1: Sign in with iNaturalist",
+        font  = "<system/bold>",
+      },
+      f:static_text {
+        title = "Opens iNaturalist in your browser to sign in once, then keeps\n"
+          .. "itself topped up so you are never asked again. Your password\n"
+          .. "stays with iNaturalist -- the plugin never sees it.",
+        width           = 500,
+        height_in_lines = 3,
+      },
+      f:row {
+        f:static_text { title = "", width = LABEL },
+        f:push_button {
+          title   = "Sign In with iNaturalist",
+          action  = actions.signIn,
+          enabled = LrView.bind {
+            key       = "signedIn",
+            transform = function(value) return not value end,
+          },
+        },
+        f:push_button {
+          title   = "Sign Out",
+          action  = actions.signOut,
+          enabled = LrView.bind("signedIn"),
+        },
+      },
+      f:static_text {
+        title = "Signing out forgets the token here. To withdraw access\n"
+          .. "altogether, remove it under Account Settings > Applications\n"
+          .. "on iNaturalist.",
+        width           = 500,
+        height_in_lines = 3,
+      },
+
+      f:spacer { height = 10 },
+      f:separator { fill_horizontal = 1 },
+      f:spacer { height = 6 },
+
+      f:static_text { title = "Option 2: Paste an API token", font = "<system/bold>" },
       f:static_text {
         title = "Sign in to iNaturalist, open the token page, and paste the "
-          .. "result below.\nThis works without registering an application, "
+          .. "result below.\nThis works without authorizing an application, "
           .. "but expires after 24 hours.",
         width           = 500,
         height_in_lines = 2,
@@ -125,7 +178,18 @@ local function accountTab(f, props, actions)
       },
       f:row {
         f:static_text { title = "Token:", width = LABEL, alignment = "right" },
-        f:password_field { value = LrView.bind("api_token"), width = 380, immediate = true },
+        f:password_field {
+          value     = LrView.bind("api_token"),
+          width     = 380,
+          immediate = true,
+          -- Disabled rather than hidden while signed in, so the section does
+          -- not appear and disappear as the window is used. A pasted token
+          -- would be ignored anyway: getToken prefers the OAuth credential.
+          enabled   = LrView.bind {
+            key       = "signedIn",
+            transform = function(value) return not value end,
+          },
+        },
       },
 
       -- On this tab rather than in the window's button bar, because they are
@@ -136,34 +200,17 @@ local function accountTab(f, props, actions)
       f:row {
         f:static_text { title = "", width = LABEL },
         f:push_button {
-          title  = "Save Token",
-          action = actions.saveToken,
+          title   = "Save Token",
+          action  = actions.saveToken,
+          enabled = LrView.bind {
+            key       = "signedIn",
+            transform = function(value) return not value end,
+          },
         },
         f:push_button {
           title  = "Clear Stored Credentials",
           action = actions.clearCredentials,
         },
-      },
-
-      f:spacer { height = 10 },
-      f:separator { fill_horizontal = 1 },
-      f:spacer { height = 6 },
-
-      -- No fields here on purpose. This offered an OAuth application using the
-      -- password grant: app id, app secret, iNaturalist username and password.
-      -- It worked, which is what made it worth removing rather than leaving --
-      -- iNaturalist recommends against the password grant, and against it
-      -- particularly in distributed applications, because it means typing an
-      -- account password into someone else's software. Sign-in in the browser
-      -- is the replacement, and a field that cannot be filled in wrongly is
-      -- better than one that can.
-      f:static_text { title = "Option 2: Sign in with iNaturalist", font = "<system/bold>" },
-      f:static_text {
-        title = "Coming soon. This will hand you to iNaturalist to sign in, "
-          .. "then keep\nitself topped up so you are never asked again. Your "
-          .. "password stays with\niNaturalist -- the plugin never sees it.",
-        width           = 500,
-        height_in_lines = 3,
       },
     },
   }
@@ -647,8 +694,66 @@ end
 function SettingsDialog.clearCredentials(props)
   InatAuth.clear()
   props.api_token = ""
+  props.signedIn  = false
   props.status    = tokenStatusText()
   LrDialogs.message("Pinned", "Stored credentials cleared.", "info")
+end
+
+--------------------------------------------------------------------------------
+-- Browser sign-in
+--------------------------------------------------------------------------------
+
+--- Hand the user to iNaturalist to sign in.
+--
+-- Returns as soon as the browser is open. The rest happens when iNaturalist
+-- redirects back into the plugin, which may be seconds or minutes later and
+-- may well be after this window has been closed -- so the dialog is refreshed
+-- through a callback rather than by waiting for anything.
+function SettingsDialog.signIn(props)
+  local ok, err = InatOAuth.startSignIn()
+
+  if not ok then
+    LrDialogs.message("Pinned",
+      "Could not start signing in.\n\n" .. tostring(err)
+        .. "\n\nYou can still paste an API token below.", "critical")
+    return false
+  end
+
+  props.status = "Waiting for iNaturalist in your browser…"
+
+  -- Refresh this window if it is still open when the redirect lands. The
+  -- property table outlives the function context, so touching it later is
+  -- safe; the dialog simply may not be on screen to show it.
+  InatOAuth.onComplete = function(succeeded)
+    if succeeded then
+      props.signedIn = true
+      props.api_token = ""
+    end
+    props.status = tokenStatusText()
+  end
+
+  LrDialogs.message("Pinned",
+    "iNaturalist has been opened in your browser.\n\n"
+      .. "Sign in and press Authorize, and Lightroom will pick it up from "
+      .. "there. You can close this window.", "info")
+  return true
+end
+
+--- Forget a browser sign-in.
+--
+-- Local only, and says so: iNaturalist keeps its own list of authorized
+-- applications, and nothing the plugin does from here removes it from that
+-- list. Claiming otherwise would be the kind of reassurance that matters and
+-- is wrong.
+function SettingsDialog.signOut(props)
+  InatAuth.clear()
+  props.api_token = ""
+  props.signedIn  = false
+  props.status    = tokenStatusText()
+  LrDialogs.message("Pinned",
+    "Signed out on this computer.\n\n"
+      .. "iNaturalist still lists Pinned under Account Settings > "
+      .. "Applications until you remove it there.", "info")
 end
 
 --------------------------------------------------------------------------------
@@ -842,6 +947,7 @@ function SettingsDialog.show()
     local props = LrBinding.makePropertyTable(context)
 
     props.api_token  = ""
+    props.signedIn   = InatAuth.isSignedIn()
     props.status     = tokenStatusText()
 
     -- The picker is a way of typing into the field, not a second setting: it
@@ -924,6 +1030,17 @@ function SettingsDialog.show()
 
       clearCredentials = function()
         SettingsDialog.clearCredentials(props)
+      end,
+
+      -- Not a task. Generating the challenge is arithmetic and
+      -- openUrlInBrowser does not yield, so there is nothing here to wait for
+      -- -- the network part happens later, in the redirect handler's own task.
+      signIn = function()
+        SettingsDialog.signIn(props)
+      end,
+
+      signOut = function()
+        SettingsDialog.signOut(props)
       end,
     }
 

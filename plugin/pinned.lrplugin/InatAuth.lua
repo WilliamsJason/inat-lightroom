@@ -17,9 +17,16 @@
 
   One way to obtain one today: the user signs in at inaturalist.org, opens
   /users/api_token, and pastes the JWT into the setup dialog. It must be
-  repeated every 24 hours.
+  repeated every 24 hours. It stays because it needs no registered
+  application, which makes it the fallback when anything about OAuth is
+  unavailable.
 
-  This module used to offer a second way -- an OAuth application using the
+  The better way, and now the default: the authorization code flow with PKCE,
+  in InatOAuth.lua. The user signs in once in their browser, the plugin keeps
+  a never-expiring OAuth access token, and this module quietly mints a new JWT
+  from it whenever the old one ages out. Nobody pastes anything again.
+
+  This module used to offer a third way -- an OAuth application using the
   password grant, which exchanged the user's iNaturalist username and password
   for a never-expiring access token and minted JWTs from it. It worked, and it
   is gone anyway. iNaturalist recommends against the password grant and
@@ -30,12 +37,12 @@
 
   It was also impractical: the app id and secret are per-application, and
   iNaturalist reviews applications by hand, so every user would have needed
-  their own approved application before the fields did anything.
+  their own approved application before the fields did anything. PKCE does not
+  have that problem -- one approved application, no secret, and every user
+  authenticating against it as themselves.
 
-  The authorization code flow is not built yet. URLHandler.lua and
-  PluginUrls.lua already exist to receive its redirect -- that is what
-  Info.lua's URLHandler entry is for -- so what remains is the exchange
-  itself. Until then, the pasted JWT is the only path.
+  URLHandler.lua and PluginUrls.lua receive the redirect that carries the
+  authorization code back; that is what Info.lua's URLHandler entry is for.
 
   Secrets are held by LrPasswords, which is backed by the OS credential
   vault. Non-secret bookkeeping (when the JWT was obtained, which mode is in
@@ -58,7 +65,8 @@ local API_V1   = "https://api.inaturalist.org/v1"
 
 -- LrPasswords keys. LrPasswords is already scoped to this plugin, so these
 -- do not need the toolkit identifier prefixed.
-local KEY_API_TOKEN  = "api_token"
+local KEY_API_TOKEN    = "api_token"
+local KEY_OAUTH_TOKEN  = "oauth_access_token"
 
 
 -- iNaturalist JWTs last 24 hours. Refresh early so a long export does not
@@ -160,10 +168,106 @@ end
 
 function InatAuth.clear()
   store(KEY_API_TOKEN, "")
+  store(KEY_OAUTH_TOKEN, "")
   prefs.apiTokenObtainedAt = nil
   prefs.apiTokenExpiresAt  = nil
   prefs.authMode = nil
+
+  -- Any half-finished browser sign-in goes too. Clearing credentials is what
+  -- someone does when they want the plugin to have forgotten them, and a
+  -- verifier sitting in the vault waiting for a redirect is not that.
+  local ok, InatOAuth = pcall(require, "InatOAuth")
+  if ok and InatOAuth then
+    pcall(InatOAuth.clearPending)
+  end
+
   logger:info("Cleared stored credentials")
+end
+
+--------------------------------------------------------------------------------
+-- OAuth
+--------------------------------------------------------------------------------
+
+--- Store the never-expiring OAuth access token from a browser sign-in.
+--
+-- This is not the token the API accepts. Its whole job is to sit in the vault
+-- and mint 24-hour JWTs on demand, which is what makes browser sign-in a
+-- one-time act rather than a daily one.
+--
+-- @return true, or false plus a reason
+function InatAuth.storeOAuthToken(token)
+  if type(token) ~= "string" or token == "" then
+    return false, "iNaturalist returned an empty access token."
+  end
+
+  store(KEY_OAUTH_TOKEN, token)
+  -- Any previously pasted JWT is now stale bookkeeping: the next getToken
+  -- should mint a fresh one rather than trust what the old mode left behind.
+  store(KEY_API_TOKEN, "")
+  prefs.apiTokenObtainedAt = nil
+  prefs.apiTokenExpiresAt  = nil
+  prefs.authMode = "oauth"
+
+  logger:info("Stored an OAuth access token")
+  return true, nil
+end
+
+--- Whether the plugin is signed in through the browser.
+function InatAuth.isSignedIn()
+  return retrieve(KEY_OAUTH_TOKEN) ~= nil
+end
+
+--- Exchange the stored OAuth token for a fresh 24-hour JWT.
+--
+-- Must be called from inside a task: LrHttp.get yields.
+--
+-- The endpoint is on www.inaturalist.org rather than the API host, and it is
+-- the one place a bare OAuth bearer token is the right thing to send.
+--
+-- @return jwt string, or nil plus a reason
+local function refreshJwtFromOAuth()
+  local oauthToken = retrieve(KEY_OAUTH_TOKEN)
+  if not oauthToken then
+    return nil, "Not signed in to iNaturalist."
+  end
+
+  local headers = {
+    { field = "Authorization", value = "Bearer " .. oauthToken },
+    { field = "Accept",        value = "application/json" },
+  }
+
+  local respBody, respHeaders = LrHttp.get(WWW_BASE .. "/users/api_token", headers)
+  if not respBody then
+    return nil, "Could not reach iNaturalist to refresh the API token."
+  end
+
+  local status = respHeaders and tonumber(respHeaders.status)
+  if status and status >= 400 then
+    -- 401 here means the access token has been revoked -- from iNaturalist's
+    -- account settings, or by the application being deleted. There is no way
+    -- back from the plugin's side, so say what actually fixes it.
+    if status == 401 then
+      return nil, "iNaturalist has rejected this plugin's access.\n\n"
+        .. "That usually means access was revoked on the website. Open\n"
+        .. "File > Plug-in Extras > Pinned Settings… and sign in again."
+    end
+    return nil, "iNaturalist refused to issue an API token (HTTP "
+      .. tostring(status) .. ")."
+  end
+
+  local ok, data = pcall(json.decode, respBody)
+  if not ok or type(data) ~= "table" or not data.api_token then
+    return nil, "iNaturalist's reply contained no API token."
+  end
+
+  local token = data.api_token
+  store(KEY_API_TOKEN, token)
+  prefs.apiTokenObtainedAt = os.time()
+  prefs.apiTokenExpiresAt  = decodeExpiry(token)
+  prefs.authMode = "oauth"
+
+  logger:info("Refreshed the API token from the stored OAuth token")
+  return token, nil
 end
 
 --- Seconds since the stored JWT was obtained; nil when none is stored.
@@ -208,29 +312,44 @@ end
 
 --- Return a JWT suitable for the v1 API.
 --
--- The stored JWT while it remains valid, and nothing else: a pasted token
--- cannot be regenerated from inside the plugin. Once the authorization code
--- flow exists this grows a refresh branch again.
+-- Two ways to have one, and they behave differently:
+--
+--   * Signed in through the browser. The stored OAuth token never expires, so
+--     an expired JWT is refreshed silently and the user is never asked for
+--     anything. This is the branch the module was always written around.
+--   * A pasted token. There is nothing to refresh from, so an expired one can
+--     only be reported.
 --
 -- Must be called from inside an async task, because LrHttp yields.
 --
--- @param forceRefresh  Accepted and deliberately ignored. There is nothing to
---                      refresh from, and honouring it is what previously made
---                      a token that had just been pasted report itself as
---                      expired. Callers pass it after saving credentials, so
---                      it has to be harmless rather than an error.
+-- @param forceRefresh  Mint a new JWT even if the cached one looks usable.
+--                      Honoured only when signed in through the browser: with
+--                      a pasted token there is nothing to refresh from, and
+--                      honouring it there is what previously made a token that
+--                      had just been pasted report itself as expired. Callers
+--                      pass it after saving credentials, so it has to be
+--                      harmless rather than an error.
 -- @return token string, or nil plus an error message
-function InatAuth.getToken(forceRefresh) -- luacheck: ignore forceRefresh
-  local cached = cachedTokenIfUsable()
-  if cached then
-    return cached, nil
+function InatAuth.getToken(forceRefresh)
+  local signedIn = InatAuth.isSignedIn()
+
+  if not (forceRefresh and signedIn) then
+    local cached = cachedTokenIfUsable()
+    if cached then
+      return cached, nil
+    end
+  end
+
+  if signedIn then
+    return refreshJwtFromOAuth()
   end
 
   if retrieve(KEY_API_TOKEN) then
     return nil, "Your iNaturalist token has expired. Tokens last 24 hours.\n\n"
       .. "Sign in at inaturalist.org, open www.inaturalist.org/users/api_token, "
       .. "and paste the new token via\n"
-      .. "File > Plug-in Extras > Pinned Settings…."
+      .. "File > Plug-in Extras > Pinned Settings…\n\n"
+      .. "Or use Sign In with iNaturalist there once, and this stops happening."
   end
 
   return nil, "iNaturalist credentials are not set up.\n\n"

@@ -22,6 +22,7 @@ by key, LrStringUtils.decodeBase64 doing real base64 -- they are faithful.
 from __future__ import annotations
 
 import base64
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -166,6 +167,37 @@ stubs.LrStringUtils = {
   end,
   trimWhitespace = function(value)
     return (value:gsub("^%s+", ""):gsub("%s+$", ""))
+  end,
+}
+
+-- LrDigest is the SHA-256 that PKCE needs. It is not in the SDK reference and
+-- not in substrate.dll; it is exported by ftp_client.dll alongside LrFtp. The
+-- plugin probes for it and checks it against a known answer, so the stub has
+-- to behave like the real thing rather than merely exist: the one-shot
+-- digest(s) shape, returning lowercase hex.
+stubs.LrDigest = {
+  SHA256 = {
+    digest = function(value)
+      return PY_SHA256_HEX(value)
+    end,
+  },
+}
+
+-- Set true by a test that wants to see what happens in a Lightroom where
+-- LrDigest is missing, which is the case the plugin's fallback to a pasted
+-- token exists for.
+local digestMissing = false
+stubs._setDigestMissing = function(missing)
+  digestMissing = missing and true or false
+end
+
+-- Counts out UUIDs so a test can assert the verifier changes between
+-- sign-ins. The real generateUUID is AgUUID_generateUUID_L in substrate.dll.
+local uuidCounter = 0
+stubs.LrUUID = {
+  generateUUID = function()
+    uuidCounter = uuidCounter + 1
+    return string.format("00000000-0000-4000-8000-%012d", uuidCounter)
   end,
 }
 
@@ -958,6 +990,14 @@ end
 
 -- Lightroom exposes 'import' as a global.
 function import(name)
+  -- LrDigest is the one namespace the plugin treats as optional, because it
+  -- is the one whose availability was inferred from a binary rather than
+  -- documented. A test can take it away to exercise that path; in Lightroom
+  -- the equivalent is an import that raises.
+  if name == "LrDigest" and digestMissing then
+    error("no such module: LrDigest")
+  end
+
   local stub = stubs[name]
   if stub == nil then
     error("test stub missing for module: " .. tostring(name))
@@ -1040,6 +1080,9 @@ class LuaPlugin:
         globals_ = self.runtime.globals()
 
         globals_["PY_B64DECODE"] = lambda value: base64.b64decode(value)
+        globals_["PY_SHA256_HEX"] = lambda value: hashlib.sha256(
+            value.encode("latin-1") if isinstance(value, str) else value
+        ).hexdigest()
         globals_["HTTP_HANDLER"] = http_handler
 
         # Let require() find the plugin's own modules (json, Log, ...).
@@ -1166,6 +1209,10 @@ class LuaPlugin:
     def set_execute_exit_code(self, code: int) -> None:
         """Make the next LrTasks.execute calls report this exit code."""
         self.env["setExecuteExitCode"](code)
+
+    def set_digest_missing(self, missing: bool) -> None:
+        """Make import "LrDigest" raise, as it would where it is unavailable."""
+        self.env["stubs"]["_setDigestMissing"](missing)
 
     def set_confirm_answer(self, answer: str) -> None:
         """Make LrDialogs.confirm return this. Defaults to "cancel"."""
