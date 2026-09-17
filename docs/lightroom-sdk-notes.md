@@ -1309,6 +1309,9 @@ No plugin ID argument — it is implicit. Storage is the OS credential vault.
 
 ## `LrDigest` gives a plugin SHA-256, and is not in the documentation
 
+**[verified]** — imported and used from a third-party plugin in Lightroom
+Classic, and its output checked against a known test vector.
+
 PKCE needs SHA-256. Lightroom's Lua is 5.1 — no bitwise operators, no crypto —
 and `LrMD5` is the only hashing namespace in the SDK reference. MD5 is not a
 PKCE challenge.
@@ -1350,6 +1353,8 @@ SHA-256 instead. That is the fallback if `LrDigest` ever stops being exported,
 and the known-answer check is what would notice.
 
 ## `LrUUID` is in the loader, so randomness needs no shell-out
+
+**[verified]** — called from a third-party plugin in Lightroom Classic.
 
 `LrUUID.generateUUID()` — `AgUUID_generateUUID_L`, backed by `AgUUID.lua`, both
 in `substrate.dll`. Being in the plugin loader means it is always there, on

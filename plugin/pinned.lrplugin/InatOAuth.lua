@@ -452,8 +452,7 @@ function InatOAuth.handleRedirect(params, onComplete)
     logger:info("OAuth sign-in complete for " .. tostring(user.login))
     LrDialogs.message("Pinned",
       "Signed in as " .. tostring(user.login) .. ".\n\n"
-        .. "Pinned will keep itself signed in from now on -- there is no "
-        .. "token to paste again.", "info")
+        .. "Pinned will keep itself signed in from now on.", "info")
     finish(true, tostring(user.login))
   end)
 end

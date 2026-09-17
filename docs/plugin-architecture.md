@@ -730,6 +730,10 @@ rcloran's `lr-inaturalist-publish` bundles a ~500-line pure-Lua SHA-256 rather
 than using `LrDigest`. That also works and is the fallback if this ever stops
 being importable — the known-answer check is what would tell us.
 
+The whole flow has since been run end to end in Lightroom Classic: `LrDigest`
+imported, the self-check passed, the browser round trip returned, and the code
+exchanged. The inference held.
+
 **[verified]** `LrUUID` is in `substrate.dll` (`AgUUID_generateUUID_L`), the
 plugin loader itself, so it is always present. That matters for entropy: the
 same precedent plugin shells out to `cscript uuid.vbs` and reads the result
