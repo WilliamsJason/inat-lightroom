@@ -72,7 +72,30 @@ and replace the folder by hand.
 Go to **File → Plug-in Extras → Pinned Settings…** and open the
 **Account** tab.
 
-### Option 1 — paste an API token (works today)
+### Option 1 — sign in with iNaturalist (recommended)
+
+1. Click **Sign In with iNaturalist**. Your browser opens to iNaturalist's
+   authorization page.
+2. Sign in there if you are not already, and approve **Pinned for iNaturalist**.
+3. iNaturalist hands you back to Lightroom. The Account tab updates to show
+   which account you signed in as.
+
+That is the whole of it, once. Your password goes to iNaturalist and never to
+the plugin, and the plugin quietly renews its 24-hour working token from then
+on, so there is nothing to repeat tomorrow. **Sign Out** discards everything.
+
+This replaces an earlier OAuth application form that asked for an app ID, app
+secret, username and password. It worked, but it used the OAuth *password
+grant*, which iNaturalist recommends against — especially for distributed
+applications, since it means typing your account password into someone else's
+software. It also required every user to have their own manually approved
+iNaturalist application, which is a bar almost nobody clears. Removed rather
+than left switched off.
+
+### Option 2 — paste an API token
+
+The fallback, for anyone who would rather not authorize an application, or if
+sign-in will not start on your machine.
 
 1. Sign in at <https://www.inaturalist.org>.
 2. Click **Open Token Page** in the dialog, or visit
@@ -83,22 +106,8 @@ Go to **File → Plug-in Extras → Pinned Settings…** and open the
    immediately and reports which account it belongs to.
 
 These tokens expire after **24 hours**, so this needs repeating each day you
-use the plugin. It requires no registration, which makes it the practical
-option right now.
-
-### Option 2 — sign in with iNaturalist (coming soon)
-
-Not built yet. It will send you to iNaturalist in your browser to sign in and
-return a code the plugin exchanges for tokens, refreshing them quietly from
-then on. Your password goes to iNaturalist and never to the plugin.
-
-This replaces an earlier OAuth application form that asked for an app ID, app
-secret, username and password. It worked, but it used the OAuth *password
-grant*, which iNaturalist recommends against — especially for distributed
-applications, since it means typing your account password into someone else's
-software. It also required every user to have their own manually approved
-iNaturalist application, which is a bar almost nobody clears. Removed rather
-than left switched off.
+use the plugin. The field is disabled while you are signed in, since the
+signed-in credential would take precedence over anything pasted there.
 
 Everything is stored in Lightroom's encrypted password store (`LrPasswords`),
 which is backed by the OS credential vault. Nothing is written to disk by the
@@ -318,8 +327,8 @@ disagreeing with itself. Posting a new identification withdraws the old one.
 **File → Plug-in Extras → Pinned Settings…**, in three tabs:
 
 - **Account** — credentials, as above. The only tab with buttons that save
-  something: a token has to be stored and checked, so **Save Token** and
-  **Clear Stored Credentials** sit beside the field they act on.
+  something: **Sign In with iNaturalist**, and for the pasted-token route a
+  **Save Token** and **Clear Stored Credentials** beside the field they act on.
 - **Observations** — the catalog side: where the taxonomy keywords go, plus
   **Sync All Linked Photos**, which refreshes every photo in the catalog that
   has an observation ID, and **Find Unlinked Observations…**.
@@ -495,6 +504,8 @@ pinned.lrplugin/
 ├── WindowFix.lua              # Fixes the panel's z-order (Windows only)
 ├── fix_window_z_order.ps1     # The Win32 helper WindowFix shells out to
 ├── InatAuth.lua               # Token acquisition and credential storage
+├── InatOAuth.lua              # Browser sign-in: OAuth authorization code + PKCE
+├── Sha256.lua                 # SHA-256 and base64url, for the PKCE challenge
 ├── InatAPI.lua                # HTTP client for the iNaturalist REST API
 ├── PluginUrls.lua             # Builds and parses lightroom:// plugin URLs
 ├── URLHandler.lua             # Receives those URLs and dispatches

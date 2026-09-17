@@ -85,10 +85,12 @@ to ask what the photo is. See [`docs/plugin-architecture.md`](docs/plugin-archit
 for what that costs and why it was still worth it — and for what to do if you
 have an existing published collection.
 
-Authentication is a pasted API token, which expires daily. The frictionless
-path is browser sign-in via the OAuth authorization code flow, which is not
-built yet; the `lightroom://` plumbing it needs already exists. An earlier
-form that took your iNaturalist password directly has been removed — see
+Authentication is a browser sign-in: **Sign In with iNaturalist** in the
+settings window hands you to iNaturalist, you approve once, and the plugin
+keeps itself topped up from then on. Your password never reaches the plugin.
+Pasting a 24-hour API token still works and is still there, as the fallback for
+anyone who would rather not authorize an application. The earlier form that
+took your iNaturalist password directly has been removed — see
 [`plugin/README.md`](plugin/README.md).
 
 Rough edges worth knowing: an upload takes the whole selection into one
@@ -178,6 +180,8 @@ inat-lightroom/
         ├── install_update.ps1   # Verifies and unpacks an update (Windows)
         ├── install_update.sh    # Verifies and unpacks an update (macOS)
         ├── InatAuth.lua         # Token acquisition and credential storage
+        ├── InatOAuth.lua        # Browser sign-in: OAuth authorization code + PKCE
+        ├── Sha256.lua           # SHA-256 and base64url, for the PKCE challenge
         ├── InatAPI.lua          # HTTP client for the iNaturalist REST API
         ├── PluginUrls.lua       # Builds and parses lightroom:// plugin URLs
         ├── URLHandler.lua       # Receives those URLs and dispatches

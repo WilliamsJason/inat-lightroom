@@ -52,8 +52,15 @@ been self-serve since 2022. From the application form:
 > 2 months old and must have made at least 10 improving identifications for
 > other users in the last month.
 
-Plan for this lead time. Until approval lands, the pasted-JWT route is the
-only way to exercise write endpoints, and it must be repeated every 24 hours.
+This project's application is **approved**, and its `client_id` ships in
+`InatOAuth.lua` as plain text. That is correct for a public client: the id
+names the application, it does not authorise anything, and every user
+authenticates against it as themselves.
+
+Anyone forking this should register their own rather than reuse it, and should
+plan for the lead time. Until an application lands, the pasted-JWT route is the
+only way to exercise write endpoints, and it must be repeated every 24 hours —
+which is why the plugin keeps that path rather than deleting it.
 
 ### Grant types
 
@@ -103,6 +110,20 @@ initializer, so non-HTTPS redirect URIs are accepted at all.
 
 The resulting OAuth token never expires, so the user authorizes **once** and
 the plugin silently refreshes the 24-hour JWT from it thereafter.
+
+**[verified] The token exchange takes a form body, not JSON.** `POST
+/oauth/token` with `Content-Type: application/x-www-form-urlencoded` carrying
+`client_id`, `code`, `code_verifier`, `grant_type=authorization_code` and
+`redirect_uri`. No `client_secret` — sending one to a public client is an
+error, not a belt-and-braces precaution.
+
+Doorkeeper's failures come back as JSON naming the fault, and the names are
+worth surfacing rather than swallowing: `invalid_grant` is almost always a code
+that has already been used or has expired, which has an obvious fix.
+
+The plugin's implementation is `InatOAuth.lua`; where the SHA-256 for the S256
+challenge comes from is its own small saga, written up in
+[plugin-architecture.md](plugin-architecture.md#sha-256-is-available-but-not-where-the-documentation-says).
 
 ---
 

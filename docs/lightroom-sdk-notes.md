@@ -1307,6 +1307,70 @@ LrPasswords.retrieve(key)
 
 No plugin ID argument — it is implicit. Storage is the OS credential vault.
 
+## `LrDigest` gives a plugin SHA-256, and is not in the documentation
+
+**[verified]** — imported and used from a third-party plugin in Lightroom
+Classic, and its output checked against a known test vector.
+
+PKCE needs SHA-256. Lightroom's Lua is 5.1 — no bitwise operators, no crypto —
+and `LrMD5` is the only hashing namespace in the SDK reference. MD5 is not a
+PKCE challenge.
+
+`LrDigest` is the answer, and finding it means dumping binaries. It is **not**
+in `substrate.dll`, where `LrMD5`, `LrStringUtils`, `LrPasswords` and the rest
+of the core namespaces live. It is in **`ftp_client.dll`**:
+
+```
+AgToolkitIdentifier  com.adobe.ag.ftpclient
+AgExports
+  AgNetIO      AgFTPClient.lua
+  AgFTPDialog  AgFTPDialog.lua
+  AgDigest     AgDigest.lua
+  LrFtp        LrFtp.lua
+  LrDigest     LrDigest.lua
+  WFDigest     WFDigest.lua
+  WFDigestImpl C:luaopen_WFDigestImpl
+```
+
+`AgExports` is the table a toolkit publishes for `import`, and `LrFtp` — a
+public, documented namespace — is in it on the line above. So `LrDigest` is
+importable for exactly the same reason `LrFtp` is.
+
+Underneath, `WFDigestImpl` is a C module wrapping OpenSSL. The same binary
+carries `SHA1_Init`/`Update`/`Final`, `SHA256_Init`/`Update`/`Final`,
+`EVP_sha1`, `EVP_sha256` and the `HMAC_*` family, so SHA-1, SHA-256 and HMAC
+are all there. The Lua-side names near the module are `init`, `update` and
+`digest`, which fits both a one-shot `digest(s)` and an incremental handle.
+
+What the strings cannot settle is the exact call shape or the return encoding.
+So `plugin/pinned.lrplugin/Sha256.lua` tries the plausible shapes and then
+makes the winner hash `"abc"` and compares against the FIPS 180-4 vector
+`ba7816bf…`. Cheap — one hash, once per session — and it converts a guess about
+an undocumented namespace into a fact, or into a clean refusal.
+
+Worth knowing: rcloran's `lr-inaturalist-publish` bundles a ~500-line pure-Lua
+SHA-256 instead. That is the fallback if `LrDigest` ever stops being exported,
+and the known-answer check is what would notice.
+
+## `LrUUID` is in the loader, so randomness needs no shell-out
+
+**[verified]** — called from a third-party plugin in Lightroom Classic.
+
+`LrUUID.generateUUID()` — `AgUUID_generateUUID_L`, backed by `AgUUID.lua`, both
+in `substrate.dll`. Being in the plugin loader means it is always there, on
+both platforms, with no toolkit to be unavailable.
+
+That is worth noting because the obvious precedent does it the hard way:
+`lr-inaturalist-publish` runs `cscript uuid.vbs` on Windows and `uuidgen` on
+macOS, captures the output through a temp file because `io.popen` pops up a
+console window, and then XORs the result with a Lua PRNG precisely because a
+temp file is interceptable. `LrUUID` avoids the whole apparatus.
+
+Adobe does not document how it is seeded, so it should not be treated as a
+CSPRNG on its own. Mixing several UUIDs with the clock, `os.clock`, a table
+address and `math.random` and hashing the lot is no weaker than the best input,
+which is the best available guarantee.
+
 ## `LrApplicationView.switchToModule` is real, and `"map"` is the Map module
 
 `LrApplicationView` is not in the SDK documentation this project was working
