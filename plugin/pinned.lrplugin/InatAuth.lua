@@ -356,22 +356,78 @@ function InatAuth.getToken(forceRefresh)
     .. "Use File > Plug-in Extras > Pinned Settings…."
 end
 
---- Tell the user their credentials are missing or expired.
+--- A one-line summary of why a token could not be had.
 --
--- One dialog for every feature that needs a token, because it is one problem
+-- Read from the stored state rather than from the caller's message, because
+-- the messages are written for a dialog that is no longer shown and end with
+-- directions to the very window that is about to open.
+local function setupNotice()
+  if retrieve(KEY_API_TOKEN) then
+    return "Pinned's iNaturalist token has expired."
+  end
+  return "Pinned needs your iNaturalist credentials before it can do that."
+end
+
+--- Whether the settings window is the answer to this failure.
+--
+-- It is when there is nothing stored that the plugin can renew on its own: no
+-- credentials at all, or a pasted token that has run out. It is not when the
+-- user is signed in through the browser, because then the plugin renews its
+-- own token and a failure is the network, a revocation, or iNaturalist being
+-- down -- none of which are fixed by the window, and the first of which comes
+-- and goes. Yanking the settings open over a dropped connection teaches the
+-- user to close it without reading.
+local function setupWouldHelp()
+  return not InatAuth.isSignedIn()
+end
+
+--- Send the user to the place that fixes missing or expired credentials.
+--
+-- One route for every feature that needs a token, because it is one problem
 -- with one fix, and it is not about the feature that happened to hit it. Four
 -- call sites had drifted into three different titles and two severities, so
 -- the same sentence looked like a different fault depending on which button
 -- had been pressed.
 --
--- Titled "Pinned" rather than after the caller for the same reason, and shown
--- as a warning rather than an error because not having set the plugin up yet is
--- a state everyone starts in, not something that went wrong.
+-- It used to be a warning dialog whose whole content was directions to
+-- File > Plug-in Extras > Pinned Settings…. Reading out a menu path is a
+-- worse version of opening the window, so when the window is the answer it
+-- opens the window -- on the Account tab, with the reason above the fields
+-- that answer it. The caller's message is kept for the log, which is where
+-- the detail is still wanted, and is still shown when the window is not the
+-- answer or cannot be opened.
+--
+-- Required lazily: SettingsDialog requires this module at load time, so a
+-- require at the top of the file would be circular.
 function InatAuth.reportMissingCredentials(message)
-  LrDialogs.message("Pinned",
-    message or "iNaturalist credentials are not set up.\n\n"
-      .. "Use File > Plug-in Extras > Pinned Settings….",
-    "warning")
+  local fallback = message or "iNaturalist credentials are not set up.\n\n"
+    .. "Use File > Plug-in Extras > Pinned Settings…."
+
+  logger:info("No usable token: " .. tostring(fallback))
+
+  local ok, opened = pcall(function()
+    if not setupWouldHelp() then return false end
+
+    local SettingsDialog = require "SettingsDialog"
+
+    -- Already there. Opening a second copy of the window on top of the one
+    -- the user is looking at would hide the fields that fix this.
+    if SettingsDialog.isShowing() then return false end
+
+    SettingsDialog.show({ tab = "account", notice = setupNotice() })
+    return true
+  end)
+
+  if not ok then
+    logger:error("Could not open settings: " .. tostring(opened))
+  end
+
+  -- Either the window was the wrong answer, or opening it failed -- and a
+  -- feature that stops with nothing shown at all reads as one that quietly
+  -- did nothing.
+  if not ok or not opened then
+    LrDialogs.message("Pinned", fallback, "warning")
+  end
 end
 
 --- Verify a token by fetching the authenticated user.

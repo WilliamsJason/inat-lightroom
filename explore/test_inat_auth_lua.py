@@ -170,41 +170,116 @@ def test_token_is_not_written_to_preferences(plugin, auth):
 
 
 # ---------------------------------------------------------------------------
-# Reporting that there are none
+# Having none: going where they are entered
 # ---------------------------------------------------------------------------
 
 
-def test_missing_credentials_are_reported_as_a_warning(plugin, auth):
-    """Not having set the plugin up yet is the state everybody starts in, not
-    something that went wrong."""
+def views(node, found=None):
+    """Every table in a view tree, flattened."""
+    found = [] if found is None else found
+    if not hasattr(node, "keys"):
+        return found
+    found.append(node)
+    for key in list(node.keys()):
+        child = node[key]
+        if hasattr(child, "keys"):
+            views(child, found)
+    return found
+
+
+def settings_window(plugin):
+    """The settings window, once the task that builds it has run."""
+    plugin.run_pending_tasks()
+    assert plugin.modal_dialogs, "No window was opened"
+    return plugin.modal_dialogs[-1]
+
+
+def status_of(window):
+    """What the Account tab's status line was given to say."""
+    return window["contents"]["bind_to_object"]["status"]
+
+
+def test_missing_credentials_open_the_place_they_are_entered(plugin, auth):
+    """A warning whose whole content was "use File > Plug-in Extras > Pinned
+    Settings…" is a worse version of opening that window, and it left the user
+    to find a menu item to fix a thing they had just been stopped by."""
     auth.reportMissingCredentials(None)
 
-    shown = plugin.dialogs[-1]
-    assert shown["style"] == "warning"
-    assert "credentials are not set up" in shown["message"]
+    assert plugin.dialogs == [], "A popup was shown instead of the window"
+    assert settings_window(plugin)["title"] == "Pinned Settings"
 
 
-def test_the_dialog_is_not_named_after_whatever_asked(plugin, auth):
-    """Four features need a token, and it is one problem with one fix. Titled
-    per caller, the same sentence looked like a different fault depending on
-    which button had been pressed -- which is what this replaced."""
+def test_the_window_opens_on_the_tab_that_fixes_it(plugin, auth):
+    """Three tabs, and only one of them takes a token. Landing on Observations
+    is landing on settings, not on the answer."""
     auth.reportMissingCredentials(None)
 
-    assert plugin.dialogs[-1]["title"] == "Pinned"
+    tabs = [
+        v for v in views(settings_window(plugin)["contents"])
+        if v["_viewType"] == "tab_view"
+    ]
+    assert tabs and tabs[0]["value"] == "account"
 
 
-def test_the_reason_given_is_the_one_passed_in(plugin, auth):
-    """An expired token and an absent one need different advice, so the caller
-    passes on whatever getToken said rather than this inventing a message."""
+def test_the_window_says_what_sent_the_user_there(plugin, auth):
+    """Opened by an upload that could not run, it would otherwise look like a
+    settings window that appeared by itself."""
+    auth.reportMissingCredentials(None)
+
+    status = status_of(settings_window(plugin))
+    assert "credentials" in status
+    assert "No token stored yet." in status
+
+
+def test_an_expired_token_is_not_described_as_a_missing_one(plugin, auth):
+    """Pasting a replacement and setting up for the first time are different
+    acts, and the line at the top of the window has to be right about which
+    one this is."""
+    plugin.passwords["api_token"] = valid_token(hours_remaining=-1)
+    plugin.prefs["apiTokenExpiresAt"] = int(time.time()) - HOUR
+
     auth.reportMissingCredentials("Your iNaturalist token has expired.")
 
+    status = status_of(settings_window(plugin))
+    assert "expired" in status
+    assert "needs your iNaturalist credentials" not in status
+
+
+def test_a_signed_in_failure_is_reported_rather_than_sent_here(plugin, auth):
+    """Signed in through the browser, the plugin renews its own token, so a
+    failure is the network, a revocation, or iNaturalist being down. None of
+    those are fixed by this window, and a settings window thrown up over a
+    dropped connection teaches the user to close it without reading."""
+    plugin.call(auth.storeOAuthToken, "oauth-token")
+
+    auth.reportMissingCredentials("Could not reach iNaturalist.")
+
+    assert plugin.dialogs[-1]["style"] == "warning"
+    assert plugin.dialogs[-1]["message"] == "Could not reach iNaturalist."
+    plugin.run_pending_tasks()
+    assert plugin.modal_dialogs == []
+
+
+def test_the_window_is_not_opened_on_top_of_itself(plugin, auth):
+    """A sync started from the settings window with no credentials sends the
+    user here. A second copy of the window over the first would hide the very
+    fields it wants filled in, so that one case still gets the old warning."""
+    plugin.require("SettingsDialog")["show"]()
+
+    auth.reportMissingCredentials("Your iNaturalist token has expired.")
+
+    assert plugin.dialogs[-1]["style"] == "warning"
     assert plugin.dialogs[-1]["message"] == "Your iNaturalist token has expired."
 
+    plugin.run_pending_tasks()
+    assert len(plugin.modal_dialogs) == 1
 
-def test_every_caller_gets_the_same_dialog(plugin, auth):
-    """The whole point: two calls, from wherever, are indistinguishable."""
-    auth.reportMissingCredentials(None)
-    auth.reportMissingCredentials(None)
 
-    first, second = plugin.dialogs[-2], plugin.dialogs[-1]
-    assert first == second
+def test_the_reason_the_caller_gave_is_logged(plugin, auth):
+    """The window says what is wrong in a sentence; whatever getToken said is
+    the detail behind it, and the log is where that is still wanted."""
+    auth.reportMissingCredentials("Your iNaturalist token has expired.")
+
+    assert any(
+        "Your iNaturalist token has expired." in line for line in plugin.log_lines
+    )

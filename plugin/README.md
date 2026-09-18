@@ -72,6 +72,13 @@ and replace the folder by hand.
 Go to **File → Plug-in Extras → Pinned Settings…** and open the
 **Account** tab.
 
+You do not have to go looking for it, though: anything that needs iNaturalist
+and finds no credentials — an upload, a sync, a request for suggestions —
+opens this window on the **Account** tab itself, with a line at the top saying
+what sent you there. The same happens when a pasted token has run out. (Once
+you are signed in through the browser the plugin renews its own token, so a
+failure there is reported rather than met with a window.)
+
 ### Option 1 — sign in with iNaturalist (recommended)
 
 1. Click **Sign In with iNaturalist**. Your browser opens to iNaturalist's
