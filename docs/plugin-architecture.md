@@ -430,6 +430,17 @@ connection did, and they are genuine preferences rather than per-batch choices,
 so a settings window is where they belong. `Settings.lua` holds reading, writing
 and validation so the tabs stay declarative.
 
+`SettingsDialog.show` takes an optional `{ tab = …, notice = … }`, which is how
+a missing token reaches it. `InatAuth.reportMissingCredentials` is the one
+route every feature that needs a token takes when it has none, and it opens
+this window on the Account tab with `notice` above the token status rather than
+showing a warning that recites the menu path to it. The old warning survives
+for the cases where the window is not the answer: a user signed in through the
+browser (whose token the plugin renews itself, so the failure is the network or
+a revocation), a sync started from the settings window itself
+(`SettingsDialog.isShowing`), and a window that could not be opened at all.
+Whatever `getToken` said is logged either way.
+
 Tab identifiers are exposed for testing: `ui.dll` raises *"Multiple
 tab_view_item views with the same identifier"* and *"tab_view_item needs to have
 a string or number identifier"*, and neither is discoverable without opening a

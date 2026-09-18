@@ -1186,6 +1186,23 @@ def test_asking_for_suggestions_fills_the_rows(plugin, panel):
     assert props["suggestionTitle2"] == ""
 
 
+def test_asking_for_suggestions_without_credentials_opens_the_settings(
+    plugin, panel
+):
+    """Everything else the suggestion box reports goes into its own status
+    line, because it is a thing you ask for repeatedly. This one does not: the
+    fix is a window, and a status line two words wide is no place to spell out
+    a menu path."""
+    props = plugin.runtime.table_from({})
+    plugin.set_target_photos([plugin.new_photo()])
+
+    plugin.in_task(panel.loadSuggestions, props)
+    plugin.run_pending_tasks()
+
+    assert props["suggestionStatus"] == ""
+    assert plugin.modal_dialogs[-1]["title"] == "Pinned Settings"
+
+
 def test_moving_to_another_photo_empties_the_rows(plugin, panel):
     """Suggestions belong to the photo they were asked about: a leftover row is
     still clickable, and clicking it would put the previous photo's species on

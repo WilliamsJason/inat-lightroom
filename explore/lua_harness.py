@@ -514,8 +514,29 @@ stubs.LrBinding = {
 -- A function context dies when the function owning it returns. Anything still
 -- holding one after that is holding a dead object, which is easy to do by
 -- pairing callWithContext with an async task.
+--
+-- Cleanup handlers are modelled because the SDK's contexts have them and code
+-- uses them to undo something for as long as the context lives -- a flag
+-- saying a window is on screen, say. They run in reverse order of
+-- registration, as the SDK's do, and are guarded so one failing handler does
+-- not strand the rest.
 local function newContext()
-  return { alive = true }
+  local context = { alive = true, cleanups = {} }
+
+  function context:addCleanupHandler(fn)
+    local handlers = self.cleanups
+    handlers[#handlers + 1] = fn
+  end
+
+  return context
+end
+
+--- End a context: mark it dead, then run its cleanup handlers.
+local function endContext(context)
+  context.alive = false
+  for i = #context.cleanups, 1, -1 do
+    pcall(context.cleanups[i], true, nil)
+  end
 end
 
 stubs.LrProgressScope = function(args)
@@ -537,7 +558,7 @@ stubs.LrFunctionContext = {
   callWithContext = function(_name, fn)
     local context = newContext()
     local result = fn(context)
-    context.alive = false
+    endContext(context)
     runPendingTasks()
     return result
   end,
@@ -547,7 +568,7 @@ stubs.LrFunctionContext = {
     pendingTasks[#pendingTasks + 1] = function()
       local context = newContext()
       fn(context)
-      context.alive = false
+      endContext(context)
     end
   end,
 }

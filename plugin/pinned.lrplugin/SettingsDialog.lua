@@ -45,6 +45,18 @@ local TOKEN_URL = "https://www.inaturalist.org/users/api_token"
 
 local SettingsDialog = {}
 
+-- Whether the settings window is on screen. See show().
+local isShowing = false
+
+--- Whether the settings window is already open.
+--
+-- Asked by InatAuth before it sends someone here: the answer to "you have no
+-- credentials" is this window, but only when it is not the window they are
+-- already looking at.
+function SettingsDialog.isShowing()
+  return isShowing
+end
+
 --------------------------------------------------------------------------------
 -- Choices
 --------------------------------------------------------------------------------
@@ -114,7 +126,7 @@ local function accountTab(f, props, actions)
       f:static_text {
         title           = LrView.bind("status"),
         width           = 500,
-        height_in_lines = 2,
+        height_in_lines = 3,
       },
 
       f:separator { fill_horizontal = 1 },
@@ -927,7 +939,22 @@ end
 --
 -- Returns as soon as the task is queued; the dialog itself is modal, so it
 -- blocks that task until dismissed.
-function SettingsDialog.show()
+--
+-- @param options  optional table:
+--                   tab     identifier of the tab to open on ("account",
+--                           "observations", "upload"). Defaults to the first.
+--                   notice  a sentence to show above the token status, used
+--                           when something else sent the user here -- an
+--                           upload or a sync that had no credentials to run
+--                           with. Without it the window looks like it opened
+--                           by itself.
+function SettingsDialog.show(options)
+  options = options or {}
+
+  -- Set here rather than inside the task, so that two failed operations in
+  -- quick succession cannot both queue a window before either has opened one.
+  isShowing = true
+
   -- A task, not a plain context. The keyword-root picker walks the catalog to
   -- build its list, and catalog:getKeywords refuses outside a task -- Lightroom
   -- reports it as "An internal error has occurred: We can only wait from within
@@ -943,12 +970,21 @@ function SettingsDialog.show()
     -- is otherwise unanswerable.
     logger:trace("Settings: opening")
 
+    -- Kept set for the whole task rather than just around the modal call, so
+    -- that anything sent here while it is up -- a sync started from this very
+    -- window finding no credentials, say -- reports instead of stacking a
+    -- second copy of the window on top of the first. Cleared by the context
+    -- so that an error raised below cannot leave it stuck on.
+    context:addCleanupHandler(function() isShowing = false end)
+
     local f     = LrView.osFactory()
     local props = LrBinding.makePropertyTable(context)
 
     props.api_token  = ""
     props.signedIn   = InatAuth.isSignedIn()
-    props.status     = tokenStatusText()
+    props.status     = options.notice
+      and (options.notice .. " " .. tokenStatusText())
+      or tokenStatusText()
 
     -- The picker is a way of typing into the field, not a second setting: it
     -- has no entry in Settings.DEFAULTS, so savePreferences ignores it.
@@ -1049,6 +1085,10 @@ function SettingsDialog.show()
       width = 540,
 
       f:tab_view {
+        -- Set rather than bound: which tab is open is not a setting, and
+        -- nothing changes it after the window is up. An identifier the tabs
+        -- do not use would simply leave the first one selected.
+        value = options.tab,
         unpack(SettingsDialog.tabs(f, props, actions)),
       },
     }

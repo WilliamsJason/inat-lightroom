@@ -619,7 +619,11 @@ function ObservationPanel.loadSuggestions(props)
 
   local api, authErr = UploadCore.requireAPI()
   if not api then
-    props.suggestionStatus = authErr
+    -- The one place in the panel where a missing token is not reported in
+    -- line: the fix is a window, so open it rather than printing a menu path
+    -- into a status line two words wide.
+    props.suggestionStatus = ""
+    InatAuth.reportMissingCredentials(authErr)
     return
   end
 
