@@ -17,7 +17,7 @@ at once, and nothing it does can ship by accident.
 
 Plug-in Manager → Add → point it at `explore/probes/sdkprobe.lrplugin`.
 
-Two items appear under **File › Plug-in Extras**. Each writes its results to
+Its items appear under **File › Plug-in Extras**. Each writes its results to
 `inat-sdk-probe.txt` on the Desktop, appending, so several runs can be compared.
 
 ## iNat Probe: Catalog APIs
@@ -72,7 +72,87 @@ Nothing in the SDK reports the last one, so it includes human reaction time
 Run it once with thumbnails and once without: the difference is the cost of
 `catalog_photo`, which is the part most likely to make a long list unusable.
 
-## What they answered
+## iNat Probe: Suggestion Rows
+
+Why the Observation panel loses the end of a suggestion name, and which fix the
+host will accept.
+
+The panel builds ten rows of `f:static_text` with **empty** titles pointed at
+bindings, because the window outlives any one photo selection and a presented
+view tree cannot grow rows. Sized before it has text, filled afterwards — that
+combination is where the surprises are. `ui.dll` says the keys exist
+(`AgViewWinStaticText` reads `selectable`, `height_in_lines` and
+`resize_to_fit_text_height`; `scroll_view` reads `vertical_scroller` and
+`horizontal_scroller`), but "the binary accepts this key" has never been the
+same as "this displays".
+
+Seven row shapes, a width ladder, and two full-length lists, spread across
+**four short windows shown one after another** — each built the way the panel
+builds its own: floating rather than modal, titles bound and filled only once
+the window is up, and the string shapes `describeSuggestion` produces.
+
+| Window | Blocks | Question |
+|---|---|---|
+| 1 — widths | A `width=330, truncation="tail"` (the panel today), then the same long name at 440, 560, 680 | how wide does it have to be? |
+| 2 — shapes | B `height_in_lines=2` no truncation · C the same plus `truncation="tail"` · D no `width` · G `selectable=true` · F inside an undersized `scrolled_view` | can a name show its whole self where it is? |
+| 3 — ten plain rows | H, all ten as the panel draws them | do all ten fit? |
+| 4 — ten wrapped rows | I, all ten at `height_in_lines=2` | does wrapping make the list too tall? |
+
+Four windows rather than one because the first version came out taller than the
+screen: the last block sat below the bottom edge, the title bar was out of
+reach, and the questionnaire behind it could not be got to at all. A probe
+nobody can finish measures nothing. So each window stays short, the button that
+advances sits at the **top** and closes the window through
+`closeFloatingDialogsForPlugin` rather than trusting a title bar that may not be
+reachable, and the questionnaire lives inside a `scrolled_view` so it cannot
+outgrow the screen either.
+
+**Whether a floating window can be moved or resized at all is one of the
+measurements**, and it is made by comparison rather than by opinion.
+`presentFloatingDialog`'s key list in `ui.dll` reads `onShow save_frame
+blockTask background_color closable maximizable minimizable borderless skin
+margin position …` — `resizable` is *not* in it, though `AgViewWin32Window` one
+chunk away does read `resizable`, with `horizontally` and `vertically` beside
+it. So window 1 asks for every frame key including `resizable = true`, window 2
+asks for none (exactly as the real panel does), and window 4 asks for
+`resizable = "horizontally"`. Whatever the answers are, the difference between
+them is the finding — and if none of the three can be resized, then the panel
+can never be widened either, and "let the name column grow with the window" is
+dead rather than merely unproven.
+
+G is not only about readability: `selectable` may swallow the click that picks a
+suggestion, so every block's name carries the same `mouse_down` and the report
+prints clicks per block. If `selectable` eats the click, G's count stays at zero
+while the others rise — a number, not an impression.
+
+Two further questions ask about the **real panel**, which is the only window
+carrying the saved frame the user lives with, so have it open with suggestions
+loaded before starting. If ten rows do not fit there, "add a scroll bar" was
+literally right and wrapping is the wrong first fix, because it makes the list
+taller still.
+
+Nothing in the SDK reports layout back — there is no way to ask a view how wide
+it ended up or how many lines it drew — so the questionnaire at the end is the
+instrument, the same way the scrolled-view probe measures "press Escape when it
+is usable" against the user.
+
+**What it answered.** A floating dialog honours `resizable = true` and ignores
+`resizable = "horizontally"`; one given no frame keys cannot be dragged at all;
+`maximizable` produced no Maximize. Resizing gained nothing, because the extra
+width went to the margin and every control kept its declared width — a column
+cannot grow with its window. `height_in_lines` did not wrap a bound title, at
+either truncation setting or across ten rows. `selectable = true` made the text
+genuinely copyable and the click counter for that block stayed at zero while
+its neighbours rose. Ten rows fitted; the complaint was never vertical.
+
+One block misled us and is worth the warning: F scrolled horizontally with its
+contents still clickable, but scrolling right did **not** reveal the rest of the
+name, because the row inside it was the panel's own `width = 330,
+truncation = "tail"` row and had already truncated itself before the scroller
+saw it. Whether a width-less row inside a scroller sizes to its text is still
+unknown — block D says a width-less row collapses outside one.
+
+
 
 Measured against a 6,591 photo catalog on Lightroom Classic, Windows. The
 findings are written up properly in

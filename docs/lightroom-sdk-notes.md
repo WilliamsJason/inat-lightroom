@@ -437,6 +437,128 @@ overflows is the thing that is too long. And when text goes missing, suspect the
 layout before the string -- the bytes were checked first here, and they were
 fine.
 
+## How wide a fixed-width column has to be, measured rather than guessed
+
+A `static_text` needs a declared width, cannot wrap, and cannot grow with its
+window, so the width is chosen once and every name lives or dies by it. Picking
+it off one example is how the Observation panel ended up cutting off most of its
+suggestion list without anyone noticing.
+
+Nothing in the repo carried a real suggestion payload -- every test builds two
+or three invented rows -- so the distribution was measured instead:
+`explore/measure_suggestion_widths.py` takes the 600 most-observed species from
+the API the plugin already calls, fetches each with its ancestors, and runs them
+through the real `PanelCore.coarserRows` and `suggestionSlots`, mark prefix
+included. 2,400 titles, September 2026:
+
+```
+scored species rows   n=  600   median 44 chars   max  68
+coarser rank rows     n=1,800   median 71 chars   max 111
+```
+
+At the 330pt the panel shipped with, the scored rows all fitted and only about a
+third of the coarse ones did. The split is the whole diagnosis: a candidate's
+tail is `- 87%` and a coarse row's is `- <rank>, containing <name>`, and iNat
+hands whole families a list of common names before that tail is even added
+("Herb-Paris, False Hellebores, Trilliums and allies (Melanthiaceae)"). The rows
+being cut were the rows whose tail says why to pick them, which is why the
+symptom was reported as not being able to read the suggestions rather than as
+one odd-looking name.
+
+The other half of the sum is characters to pixels, and that is *not* measured.
+A probe ladder showed 330 drawing about 67 characters before its ellipsis and
+440 drawing all 82 of its sample, which implies roughly 4.9pt per character --
+but one string at two widths cannot pin down a proportional font, so any width
+chosen this way carries the uncertainty with it. Carrying an optimistic, a
+central and a pessimistic reading through the arithmetic, rather than picking
+one and forgetting it was a guess, is what makes the trade visible: at 480 the
+sample fits entirely on the first two readings and about 94% on the third.
+
+Two lessons for the next fixed width. Measure the distribution of what will
+actually go in it -- the formatter and a few hundred real records are usually
+enough, and beat an example every time. And say what the number fits: 480 fits
+the names that were measured, not every name that can exist, and `truncation`
+is what happens when it is wrong.
+
+## `selectable` makes text copyable and stops it being clickable
+
+`f:static_text` takes `selectable = true` -- `AgViewWinStaticText` reads it in
+`ui.dll`, beside `height_in_lines` and `resize_to_fit_text_height` -- and it
+works: the text can be dragged over, selected and copied, and the row draws
+with a field-like border to say so.
+
+It also stops the row reporting `mouse_down`. Measured with a probe that gave
+every variant the same click handler and counted clicks per variant: the plain
+rows counted theirs, the selectable one stayed at zero, and the header kept
+naming the last row clicked as one of the others. An impression that "the click
+did not seem to do anything" would not have been worth much; a counter that
+stays at zero while its neighbours rise is.
+
+So a `static_text` is copyable or clickable, not both, and the Observation
+panel's suggestion rows have to be clickable -- clicking one is how a
+suggestion is chosen. Copying a name needs something beside the row rather than
+the row itself, which is what the panel's Copy button is for. Anyone tempted to
+make those rows selectable instead should know it would silently break choosing
+a suggestion: the row still draws, still highlights, and simply never fires.
+
+## `height_in_lines` does not wrap a `static_text`
+
+`AgViewWinStaticText` reads `height_in_lines`, so it is a key the control knows
+about. On a bound title it does nothing visible: the text draws on one line, at
+the same height as without it, and the part that does not fit is lost exactly as
+it would have been. Seen three times over -- with `truncation` set, without it,
+and across ten full-length rows.
+
+Worth knowing because wrapping is the obvious answer to a name that does not
+fit, and it is not available. A long title has to be made to fit its width, or
+be cut.
+
+Not established: whether `height_in_lines` does something on a `static_text`
+built *with* its text rather than bound to it. The panel needs bound titles,
+because its window outlives any one photo, so the question was not worth a round
+to answer.
+
+## A window can be resizable; its contents still will not grow
+
+`presentFloatingDialog`'s key list in `ui.dll` names `closable`, `maximizable`,
+`minimizable` and `borderless` beside `save_frame`, and does *not* name
+`resizable` -- while `AgViewWin32Window`, a chunk away, reads `resizable` with
+`horizontally` and `vertically` beside it. A key present in one list and absent
+from another is not an answer, so three floating windows were shown on the same
+host: one asking for every frame key including `resizable = true`, one asking
+for none, and one asking for `resizable = "horizontally"`.
+
+Only the first could be dragged bigger. So `presentFloatingDialog` does honour
+`resizable`, the boolean form works, the string form does not, and a floating
+dialog given no frame keys cannot be resized at all. `maximizable` was accepted
+and produced no working Maximize.
+
+The useful half is what resizing achieved: nothing. Dragging the window wider
+widened the *margin*. Every control kept the width it was declared with, and the
+window would not shrink below them either. A column cannot be made to grow with
+its window, so a view that must show more text has to be given more width in
+code -- there is no arrangement of `fill_horizontal` and a bigger window that
+rescues it.
+
+## A `scrolled_view` does not undo truncation inside it
+
+A `scrolled_view` sized smaller than its contents does scroll horizontally, and
+the controls inside stay clickable. Both are real and both are useful.
+
+What it cannot do is lengthen a string that was already shortened. A probe put
+the panel's own row -- `width = 330`, `truncation = "tail"` -- inside a 260pt
+scroller and scrolled it fully right. The name still ended in an ellipsis. The
+`static_text` truncated itself to its own declared width before the scroller
+ever saw it, so panning right moved across an already-shortened string and
+revealed the button sitting to its right, not more of the name.
+
+The trap is that this reads as "a scroll bar did not fix the truncation" when it
+is really "the row truncated itself and the scroller faithfully showed the
+result". For a scroller to rescue a long name the row inside it would have to
+carry no width and no truncation, so that it sizes to its text -- and that was
+never rendered, so it remains unknown. A `static_text` with no width collapses
+to nothing outside a scroller, which is reason to expect the same inside one.
+
 ## A bound `visible` does not hide a row
 
 `visible` is documented as a view property and is accepted on an `f:row`

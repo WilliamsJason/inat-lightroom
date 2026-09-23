@@ -174,10 +174,11 @@ def test_the_window_remembers_where_it_was_put(plugin, panel):
 
 
 def test_the_saved_frame_is_keyed_apart_from_the_window(plugin, panel):
-    """The frame carries the size too, and this window cannot be resized, so a
-    panel that is made narrower would still reopen at the old width forever.
-    Bumping this key is the only way to let Lightroom measure it again, and it
-    must not take the window's identity with it."""
+    """The frame carries the size too, and this window is presented without
+    `resizable` so nobody can drag it back, meaning a panel that is made wider
+    would still reopen at the old width forever. Bumping this key is the only
+    way to let Lightroom measure it again, and it must not take the window's
+    identity with it."""
     args = show(plugin, panel)
 
     assert args["save_frame"] != args["id"]
@@ -1280,10 +1281,28 @@ def test_every_row_reserves_width_for_the_name(plugin, panel):
         assert row["width"] > 0
 
 
-def test_a_long_name_is_ellipsised_and_kept_in_a_tooltip(plugin, panel):
-    """The panel is only as wide as a typical name, and static_text drops the
-    last whole word rather than clipping. `truncation` makes that an ellipsis;
-    the tooltip is where the name it could not draw survives."""
+def test_the_name_is_wide_enough_for_the_names_that_were_measured(plugin, panel):
+    """The width is the only thing that decides how much of a name is readable:
+    a static_text cannot wrap, and a column does not grow when its window does
+    (docs/lightroom-sdk-notes.md). 330 drew only about a third of the coarser
+    rows -- the ones whose `- <rank>, containing <name>` tail says why to pick
+    them -- against 2,400 titles measured from real taxa by
+    explore/measure_suggestion_widths.py. Narrowing it again brings that back."""
+    args = show(plugin, panel)
+
+    for row in suggestion_rows(args):
+        assert row["width"] >= 480
+
+
+def test_a_long_name_is_ellipsised_rather_than_losing_its_last_word(plugin, panel):
+    """480 fits the names that were measured, not every name iNaturalist can
+    return, so something still has to happen when one is too long. Without
+    `truncation` a static_text drops the last whole word silently and the row
+    stops mid-phrase with nothing to say it was shortened; with it the reader at
+    least sees an ellipsis. The tooltip carries the same binding as the title,
+    but nothing here has measured that a tooltip appears on these rows or that
+    it shows the untruncated string, so it is not the fallback -- the ellipsis
+    is."""
     args = show(plugin, panel)
 
     for row in suggestion_rows(args):

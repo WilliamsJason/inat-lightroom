@@ -57,10 +57,15 @@ local WINDOW_ID = "com.github.inat-lightroom.observationPanel"
 --
 -- save_frame stores a whole rectangle -- size as well as position -- in
 -- Lightroom's preferences, as `["<plugin>_<key>"] = AgRect(l, t, r, b)`. This
--- window cannot be resized, so once a layout has been seen at one width, that
--- width is what reopens forever: making the panel narrower changes what
--- Lightroom *would* measure and nothing about what it restores. There is no way
--- to ask it to forget, and a user cannot drag it back.
+-- window is not resizable -- it is presented without `resizable`, and a floating
+-- dialog given no frame keys cannot be dragged at all (measured) -- so once a
+-- layout has been seen at one width, that width is what reopens forever: making
+-- the panel wider changes what Lightroom *would* measure and nothing about what
+-- it restores. There is no way to ask it to forget, and a user cannot drag it
+-- back.
+--
+-- Nor would asking for `resizable = true` help. It is honoured, and dragging
+-- the window wider only widens the margin: controls keep their declared width.
 --
 -- So the key carries a number, and **making the panel a different size means
 -- bumping it**. The cost is that the window reopens in its default position
@@ -68,7 +73,9 @@ local WINDOW_ID = "com.github.inat-lightroom.observationPanel"
 --
 -- frame3: the Cancel button joined the upload row, which is wider than what
 -- frame2 measured.
-local FRAME_KEY = WINDOW_ID .. ".frame3"
+-- frame4: the suggestion names went from 330pt to 480pt, so every frame saved
+-- against frame3 is 150pt too narrow to show what they now draw.
+local FRAME_KEY = WINDOW_ID .. ".frame4"
 
 local OBSERVATION_URL = "https://www.inaturalist.org/observations/"
 
@@ -375,15 +382,55 @@ end
 -- (seen in the host). `fill_horizontal` alone does not save it: it shares out
 -- space a row has spare, and a row of two zero-width controls has none.
 --
--- That width is what decides how wide the window wants to be, so it is set to
--- the narrowest that holds a typical name rather than the widest name there
--- could be: a long name is ellipsised and its tooltip has the whole thing, and
--- a panel that is permanently as wide as its worst case is a worse trade. Both
--- keys are undocumented and both are read out of ui.dll, where `static_text` is
--- built with `truncation` beside `mouse_down` and `text_color` -- and
--- `truncation` is worth having on its own, because the documented behaviour
--- without it is to drop the last *word* silently.
-local NAME_WIDTH = 330
+-- That width is what decides how wide the window wants to be, and it is the
+-- only thing that decides how much of a name is readable, because nothing else
+-- can recover the rest. Measured, not reasoned (explore/probes/sdkprobe):
+-- a window given `resizable = true` really can be dragged wider, and the extra
+-- space goes entirely to the margin -- the text keeps its declared width. So a
+-- column cannot be made to grow with its window. `height_in_lines = 2` on a
+-- bound title does not wrap either; it draws one line, the same height as
+-- without it. The width is the whole lever.
+--
+-- 330 was cutting off most of the list rather than the odd unlucky name.
+-- explore/measure_suggestion_widths.py put the 600 most-observed species
+-- through this formatter -- 2,400 titles, September 2026 -- and split them:
+--
+--   scored species rows   max  68 chars   fit at 330
+--   coarser rank rows     max 111 chars   about a third fit at 330
+--
+-- The coarse rows are the long ones because `describeSuggestion` gives them a
+-- `- <rank>, containing <name>` tail where a candidate gets `- 87%`, and iNat
+-- hands whole families a list of common names to begin with ("Herb-Paris,
+-- False Hellebores, Trilliums and allies (Melanthiaceae)"). So the rows being
+-- cut were the rows whose tail says why to pick them.
+--
+-- 480 holds every one of those 2,400 titles if a character is ~4.9pt wide,
+-- which is what the probe's width ladder implies but did not prove -- one
+-- string at two widths cannot pin down a proportional font. On the pessimistic
+-- reading of that ladder it holds about 94%. It is the chosen width rather
+-- than the safe one: 560 fits the sample under every reading, and the extra
+-- 80pt of permanent panel width was judged not worth it.
+--
+-- So this fits the names that were measured. It is not a bound -- the sample is
+-- the common case out of some half a million taxa -- and `truncation` is what
+-- happens when it is wrong. Keeping it matters: the documented behaviour
+-- without it is to drop the last *word* silently, measured here as stopping
+-- dead mid-phrase with nothing to show the name had been shortened, so the
+-- ellipsis is the only thing that tells the reader there is more. Both keys are
+-- undocumented and both are read out of ui.dll, where `static_text` is built
+-- with `truncation` beside `mouse_down` and `text_color`.
+--
+-- The `tooltip` below is set in hope rather than in knowledge. `tooltip` is an
+-- AgView-level property in ui.dll (`AgView_changed_tooltip`, and
+-- `AgViewManifestationWin::SetTooltip` beside `HandleToolTipHitTest`), but
+-- nobody has checked that one appears on these rows or that it carries the
+-- whole untruncated title, so nothing here relies on it. `resizable` is the
+-- warning: present in one key list, absent from another, and only an A/B
+-- settled what it did.
+--
+-- Not `selectable = true`, which would make the name copyable: it is honoured,
+-- and it takes the click with it. See docs/lightroom-sdk-notes.md.
+local NAME_WIDTH = 480
 
 function ObservationPanel.suggestionsView(f, actions)
   local rows = { spacing = 0 }
