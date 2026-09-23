@@ -102,42 +102,22 @@ end
 -- special case -- and so the rule is never explained to someone it excluded
 -- nobody from.
 --
--- Names at most NAMED_REJECTS of them and counts the rest. The control is two
--- lines, and a static_text that overflows drops the word that does not fit
--- and says nothing about having done so, so an unbounded list would silently
--- lose its own tail. A count cannot overflow, and "and 4 others" is honest
--- about there being more in a way that a truncated list is not.
-local NAMED_REJECTS = 2
-
+-- States the rule and deliberately does NOT name the presets it excluded.
+-- Naming them was tried and removed: the rejected list has no bounded length,
+-- since someone with a shelf of optical-media and email presets makes it
+-- arbitrarily long, and the sentence was already too long for the tab. Capping
+-- the names and counting the rest worked but bought a mechanism for a line
+-- nobody needs the detail of -- the presets are absent from the popup right
+-- above, which is the part the user acts on.
 function SettingsDialog.presetNotes(presets)
-  local names = {}
-  local extra = 0
-
   for _, preset in ipairs(presets or {}) do
     if not preset.usable then
-      if #names < NAMED_REJECTS then
-        names[#names + 1] = "\"" .. tostring(preset.title) .. "\""
-      else
-        extra = extra + 1
-      end
+      return "Note: Only Hard Drive presets are listed as other presets"
+        .. " cannot render a file for upload."
     end
   end
 
-  if #names == 0 then return "" end
-
-  local list = names[1]
-  if #names > 1 then
-    list = table.concat(names, " and ", 1, #names)
-  end
-  if extra > 0 then
-    list = list .. " and " .. extra .. " other"
-      .. (extra == 1 and "" or "s")
-  end
-
-  return "Note: Only Hard Drive presets are listed as other presets cannot"
-    .. " render a file for upload. This includes " .. list
-    .. ", which export" .. (#names + extra == 1 and "s" or "")
-    .. " to other locations."
+  return ""
 end
 
 --- What the chosen preset will do to the file.

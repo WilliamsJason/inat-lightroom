@@ -246,58 +246,26 @@ def test_an_unusable_preset_is_not_something_you_can_pick(plugin, dialog):
     assert len(list(items.values())) == 1
 
 
-def test_an_unusable_preset_is_named_and_the_rule_explained(plugin, dialog):
+def test_the_rule_is_explained_when_a_preset_was_rejected(plugin, dialog):
     """"It is not listed" is the least informative thing the plugin could say
     to someone looking for the preset they just made."""
     notes = dialog["presetNotes"](plugin.runtime.table_from(
         [preset(plugin, usable=False, reason="exports to Email, not Hard Drive")]))
 
     assert "Only Hard Drive presets" in notes
-    assert '"iNaturalist"' in notes
 
 
-def test_one_rejected_preset_reads_as_one(plugin, dialog):
-    """"This includes X and Y" has to become a sentence when there is only an
-    X. The singular case is the common one -- most people have one stray
-    preset, not two."""
-    notes = dialog["presetNotes"](plugin.runtime.table_from(
-        [preset(plugin, title="For Email", usable=False)]))
-
-    assert '"For Email", which exports to other locations.' in notes
-
-
-def test_two_rejected_presets_are_both_named(plugin, dialog):
+def test_the_rejected_presets_are_not_named(plugin, dialog):
+    """Naming them was tried and removed: the list has no bounded length, and
+    the presets are already absent from the popup right above, which is the
+    part the user acts on."""
     notes = dialog["presetNotes"](plugin.runtime.table_from([
         preset(plugin, title="For Email", usable=False),
         preset(plugin, title="Burn Full-Sized JPEGs", usable=False),
     ]))
 
-    assert '"For Email" and "Burn Full-Sized JPEGs", which export' in notes
-
-
-def test_a_long_list_of_rejects_is_counted_rather_than_truncated(plugin, dialog):
-    """The control is two lines, and a static_text that overflows drops the
-    word that does not fit without saying so -- an unbounded list would
-    silently lose its own tail. A count cannot overflow."""
-    notes = dialog["presetNotes"](plugin.runtime.table_from([
-        preset(plugin, title="One", usable=False),
-        preset(plugin, title="Two", usable=False),
-        preset(plugin, title="Three", usable=False),
-        preset(plugin, title="Four", usable=False),
-    ]))
-
-    assert '"One" and "Two" and 2 others' in notes
-    assert "Three" not in notes
-
-
-def test_a_single_unnamed_reject_is_counted_in_the_singular(plugin, dialog):
-    notes = dialog["presetNotes"](plugin.runtime.table_from([
-        preset(plugin, title="One", usable=False),
-        preset(plugin, title="Two", usable=False),
-        preset(plugin, title="Three", usable=False),
-    ]))
-
-    assert "and 1 other," in notes
+    assert "For Email" not in notes
+    assert "Burn Full-Sized JPEGs" not in notes
 
 
 def test_nothing_is_said_when_every_preset_is_usable(plugin, dialog):
