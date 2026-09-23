@@ -32,6 +32,11 @@ return {
       id    = "inat_probe_scroll",
     },
     {
+      title = "iNat Probe: Suggestion Rows…",
+      file  = "RowProbeMenu.lua",
+      id    = "inat_probe_rows",
+    },
+    {
       title = "iNat Probe: Thumbnails…",
       file  = "ThumbProbeMenu.lua",
       id    = "inat_probe_thumbs",

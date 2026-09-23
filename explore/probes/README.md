@@ -17,7 +17,7 @@ at once, and nothing it does can ship by accident.
 
 Plug-in Manager → Add → point it at `explore/probes/sdkprobe.lrplugin`.
 
-Two items appear under **File › Plug-in Extras**. Each writes its results to
+Its items appear under **File › Plug-in Extras**. Each writes its results to
 `inat-sdk-probe.txt` on the Desktop, appending, so several runs can be compared.
 
 ## iNat Probe: Catalog APIs
@@ -72,7 +72,43 @@ Nothing in the SDK reports the last one, so it includes human reaction time
 Run it once with thumbnails and once without: the difference is the cost of
 `catalog_photo`, which is the part most likely to make a long list unusable.
 
-## What they answered
+## iNat Probe: Suggestion Rows
+
+Why the Observation panel loses the end of a suggestion name, and which fix the
+host will accept.
+
+The panel builds ten rows of `f:static_text` with **empty** titles pointed at
+bindings, because the window outlives any one photo selection and a presented
+view tree cannot grow rows. Sized before it has text, filled afterwards — that
+combination is where the surprises are. `ui.dll` says the keys exist
+(`AgViewWinStaticText` reads `selectable`, `height_in_lines` and
+`resize_to_fit_text_height`; `scroll_view` reads `vertical_scroller` and
+`horizontal_scroller`), but "the binary accepts this key" has never been the
+same as "this displays".
+
+Seven variants of the same four rows, in a floating window built the way the
+panel builds its own:
+
+| | Row shape | Question |
+|---|---|---|
+| A | `width=330, truncation="tail"` | control — the panel as it ships |
+| B | `width=330, height_in_lines=2`, no truncation | does a *bound* title wrap? |
+| C | as B plus `truncation="tail"` | does truncation defeat wrapping? |
+| D | no `width`, `fill_horizontal` only | the known zero-width collapse |
+| E | `width=330, height_in_lines=2` | is `width` a floor the window can stretch, or fixed? |
+| F | the rows inside a deliberately undersized `scrolled_view` | which scrollers does the host draw? |
+| G | `selectable=true` | can the text be selected — and does `mouse_down` still fire? |
+
+G is not only about readability: `selectable` may swallow the click that picks a
+suggestion, so the probe counts clicks per variant and reports them.
+
+Drag the window much wider before closing it — that is the measurement E and A
+exist for. Closing it opens a questionnaire, one question per variant, and the
+answers go into the Desktop log with the rest. Nothing in the SDK reports layout
+back: there is no way to ask a view how wide it ended up or how many lines it
+drew, so the person watching is the instrument.
+
+
 
 Measured against a 6,591 photo catalog on Lightroom Classic, Windows. The
 findings are written up properly in
