@@ -86,8 +86,8 @@ combination is where the surprises are. `ui.dll` says the keys exist
 `horizontal_scroller`), but "the binary accepts this key" has never been the
 same as "this displays".
 
-Seven variants of the same four rows, in a floating window built the way the
-panel builds its own:
+Seven variants of the same four rows, plus two full-length ones, in a floating
+window built the way the panel builds its own:
 
 | | Row shape | Question |
 |---|---|---|
@@ -98,9 +98,18 @@ panel builds its own:
 | E | `width=330, height_in_lines=2` | is `width` a floor the window can stretch, or fixed? |
 | F | the rows inside a deliberately undersized `scrolled_view` | which scrollers does the host draw? |
 | G | `selectable=true` | can the text be selected — and does `mouse_down` still fire? |
+| H | A, ten rows deep | do all ten rows fit, or is the complaint vertical after all? |
+| I | B, ten rows deep | does wrapping make the list too tall to fit? |
 
 G is not only about readability: `selectable` may swallow the click that picks a
 suggestion, so the probe counts clicks per variant and reports them.
+
+H and I are the question the user's own words asked for. Four rows fit anything,
+so nothing else here can say whether ten do — and if they do not, "add a scroll
+bar" was literally right and wrapping is the wrong first fix, because it makes
+the list taller still. Two more questions ask the same thing of the real panel,
+which is the only window with the saved frame the user lives with, so have it
+open with suggestions loaded before running the probe.
 
 Drag the window much wider before closing it — that is the measurement E and A
 exist for. Closing it opens a questionnaire, one question per variant, and the

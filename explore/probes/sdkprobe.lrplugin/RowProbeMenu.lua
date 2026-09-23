@@ -26,7 +26,9 @@
       may not follow;
     * titles bound to a property table, built empty, filled only once the
       window is already on screen;
-    * the real strings, taken from a screenshot of the panel failing.
+    * the real strings: the shapes `PanelCore.describeSuggestion` produces,
+      including the `- <note>` tail ("genus, containing … and 8 others") that
+      is the longest string the panel can build.
 
   No `save_frame`: the panel keeps one so it reopens where it was left, but a
   probe wants its natural size every run. A saved frame from the first run
@@ -54,12 +56,15 @@ local NAME_WIDTH = 330
 --- The link column beside each name, also as the panel has it.
 local LINK_WIDTH = 60
 
---- Real suggestion titles, transcribed from a panel showing the bug.
+--- Suggestion titles in the shapes `PanelCore.describeSuggestion` builds.
 --
--- The chosen-row mark is included because it is part of what has to fit, and
--- the long ones are long for the reason that matters: the rows that overflow
--- are the coarse ones whose `note` tail carries the reason to pick them, so
--- the text being lost is the text doing the work.
+-- It appends `- <score>%` to a scored row and `- <note>` to a coarse one, and
+-- the notes are much the longer of the two: a genus row carries "containing
+-- <species> and N others". So the longest strings the panel can produce belong
+-- to the rows whose tail carries the reason to pick them, which is what makes
+-- losing the tail expensive rather than untidy.
+--
+-- The chosen-row mark is included because it is part of what has to fit.
 local TITLES = {
   "\226\151\143 Bombardier Beetles (Brachinus) - genus, containing Brachinus "
     .. "crepitans and 8 others",
@@ -67,6 +72,14 @@ local TITLES = {
   "  Narrow-collared Snail-eating Beetle (Scaphinotus angusticollis) - 28%",
   "  Galerita bicolor - 9%",
 }
+
+--- What the panel actually shows: PanelCore.SUGGESTION_LIMIT rows.
+--
+-- The variants above use four rows because four is enough to read a width
+-- against. Whether ten of them fit the window is a different question with a
+-- different answer, and it is the question behind "add a scroll bar", so it
+-- gets its own variants rather than an assumption.
+local PANEL_ROWS = 10
 
 local LINK = "View \226\134\145"
 
@@ -77,10 +90,11 @@ local LINK = "View \226\134\145"
 -- @param actions  what a name click does, so a variant can prove it is still
 --                 clickable rather than only readable
 -- @param name     extra keys for the name control -- the thing being varied
-local function variantRows(f, key, actions, name)
+-- @param count    how many rows, defaulting to one per sample title
+local function variantRows(f, key, actions, name, count)
   local rows = { spacing = 0 }
 
-  for index = 1, #TITLES do
+  for index = 1, (count or #TITLES) do
     local nameView = {
       title      = LrView.bind(key .. index),
       tooltip    = LrView.bind(key .. index),
@@ -105,7 +119,7 @@ local function variantRows(f, key, actions, name)
 end
 
 --- A labelled block: what is being varied, then the rows varying it.
-local function variant(f, key, caption, actions, name)
+local function variant(f, key, caption, actions, name, count)
   return f:group_box {
     show_title = false,
     fill_horizontal = 1,
@@ -114,7 +128,7 @@ local function variant(f, key, caption, actions, name)
       title = key .. ".  " .. caption,
       font  = "<system/bold>",
     },
-    variantRows(f, key, actions, name),
+    variantRows(f, key, actions, name, count),
   }
 end
 
@@ -176,6 +190,35 @@ local VARIANTS = {
       fill_horizontal = 1,
     },
   },
+  -- The two below are the vertical question, which is the one the user's words
+  -- asked for ("add a scroll bar") and the one the rest of this probe cannot
+  -- answer: four rows fit anything. Ten is what the panel shows, so ten is
+  -- what has to be looked at -- once as the panel draws them today, and once
+  -- wrapped, because if wrapping is the fix then it doubles the height of the
+  -- tallest thing in the window and may create the overflow it was meant to
+  -- avoid.
+  {
+    key     = "H",
+    caption = "the panel's row, all " .. PANEL_ROWS .. " of them -- does the "
+      .. "list fit?",
+    count   = PANEL_ROWS,
+    name    = {
+      width           = NAME_WIDTH,
+      truncation      = "tail",
+      fill_horizontal = 1,
+    },
+  },
+  {
+    key     = "I",
+    caption = "the same " .. PANEL_ROWS .. " rows wrapped to two lines -- does "
+      .. "that still fit?",
+    count   = PANEL_ROWS,
+    name    = {
+      width           = NAME_WIDTH,
+      height_in_lines = 2,
+      fill_horizontal = 1,
+    },
+  },
 }
 
 --- The scrolled variant, built apart because it wraps its rows rather than
@@ -213,7 +256,11 @@ end
 -- a case the panel never reaches.
 local function setTitles(props, filled)
   for _, spec in ipairs(VARIANTS) do
-    for index, title in ipairs(TITLES) do
+    for index = 1, (spec.count or #TITLES) do
+      -- Cycled rather than repeated, so a ten-row variant is a mixture of
+      -- lengths like a real answer from iNaturalist rather than ten copies of
+      -- the worst case.
+      local title = TITLES[((index - 1) % #TITLES) + 1]
       props[spec.key .. index]           = filled and title or ""
       props[spec.key .. "link" .. index] = filled and LINK or ""
     end
@@ -243,6 +290,17 @@ local QUESTIONS = {
   { key = "F_grew",  text = "F: did the scrolled box resize with the window?" },
   { key = "G_select",text = "G: could you select the text with the mouse?" },
   { key = "G_click", text = "G: did clicking a name still count a click?" },
+  { key = "H_fit",   text = "H: were all 10 rows drawn, none cut off?" },
+  { key = "I_fit",   text = "I: were all 10 wrapped rows drawn, none cut off?" },
+  -- The probe's own window is not the panel's window, and only the panel's
+  -- window has the saved frame the user actually lives with. So the vertical
+  -- question is asked about the real thing as well: if the answer here is no,
+  -- the request for a scroll bar was literally right and wrapping is the wrong
+  -- first fix, because it makes the list taller still.
+  { key = "P_fit",   text = "In the real panel, at the size it opens at: are "
+      .. "all 10 suggestions visible?" },
+  { key = "P_tail",  text = "In the real panel: is the lost text the tail at "
+      .. "the right edge?" },
 }
 
 local ANSWERS = {
@@ -271,7 +329,7 @@ local function ask(context, clicks)
   for _, question in ipairs(QUESTIONS) do
     props[question.key] = "?"
     rows[#rows + 1] = f:row {
-      f:static_text { title = question.text, width = 380 },
+      f:static_text { title = question.text, width = 430 },
       f:popup_menu {
         value = LrView.bind(question.key),
         items = ANSWERS,
@@ -330,10 +388,15 @@ local function run(context)
       title = "Then: drag this window much wider, and watch which variants "
         .. "follow. Close it to answer the questions.",
     },
+    f:static_text {
+      title = "Two of the questions are about the real Observation panel, so "
+        .. "have it open with a photo's suggestions loaded.",
+    },
   }
 
   for _, spec in ipairs(VARIANTS) do
-    blocks[#blocks + 1] = variant(f, spec.key, spec.caption, actions, spec.name)
+    blocks[#blocks + 1] =
+      variant(f, spec.key, spec.caption, actions, spec.name, spec.count)
   end
   blocks[#blocks + 1] = scrolledVariant(f, actions)
 
@@ -360,8 +423,8 @@ local function run(context)
   end)
 
   report:add("=== Suggestion row layout probe ===")
-  report:addf("name width %d, link width %d, %d rows per variant",
-    NAME_WIDTH, LINK_WIDTH, #TITLES)
+  report:addf("name width %d, link width %d, %d rows per variant (%d for the "
+    .. "full-list variants)", NAME_WIDTH, LINK_WIDTH, #TITLES, PANEL_ROWS)
   report:blank()
   report:add("Titles rendered:")
   for _, title in ipairs(TITLES) do
