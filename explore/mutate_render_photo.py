@@ -10,6 +10,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import mutation_report
+
 TARGET = Path(__file__).parent.parent / "plugin" / "pinned.lrplugin" / "RenderPhoto.lua"
 
 MUTATIONS = [
@@ -251,12 +253,13 @@ MUTATIONS = [
 def main() -> int:
     original = TARGET.read_text(encoding="utf-8")
     survivors = []
+    stale = []
 
     try:
         for description, old, new in MUTATIONS:
             if old not in original:
-                print(f"SKIP  {description}\n      (anchor not found -- fix the script)")
-                survivors.append(description)
+                mutation_report.note_stale(description)
+                stale.append(description)
                 continue
 
             TARGET.write_text(original.replace(old, new, 1), encoding="utf-8")
@@ -277,15 +280,7 @@ def main() -> int:
     finally:
         TARGET.write_text(original, encoding="utf-8")
 
-    print()
-    if survivors:
-        print(f"{len(survivors)} of {len(MUTATIONS)} mutations survived:")
-        for s in survivors:
-            print(f"  - {s}")
-        return 1
-
-    print(f"All {len(MUTATIONS)} mutations caught.")
-    return 0
+    return mutation_report.summarise(stale, survivors, len(MUTATIONS))
 
 
 if __name__ == "__main__":
