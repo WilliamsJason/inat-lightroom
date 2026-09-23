@@ -221,6 +221,100 @@ def test_a_nameless_suggestion_does_not_produce_a_blank_row(plugin, core):
 
 
 # ---------------------------------------------------------------------------
+# The name on its own
+# ---------------------------------------------------------------------------
+
+
+def test_the_name_is_both_names_in_the_order_the_row_shows_them(plugin, core):
+    """What the species guess field is filled with, so it can be copied into a
+    caption. Shared with describeSuggestion so the row and the field cannot come
+    to disagree about what a taxon is called."""
+    row = plugin.runtime.table_from({
+        "name": "Apis mellifera",
+        "common_name": "Western Honey Bee",
+        "combined_score": 87.4,
+    })
+
+    assert core["suggestionName"](row) == "Western Honey Bee (Apis mellifera)"
+
+
+def test_the_name_never_carries_the_score(plugin, core):
+    """The percentage is a fact about the guess, not part of what the thing is
+    called, and it would be pasted into captions along with the name."""
+    row = plugin.runtime.table_from({"name": "Apoidea", "combined_score": 12})
+
+    assert core["suggestionName"](row) == "Apoidea"
+
+
+def test_a_name_with_only_a_common_name_has_no_empty_brackets(plugin, core):
+    row = plugin.runtime.table_from({"common_name": "Bumble Bees"})
+
+    assert core["suggestionName"](row) == "Bumble Bees"
+
+
+def test_an_empty_common_name_is_the_same_as_none(plugin, core):
+    """iNaturalist returns "" rather than omitting the key often enough that
+    treating it as a name draws "(Apoidea)" with nothing in front of it."""
+    row = plugin.runtime.table_from({"name": "Apoidea", "common_name": ""})
+
+    assert core["suggestionName"](row) == "Apoidea"
+
+
+def test_a_nameless_row_still_says_something(plugin, core):
+    row = plugin.runtime.table_from({"combined_score": 3})
+
+    assert core["suggestionName"](row) == "Unnamed taxon"
+
+
+# ---------------------------------------------------------------------------
+# Which name goes on the wire
+# ---------------------------------------------------------------------------
+
+
+def test_an_untouched_field_sends_the_bare_name(plugin, core):
+    """iNaturalist's Observation model runs set_taxon_from_species_guess before
+    every save and matches the text against taxon names, so the parenthetical
+    form shown in the field would resolve to nothing."""
+    assert core["guessToSend"]("Western Honey Bee (Apis mellifera)",
+                               "Western Honey Bee (Apis mellifera)",
+                               "Apis mellifera") == "Apis mellifera"
+
+
+def test_an_edited_field_wins(plugin, core):
+    """Anything other than the text we put there is the user's own, and it is
+    what they mean."""
+    assert core["guessToSend"]("Bombus",
+                               "Western Honey Bee (Apis mellifera)",
+                               "Apis mellifera") == "Bombus"
+
+
+def test_a_field_with_nothing_chosen_is_sent_as_typed(plugin, core):
+    assert core["guessToSend"]("Ischnura erratica", None, None) \
+        == "Ischnura erratica"
+
+
+def test_an_empty_stored_name_is_not_preferred(plugin, core):
+    """A row can carry neither name. Sending "" would clear a guess the user can
+    still see in the field."""
+    assert core["guessToSend"]("Unnamed taxon", "Unnamed taxon", "") \
+        == "Unnamed taxon"
+
+
+def test_a_missing_field_is_an_empty_guess(plugin, core):
+    """The panel's property is nil until something sets it, and the callers
+    below expect a string."""
+    assert core["guessToSend"](None, None, None) == ""
+
+
+def test_even_a_trailing_space_counts_as_edited(plugin, core):
+    """Deliberately an exact comparison. A change we cannot see is still a
+    change, and iNaturalist strips the text itself (strip_species_guess), so
+    sending it verbatim costs nothing."""
+    assert core["guessToSend"]("Apis mellifera ", "Apis mellifera",
+                               "Apis mellifera") == "Apis mellifera "
+
+
+# ---------------------------------------------------------------------------
 # Turning suggestions into row slots
 # ---------------------------------------------------------------------------
 

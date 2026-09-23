@@ -515,6 +515,58 @@ happens when the response is malformed enough that it is missing.
 discarded the ancestor entirely, which left the picker with nothing to fall back
 to but the guess already under suspicion.
 
+### What the field shows against what iNaturalist is told
+
+`PanelCore.suggestionName` is the name half of a row — *"Western Honey Bee (Apis
+mellifera)"*, no chosen-row mark and no percentage. `describeSuggestion` builds
+on it, so the row and the species guess field cannot come to disagree about what
+a taxon is called.
+
+`chooseSuggestion` writes that string into `speciesGuess`, because the field is
+the only selectable text the panel has — `f:static_text` cannot be selected and
+there is no read-only control that can (the same finding `Clipboard.lua` turns
+on), so it is the only place a name can be copied from for a caption.
+
+It is not what gets sent. iNaturalist's Observation model runs
+`set_taxon_from_species_guess` before every save, and on an observation with no
+taxon that callback is what turns free text into an identification:
+
+```ruby
+if taxon = single_taxon_for_name( species_guess )
+  self.taxon_id = taxon.try( :id ) if taxon.is_active?
+```
+
+It matches a taxon *name*, so the parenthetical form resolves to nothing. The
+row's bare name is therefore kept beside the field in
+`suggestionScientificName`, alongside `suggestionOfferedName` — the exact string
+the field was given — in the same way `suggestionTaxonId`, `suggestionRank` and
+`suggestionScore` are already kept beside what is on screen.
+
+`PanelCore.guessToSend` picks between them at send time: the stored bare name
+only while the field still holds the offered string, and otherwise the field
+verbatim. So editing the box overrules the suggestion, which is what editing it
+means; and a field that has not been committed yet cannot make it send anything
+other than what the user last chose.
+
+The three are written together in `chooseSuggestion` and cleared together in
+`clearChosenName`, which `clearSuggestions` calls. That matters most when the
+selection moves: `makeRefresh` refills the field from the new photo's catalog
+value and then clears the suggestions, and a scientific name outliving the rows
+it came from would be sent for a photo it was never about.
+
+Two deliberate asymmetries:
+
+- `recordGuess` stores the **bare** name in `inat_species_guess`, because
+  `UploadCore.observationParamsFor` reads that field straight off the photo and
+  sends it as `species_guess` when creating an observation. A display string
+  there would defeat the same name matching on every later upload.
+- `confidenceWarning` is passed what the **field** shows. It is a sentence
+  somebody has to decide on, not something transmitted.
+
+`explore/probes/sdkprobe.lrplugin/EditCommitProbeMenu.lua` measures the one
+thing this rests on that the documentation only asserts: when a non-immediate
+`edit_field` commits its binding.
+
 ### Arguing before a weak species claim
 
 `PanelCore.confidenceWarning` returns a message when a **species-rank** taxon is

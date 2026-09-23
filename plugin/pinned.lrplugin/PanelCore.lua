@@ -75,21 +75,41 @@ PanelCore.NO_LOCATION = NO_LOCATION
 -- Describing suggestions
 --------------------------------------------------------------------------------
 
---- One suggestion as a single line of text.
+--- A suggestion's name, with nothing else attached.
 --
 -- The common name leads because that is what most people are deciding between,
--- but the scientific name is always shown: it is what actually gets uploaded,
--- and common names are ambiguous enough that hiding it would make the list
--- impossible to check.
+-- but the scientific name is always shown: common names are ambiguous enough
+-- that hiding it would make the list impossible to check.
+--
+-- Split out from describeSuggestion because this exact string is also what the
+-- panel puts in the species guess field for the user to copy into a caption.
+-- One function, so the row and the field can never come to disagree about what
+-- a taxon is called.
+function PanelCore.suggestionName(row)
+  if not row then return "" end
+
+  local common     = row.common_name
+  local scientific = row.name
+
+  if common and common ~= "" and scientific and scientific ~= "" then
+    return common .. " (" .. scientific .. ")"
+  end
+
+  if common and common ~= "" then return common end
+  if scientific and scientific ~= "" then return scientific end
+
+  return "Unnamed taxon"
+end
+
+--- One suggestion as a single line of text.
+--
+-- The name plus what is known about how good a guess it is -- a score when the
+-- model gave one, and otherwise the note that says why a row without a score is
+-- there at all.
 function PanelCore.describeSuggestion(row)
   if not row then return "" end
 
-  local name = row.common_name
-  if name and name ~= "" and row.name and row.name ~= "" then
-    name = name .. " (" .. row.name .. ")"
-  else
-    name = row.common_name or row.name or "Unnamed taxon"
-  end
+  local name = PanelCore.suggestionName(row)
 
   local score = tonumber(row.combined_score)
   if score then
@@ -755,6 +775,39 @@ end
 --------------------------------------------------------------------------------
 -- Changing the determination
 --------------------------------------------------------------------------------
+
+--- What to send as species_guess, given what the field now says.
+--
+-- The field shows "Common name (Scientific name)" so the user can copy it into
+-- a caption, but that string is no good to iNaturalist: its Observation model
+-- runs `set_taxon_from_species_guess` before every save, and on an observation
+-- with no taxon that is what turns free text into an actual identification --
+--
+--     if taxon = single_taxon_for_name( species_guess )
+--       self.taxon_id = taxon.try( :id ) if taxon.is_active?
+--
+-- (app/models/observation.rb, inaturalist/inaturalist). It matches a taxon
+-- name, so a parenthetical matches nothing and the guess resolves to nothing.
+-- The bare name a suggestion carried is therefore kept beside the field and
+-- sent instead.
+--
+-- Only while the field is untouched. The moment the text differs from what was
+-- offered, it is the user's own words, and sending a stored name they have just
+-- edited away from would be the plugin overruling them silently -- which is
+-- worse than the display format ever was.
+--
+-- @param typed       What the species guess field currently holds.
+-- @param offered     The exact string a chosen suggestion wrote into it.
+-- @param scientific  That suggestion's bare name, or nil when none is chosen.
+function PanelCore.guessToSend(typed, offered, scientific)
+  typed = typed or ""
+
+  if scientific and scientific ~= "" and typed == offered then
+    return scientific
+  end
+
+  return typed
+end
 
 --- Tell iNaturalist what this is.
 --

@@ -36,6 +36,11 @@ return {
       file  = "ThumbProbeMenu.lua",
       id    = "inat_probe_thumbs",
     },
+    {
+      title = "iNat Probe: Edit Field Commit…",
+      file  = "EditCommitProbeMenu.lua",
+      id    = "inat_probe_edit_commit",
+    },
   },
 
   VERSION = { major = 0, minor = 0, revision = 1, display = "probe" },
