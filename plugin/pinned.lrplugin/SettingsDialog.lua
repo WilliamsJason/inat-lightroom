@@ -37,6 +37,7 @@ local LrView            = import "LrView"
 
 local InatAuth = require "InatAuth"
 local InatOAuth = require "InatOAuth"
+local ExportPresets = require "ExportPresets"
 local Jobs     = require "Jobs"
 local Settings = require "Settings"
 local logger   = require "Log"
@@ -79,6 +80,98 @@ SettingsDialog.METADATA_ITEMS = {
   { title = "Copyright & contact info only",       value = "copyrightAndContactOnly" },
   { title = "Copyright only",                      value = "copyrightOnly" },
 }
+
+--- What the popup calls rendering with the plugin's own settings.
+SettingsDialog.PRESET_NONE_TITLE =
+  "Plugin defaults - 2048 px, JPEG 90, sharpened for screen"
+
+--- The export-preset popup's items: plugin defaults, then the usable presets.
+--
+-- Unusable presets are deliberately NOT items. A popup entry that can be
+-- chosen and then quietly ignored is worse than no entry at all, and Lightroom
+-- has no per-item disabled state. They are named underneath instead, by
+-- presetNotes, so the answer to "where is the preset I just made" is on screen
+-- rather than absent.
+function SettingsDialog.presetItems(presets)
+  local items = {
+    { title = SettingsDialog.PRESET_NONE_TITLE, value = "" },
+  }
+
+  for _, preset in ipairs(presets or {}) do
+    if preset.usable then
+      items[#items + 1] = { title = preset.title, value = preset.id }
+    end
+  end
+
+  return items
+end
+
+--- Why presets the user can see in Lightroom are missing from the popup.
+--
+-- Returns "" when there is nothing to say, so the text can be bound with no
+-- special case.
+function SettingsDialog.presetNotes(presets)
+  local lines = {}
+
+  for _, preset in ipairs(presets or {}) do
+    if not preset.usable then
+      lines[#lines + 1] = "\"" .. tostring(preset.title) .. "\" "
+        .. tostring(preset.reason) .. "."
+    end
+  end
+
+  if #lines == 0 then return "" end
+
+  return "Not listed: " .. table.concat(lines, " ")
+    .. " Only Hard Drive presets can render a file for upload."
+end
+
+--- What the chosen preset will do to the file.
+--
+-- The watermark warning is deliberately NOT in here; it has its own control.
+-- Measured: an f:static_text whose contents do not fit its width drops the
+-- word that overflows and draws nothing in its place, with no ellipsis and no
+-- sign that anything is missing. Putting a warning at the end of a sentence
+-- of unknown length is how it disappears on the one machine where it matters.
+--
+-- @param preset  an entry from ExportPresets.list(), or nil
+function SettingsDialog.presetSummary(preset)
+  if not preset then
+    return "Uploads are JPEG, sRGB, 2048 px on the long edge, sharpened for"
+      .. " screen, and not watermarked."
+  end
+
+  local size = ExportPresets.effectiveSize(preset.value)
+  local text = "This preset exports at " .. tostring(size.text) .. "."
+
+  if size.ignored then
+    text = text .. " Note that " .. size.ignored .. "."
+  end
+
+  -- Said out loud because the Metadata popup and the two checkboxes below are
+  -- still on screen and no longer doing anything. A control that lies is
+  -- worse than a control that is missing.
+  return text .. " Its own metadata options are used, not the ones below."
+end
+
+--- Why the chosen preset's watermark will not draw, or "".
+--
+-- Answered here, at the moment of choosing, because this is the only place
+-- the user can act on it: the fix is to re-point the preset in Lightroom. A
+-- render-time warning also goes to the log (see RenderPhoto.chosenPreset) for
+-- working out afterwards why an upload came out unwatermarked, but an upload
+-- status line scrolls past and cannot be fixed from there.
+--
+-- @param preset     an entry from ExportPresets.list(), or nil
+-- @param available  id -> title from ExportPresets.watermarks()
+function SettingsDialog.presetWarning(preset, available)
+  if not preset then return "" end
+
+  local problem = ExportPresets.watermarkProblem(preset.value, available)
+  if not problem then return "" end
+
+  return "Warning: " .. problem .. "."
+end
 
 --------------------------------------------------------------------------------
 -- Account tab
@@ -345,6 +438,31 @@ function SettingsDialog.watchKeywordRootPicker(props)
   end)
 end
 
+--- Keep the preset description in step with the popup, and the stored title
+--- in step with the stored id.
+--
+-- The title is saved alongside the GUID so that a preset which has since been
+-- deleted can still be named -- an id on its own tells the user nothing about
+-- which preset went missing.
+--
+-- The list is passed in rather than re-read on every change: reading it walks
+-- two folders and parses every file, and nothing on disk can change while a
+-- modal dialog is up.
+function SettingsDialog.watchExportPresetPicker(props, presets, watermarks)
+  local byId = {}
+  for _, preset in ipairs(presets or {}) do byId[preset.id] = preset end
+
+  local function refresh()
+    local preset = byId[props.render_export_preset]
+    props.render_export_preset_title = preset and preset.title or ""
+    props.exportPresetSummary = SettingsDialog.presetSummary(preset)
+    props.exportPresetWarning = SettingsDialog.presetWarning(preset, watermarks)
+  end
+
+  refresh()
+  props:addObserver("render_export_preset", refresh)
+end
+
 local function keywordRootSection(f, props)
   local LABEL = 110
 
@@ -518,9 +636,36 @@ local function uploadTab(f, props)
       f:spacer { height = 6 },
 
       f:static_text { title = "The file that gets sent", font = "<system/bold>" },
+
+      f:row {
+        f:static_text { title = "Render with:", width = LABEL, alignment = "right" },
+        f:popup_menu {
+          value = LrView.bind("render_export_preset"),
+          items = LrView.bind("exportPresetItems"),
+          width = 320,
+        },
+      },
       f:static_text {
-        title = "Uploads are always JPEG, sRGB, 2048 px on the long edge --\n"
-          .. "which is the largest size iNaturalist displays.",
+        title           = LrView.bind("exportPresetSummary"),
+        width           = 500,
+        height_in_lines = 3,
+      },
+      -- Its own control, not the end of the sentence above: a static_text
+      -- that overflows its width drops the word that does not fit and says
+      -- nothing about having done so, so the warning would be the part that
+      -- vanished.
+      f:static_text {
+        title           = LrView.bind("exportPresetWarning"),
+        width           = 500,
+        height_in_lines = 2,
+      },
+      -- Always drawn, empty when there is nothing to say, rather than bound
+      -- to `visible`: a bound `visible` was measured NOT hiding a row in the
+      -- reverse-sync list -- it binds, the property changes, and the view
+      -- keeps drawing -- and a blank two lines is a better outcome than a
+      -- leftover warning about a preset the user has already fixed.
+      f:static_text {
+        title           = LrView.bind("exportPresetNotes"),
         width           = 500,
         height_in_lines = 2,
       },
@@ -558,24 +703,6 @@ local function uploadTab(f, props)
           title = "Remove person info",
           value = LrView.bind("render_remove_face"),
         },
-      },
-
-      f:spacer { height = 8 },
-      f:separator { fill_horizontal = 1 },
-      f:spacer { height = 6 },
-
-      f:row {
-        f:static_text { title = "", width = LABEL },
-        f:checkbox {
-          title = "Add a simple copyright watermark",
-          value = LrView.bind("render_use_watermark"),
-        },
-      },
-      f:static_text {
-        title = "Lightroom's named watermark presets cannot be listed by a\n"
-          .. "plugin, so this is the built-in copyright watermark only.",
-        width           = 500,
-        height_in_lines = 2,
       },
     },
   }
@@ -1014,7 +1141,48 @@ function SettingsDialog.show(options)
       props[key] = value
     end
 
+    -- Guarded for the same reason as the keyword picker: reading two folders
+    -- off disk and parsing every file in them is the other thing here that
+    -- can fail, and an error raised inside this task is never shown. An
+    -- unreadable preset folder must cost the popup, not the dialog.
+    local presetsOk, presetsOrErr = pcall(ExportPresets.list)
+    local presets = presetsOk and presetsOrErr or {}
+    if not presetsOk then
+      logger:warn("Settings: could not list export presets: "
+        .. tostring(presetsOrErr))
+    end
+
+    local watermarksOk, watermarksOrErr = pcall(ExportPresets.watermarks)
+    local watermarks = watermarksOk and watermarksOrErr or nil
+    if not watermarksOk then
+      logger:warn("Settings: could not list watermark presets: "
+        .. tostring(watermarksOrErr))
+    end
+
+    props.exportPresetItems = SettingsDialog.presetItems(presets)
+    props.exportPresetNotes = SettingsDialog.presetNotes(presets)
+
+    -- A preset chosen before it was deleted would otherwise leave the popup
+    -- showing a blank row, since nothing in items matches it. Reset to the
+    -- plugin defaults, which is what the render path does anyway.
+    local stillThere = false
+    for _, item in ipairs(props.exportPresetItems) do
+      if item.value == props.render_export_preset then stillThere = true end
+    end
+    if not stillThere then
+      logger:warn("Settings: export preset "
+        .. tostring(props.render_export_preset_title)
+        .. " is no longer available; falling back to the plugin defaults")
+      props.render_export_preset = ExportPresets.NONE
+      -- Written through directly because the observers that save edits are
+      -- not attached yet -- they go on below, after the stored values are in,
+      -- so that filling the table is not mistaken for an edit.
+      Settings.set("render_export_preset", ExportPresets.NONE)
+      Settings.set("render_export_preset_title", "")
+    end
+
     SettingsDialog.watchKeywordRootPicker(props)
+    SettingsDialog.watchExportPresetPicker(props, presets, watermarks)
 
     -- After the values are in, so that filling the table from storage is not
     -- itself mistaken for an edit.

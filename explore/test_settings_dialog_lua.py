@@ -205,6 +205,178 @@ def test_attaching_the_observers_does_not_count_as_an_edit(plugin, dialog):
 
 
 # ---------------------------------------------------------------------------
+# Choosing an export preset
+#
+# The plugin cannot ask Lightroom for this list; it reads the preset files
+# itself. Two things then have to be said out loud rather than left to be
+# discovered: a preset that exports to Email cannot be used at all, and a
+# preset whose watermark has since been deleted renders silently unwatermarked
+# -- measured at 557475 bytes, byte-identical to no watermark, with no error.
+# ---------------------------------------------------------------------------
+
+
+def preset(plugin, **fields):
+    entry = {"id": "guid-1", "title": "iNaturalist", "usable": True,
+             "value": {}}
+    entry.update(fields)
+    if isinstance(entry["value"], dict):
+        entry["value"] = plugin.runtime.table_from(entry["value"])
+    return plugin.runtime.table_from(entry)
+
+
+def test_the_first_choice_is_the_plugin_s_own_settings(plugin, dialog):
+    items = list(dialog["presetItems"](plugin.runtime.table_from([])).values())
+
+    assert items[0]["value"] == ""
+    assert "2048" in items[0]["title"]
+
+
+def test_usable_presets_become_items(plugin, dialog):
+    items = dialog["presetItems"](plugin.runtime.table_from(
+        [preset(plugin)]))
+
+    assert list(items.values())[1]["value"] == "guid-1"
+
+
+def test_an_unusable_preset_is_not_something_you_can_pick(plugin, dialog):
+    """Lightroom has no per-item disabled state, and an item that can be
+    chosen and then quietly ignored is worse than no item at all."""
+    items = dialog["presetItems"](plugin.runtime.table_from(
+        [preset(plugin, usable=False, reason="exports to Email, not Hard Drive")]))
+
+    assert len(list(items.values())) == 1
+
+
+def test_an_unusable_preset_is_named_and_explained_instead(plugin, dialog):
+    """"It is not listed" is the least informative thing the plugin could say
+    to someone looking for the preset they just made."""
+    notes = dialog["presetNotes"](plugin.runtime.table_from(
+        [preset(plugin, usable=False, reason="exports to Email, not Hard Drive")]))
+
+    assert "iNaturalist" in notes
+    assert "Email" in notes
+
+
+def test_nothing_is_said_when_every_preset_is_usable(plugin, dialog):
+    notes = dialog["presetNotes"](plugin.runtime.table_from([preset(plugin)]))
+
+    assert notes == ""
+
+
+def test_the_plugin_defaults_are_described_when_no_preset_is_chosen(dialog):
+    summary = dialog["presetSummary"](None)
+
+    assert "2048" in summary
+    assert "sharpened for screen" in summary
+    assert "not watermarked" in summary
+
+
+def test_the_chosen_preset_s_real_size_is_shown(plugin, dialog):
+    chosen = preset(plugin, value={
+        "size_doConstrain": True, "size_resizeType": "longEdge",
+        "size_maxHeight": 2048, "size_maxWidth": 2048, "size_units": "pixels",
+    })
+
+    assert "2048 px long edge" in dialog["presetSummary"](chosen)
+
+
+def test_a_size_value_the_preset_ignores_is_explained(plugin, dialog):
+    """The owner's own preset holds longEdge/2048 with a stale width of 1000.
+    Lightroom reads the height and the Export dialog shows one box reading
+    2048 -- but 1000 is exactly the number a user would panic about."""
+    chosen = preset(plugin, value={
+        "size_doConstrain": True, "size_resizeType": "longEdge",
+        "size_maxHeight": 2048, "size_maxWidth": 1000, "size_units": "pixels",
+    })
+
+    assert "1000" in dialog["presetSummary"](chosen)
+
+
+def test_a_watermark_that_is_no_longer_there_is_warned_about(plugin, dialog):
+    """This is where it belongs: the fix is to re-point the preset in
+    Lightroom, which is something you do here and not during an upload."""
+    chosen = preset(plugin, value={
+        "useWatermark": True, "watermarking_id": "deleted-guid",
+    })
+
+    warning = dialog["presetWarning"](chosen, plugin.runtime.table_from({}))
+
+    assert "Warning" in warning
+    assert "no longer in Lightroom" in warning
+
+
+def test_the_warning_is_not_buried_in_the_description(plugin, dialog):
+    """A static_text that overflows drops the word that does not fit and says
+    nothing about it, so a warning tacked onto a sentence of unknown length is
+    the part that disappears. They are separate controls."""
+    chosen = preset(plugin, value={
+        "useWatermark": True, "watermarking_id": "deleted-guid",
+    })
+
+    assert "Warning" not in dialog["presetSummary"](chosen)
+
+
+def test_a_watermark_that_is_still_there_is_not_warned_about(plugin, dialog):
+    chosen = preset(plugin, value={
+        "useWatermark": True, "watermarking_id": "wm-guid",
+    })
+
+    warning = dialog["presetWarning"](
+        chosen, plugin.runtime.table_from({"wm-guid": "JasonWilliams"}))
+
+    assert warning == ""
+
+
+def test_there_is_nothing_to_warn_about_without_a_preset(dialog):
+    assert dialog["presetWarning"](None, None) == ""
+
+
+def test_the_summary_says_the_preset_owns_the_metadata_options(plugin, dialog):
+    """The Metadata popup and the two checkboxes are still on screen below and
+    no longer apply. A control that lies is worse than one that is missing."""
+    assert "metadata" in dialog["presetSummary"](preset(plugin))
+
+
+def test_choosing_a_preset_stores_its_title_alongside_the_id(plugin, dialog):
+    """An id on its own cannot name the preset that went missing."""
+    props = watching(plugin, dialog)
+    dialog["watchExportPresetPicker"](
+        props, plugin.runtime.table_from([preset(plugin)]), None)
+
+    props["render_export_preset"] = "guid-1"
+
+    assert plugin.require("Settings")["get"]("render_export_preset_title") \
+        == "iNaturalist"
+
+
+def test_going_back_to_the_plugin_defaults_clears_the_stored_title(plugin, dialog):
+    props = watching(plugin, dialog)
+    dialog["watchExportPresetPicker"](
+        props, plugin.runtime.table_from([preset(plugin)]), None)
+
+    props["render_export_preset"] = "guid-1"
+    props["render_export_preset"] = ""
+
+    assert plugin.require("Settings")["get"]("render_export_preset_title") == ""
+
+
+def test_the_description_follows_the_popup(plugin, dialog):
+    props = watching(plugin, dialog)
+    dialog["watchExportPresetPicker"](
+        props, plugin.runtime.table_from([preset(plugin, value={
+            "size_doConstrain": True, "size_resizeType": "longEdge",
+            "size_maxHeight": 4000, "size_maxWidth": 4000,
+            "size_units": "pixels",
+        })]), None)
+
+    assert "2048" in props["exportPresetSummary"]
+
+    props["render_export_preset"] = "guid-1"
+
+    assert "4000 px long edge" in props["exportPresetSummary"]
+
+
+# ---------------------------------------------------------------------------
 # The credential buttons
 #
 # Storing a token is the one thing here that is not immediate: it is checked
@@ -657,8 +829,20 @@ def test_the_upload_tab_holds_everything_an_upload_decides(plugin, dialog):
 
     for key in ("inat_geoprivacy", "inat_upload_location", "inat_project_id",
                 "inat_sync_after_upload", "render_metadata_option",
-                "render_remove_location", "render_use_watermark"):
+                "render_remove_location", "render_export_preset"):
         assert key in bound, key
+
+
+def test_the_watermark_checkbox_is_gone(plugin, dialog):
+    """It offered Lightroom's built-in copyright watermark, which stamps the
+    IPTC copyright field. Measured on a photo without one: 557475 bytes with
+    it and 557475 without, byte for byte -- a no-op for anyone who never set a
+    copyright. A user's own export preset carries a real named watermark, so
+    the checkbox went rather than being kept as a second, weaker way in."""
+    bound = tab_bindings(plugin, dialog, 2)
+
+    assert "render_use_watermark" not in bound
+    assert "render_watermark_id" not in bound
 
 
 def test_the_observations_tab_is_not_also_an_upload_tab(plugin, dialog):

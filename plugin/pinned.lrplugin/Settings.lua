@@ -41,8 +41,16 @@ Settings.DEFAULTS = {
   render_remove_location = false,
   render_remove_face     = true,
   render_metadata_option = "all",
-  render_use_watermark   = false,
-  render_watermark_id    = "",
+
+  -- The user's own Lightroom export preset, by GUID, or "" for the plugin's
+  -- own settings. The GUID rather than the path because renaming a preset in
+  -- Lightroom renames the file, and the id survives it.
+  --
+  -- The title is stored alongside purely so that a preset that has since been
+  -- deleted can be named in the log and the settings dialog. Nothing resolves
+  -- a preset by title.
+  render_export_preset       = "",
+  render_export_preset_title = "",
 
   -- Updating.
   --

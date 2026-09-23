@@ -56,12 +56,37 @@
   export, so leaving a key out does not mean "the default", it means
   "whatever they happened to do last time". Every value here appears in a
   shipped preset inside Export.lrmodule.
+
+  WHY A USER'S OWN EXPORT PRESET CAN BE USED
+  ------------------------------------------
+  This file used to claim a plugin could only ask for the built-in copyright
+  watermark, because it cannot enumerate the user's named watermark presets.
+  Half of that was right and the conclusion was wrong. A plugin still cannot
+  ask Lightroom for the list -- but the presets are files on disk, and their
+  ids can be read from them and handed straight to LrExportSession. Measured
+  on Lightroom Classic 14, one photo, byte counts of the rendered JPEG:
+
+      (a) no watermark                      557475
+      (b) LR_watermarking_id = "<simpleCopyrightWatermark>"   557475
+      (c) a named watermark preset's id     575517
+      (d) a GUID matching no preset         557475
+
+  So (c) drew, and drew that watermark rather than the built-in one. (d) is
+  the trap: a watermark id that no longer resolves is skipped in silence, with
+  no error and an unwatermarked file -- which ExportPresets.watermarkProblem
+  exists to catch before the upload rather than after it.
+
+  (b) matching (a) exactly is the other correction. The built-in copyright
+  watermark stamps the IPTC copyright field, and the test photo had none, so
+  it drew nothing; writing a copyright first and re-rendering gave 559988.
+  It worked -- it was simply a no-op for anyone who does not set copyright.
 --]]
 
 local LrExportSession = import "LrExportSession"
 local LrFileUtils     = import "LrFileUtils"
 local LrPathUtils     = import "LrPathUtils"
 
+local ExportPresets = require "ExportPresets"
 local Settings = require "Settings"
 local logger   = require "Log"
 
@@ -69,8 +94,40 @@ local RenderPhoto = {}
 
 -- iNaturalist displays at most 2048 px on the long edge. Sending more costs
 -- the user's upload bandwidth and iNaturalist's storage to no visible effect.
+--
+-- This is the *default*, not a cap: a chosen export preset's own size wins
+-- outright. Someone who deliberately exports larger has decided to spend their
+-- own bandwidth, and iNaturalist resizes anything bigger itself.
 RenderPhoto.MAX_PX  = 2048
 RenderPhoto.QUALITY = 90
+
+--- The keys no export preset may change, and what they must be.
+--
+-- Applied last, on top of the preset. The reasons live on the equivalent
+-- entries in ExportPresets.OVERRIDDEN, which skips these keys on the way in;
+-- this table is the second half of the same guarantee, so that a preset key
+-- added to Lightroom tomorrow cannot land in a settings table by surprise.
+--
+-- LR_export_destinationPathPrefix is not here because its value is the render
+-- folder, which is different every time; settingsFor writes it explicitly.
+RenderPhoto.OVERRIDES = {
+  LR_exportServiceProvider        = "com.adobe.ag.export.file",
+  LR_export_destinationType       = "specificFolder",
+  LR_export_destinationPathSuffix = "",
+  LR_export_useSubfolder          = false,
+  LR_export_postProcessing        = "doNothing",
+  LR_reimportExportedPhoto        = false,
+  LR_reimport_stackWithOriginal   = false,
+  LR_collisionHandling            = "rename",
+  LR_renamingTokensOn             = false,
+  LR_tokens                       = "{{image_name}}",
+  LR_tokenCustomString            = "",
+  LR_initialSequenceNumber        = 1,
+  LR_extensionCase                = "lowercase",
+  LR_format                       = "JPEG",
+  LR_includeVideoFiles            = false,
+  LR_metadata_keywordOptions      = "flat",
+}
 
 -- Smaller, for computer vision. The model does not see more in a large image,
 -- and this is uploaded and thrown away purely to ask a question -- so it is
@@ -103,10 +160,23 @@ end
 -- one of these keys is a string Lightroom silently ignores if it is wrong, and
 -- the result of getting one wrong is a file that uploads perfectly and is not
 -- what the user asked for.
+--
+-- Three layers, in this order:
+--
+--   1. the plugin's own complete table, below;
+--   2. the chosen export preset's keys, if there is one;
+--   3. the overrides, which no preset may change.
+--
+-- Layer 1 is complete rather than a handful of interesting keys because
+-- fillInDefaultSettings fills anything missing from the user's *last export*,
+-- not from documented defaults. Layer 3 repeats what ExportPresets.OVERRIDDEN
+-- already skips: either alone would do, and the cost of a preset quietly
+-- moving the destination is an upload of the wrong files, or none.
 function RenderPhoto.settingsFor(options)
   options = options or {}
   local prefs = options.settings or Settings.all()
   local maxPixels = options.maxPixels or RenderPhoto.MAX_PX
+  local preset = options.preset
 
   local settings = {
     LR_exportServiceProvider   = "com.adobe.ag.export.file",
@@ -157,11 +227,28 @@ function RenderPhoto.settingsFor(options)
     LR_size_resolution         = 72,
     LR_size_resolutionUnits    = "inch",
 
-    LR_outputSharpeningOn      = false,
+    -- Sharpened for screen, because that is what these files are for: a
+    -- 2048 px downsample of a 24 MP frame is soft without it, and iNaturalist
+    -- displays it on a screen at about this size.
+    --
+    -- The level is measured, not guessed. Export.lrmodule's sharpening popup
+    -- stores each title's value immediately after it --
+    -- "$$$/AgExport/PopupMenu/SharpeningLow=Low" -> 1,
+    -- "$$$/AgExport/PopupMenu/SharpeningStandard=Standard" -> 2,
+    -- "$$$/AgExport/PopupMenu/SharpeningHigh=High" -> 3 -- and the media popup
+    -- in the same table maps Screen to "screen". So this is Sharpen For
+    -- Screen, Standard, which is what Lightroom's own export defaults to.
+    --
+    -- Off for the computer-vision render: see renderForSuggestions.
+    LR_outputSharpeningOn      = options.sharpen ~= false,
     LR_outputSharpeningLevel   = 2,
     LR_outputSharpeningMedia   = "screen",
 
-    LR_useWatermark            = prefs.render_use_watermark or false,
+    -- Written rather than left out even though it is false. An omitted key is
+    -- filled from the user's last export, so leaving this out would watermark
+    -- uploads for anyone whose last export was watermarked.
+    LR_useWatermark            = false,
+
     LR_removeLocationMetadata  = prefs.render_remove_location or false,
     LR_removeFaceMetadata      = prefs.render_remove_face or false,
     LR_embeddedMetadataOption  = prefs.render_metadata_option or "all",
@@ -173,14 +260,80 @@ function RenderPhoto.settingsFor(options)
     LR_metadata_keywordOptions = "flat",
   }
 
-  if settings.LR_useWatermark then
-    -- No plugin can list the user's named watermark presets: watermarkPresets
-    -- appears in no binary in the product. The built-in copyright watermark is
-    -- what there is.
-    settings.LR_watermarking_id = "<simpleCopyrightWatermark>"
+  if preset and type(preset.value) == "table" then
+    -- The preset's own keys win over everything above, including the metadata
+    -- options: the point of choosing a preset is to control the file in one
+    -- place, and a plugin that honoured the resolution but overrode the
+    -- metadata would be the worst of both.
+    --
+    -- size_resizeType travels with the size values and is never reinterpreted
+    -- without them. A preset carries maxWidth and maxHeight whatever its mode,
+    -- and in "longEdge" mode Lightroom reads maxHeight -- so a preset holding
+    -- longEdge/2048 alongside a stale maxWidth of 1000 renders at 2048, and
+    -- only stays that way if the pair arrives together. See
+    -- ExportPresets.effectiveSize for the evidence.
+    for key, value in pairs(ExportPresets.settingsFrom(preset.value)) do
+      settings[key] = value
+    end
+
+    -- A DNG or TIFF preset carries no jpeg_quality at all, and LR_format is
+    -- forced to JPEG below, so the quality has to come from somewhere.
+    if type(settings.LR_jpeg_quality) ~= "number" then
+      settings.LR_jpeg_quality = RenderPhoto.QUALITY / 100
+    end
+
+    for key, value in pairs(RenderPhoto.OVERRIDES) do
+      settings[key] = value
+    end
+
+    settings.LR_export_destinationPathPrefix = options.folder
   end
 
   return settings
+end
+
+--- The export preset the user chose, or nil for the plugin's own settings.
+--
+-- Resolved by GUID rather than by path: a GUID survives the user renaming or
+-- moving the file in Lightroom's preset panel, and a path does not.
+--
+-- Falls back to plugin defaults and says so in the log rather than failing the
+-- upload. A preset can disappear -- deleted, or the catalog opened on a
+-- machine that does not have it -- and refusing to upload over a render
+-- setting would be a worse answer than rendering the way the plugin used to.
+function RenderPhoto.chosenPreset(prefs)
+  prefs = prefs or Settings.all()
+
+  local id = prefs.render_export_preset
+  if id == nil or id == ExportPresets.NONE then return nil end
+
+  local preset = ExportPresets.find(id)
+  if not preset then
+    logger:warn("Export preset " .. tostring(prefs.render_export_preset_title)
+      .. " (" .. tostring(id) .. ") was not found; rendering with the"
+      .. " plugin's own settings")
+    return nil
+  end
+
+  if not preset.usable then
+    logger:warn("Export preset " .. tostring(preset.title) .. " "
+      .. tostring(preset.reason) .. "; rendering with the plugin's own"
+      .. " settings")
+    return nil
+  end
+
+  -- Logged, not raised. A watermark that no longer resolves is skipped by
+  -- Lightroom in silence -- measured at 557475 bytes, identical to no
+  -- watermark -- so without this line an upload that quietly lost its
+  -- watermark leaves no trace anywhere. The settings dialog says the same
+  -- thing where it can still be acted on; this is for afterwards.
+  local problem = ExportPresets.watermarkProblem(preset.value,
+    ExportPresets.watermarks())
+  if problem then
+    logger:warn("Export preset " .. tostring(preset.title) .. ": " .. problem)
+  end
+
+  return preset
 end
 
 --- Render photos to JPEGs in a temporary folder.
@@ -191,7 +344,8 @@ end
 -- RenderPhoto.cleanUp once the upload has finished with the files.
 --
 -- @param photos   List of LrPhoto
--- @param options  maxPixels, settings, folder, onEvent, isCanceled
+-- @param options  maxPixels, settings, folder, onEvent, isCanceled, preset,
+--                 usePreset
 -- @return list of { photo = ..., path = ... }, list of error strings, folder,
 --         true when the caller asked to stop partway
 function RenderPhoto.render(photos, options)
@@ -204,11 +358,23 @@ function RenderPhoto.render(photos, options)
   local onEvent    = options.onEvent or function() end
   local isCanceled = options.isCanceled or function() return false end
 
+  -- usePreset = false is how the computer-vision path opts out; the reason is
+  -- on renderForSuggestions.
+  local preset = options.preset
+  if preset == nil and options.usePreset ~= false then
+    preset = RenderPhoto.chosenPreset(options.settings)
+    if preset then
+      logger:info("Rendering with export preset " .. tostring(preset.title))
+    end
+  end
+
   local session = LrExportSession {
     photosToExport = photos,
     exportSettings = RenderPhoto.settingsFor({
       maxPixels = options.maxPixels,
       settings  = options.settings,
+      preset    = preset,
+      sharpen   = options.sharpen,
       folder    = folder,
     }),
   }
@@ -276,10 +442,20 @@ end
 
 --- Render exactly one photo, small, for a computer-vision question.
 --
+-- Deliberately ignores the user's export preset and the plugin's own
+-- sharpening. This file is uploaded to ask a model what the species is and
+-- then deleted: a watermark is wasted work at best and something drawn over
+-- the subject at worst, a 4000 px preset makes every suggestion slower for an
+-- answer the model does not improve on, and sharpening cannot change what the
+-- model sees. The probe measured a 2048 px render at about 520 ms, which is
+-- the cost being avoided here.
+--
 -- @return path, error, folder
 function RenderPhoto.renderForSuggestions(photo)
   local rendered, failures, folder = RenderPhoto.render({ photo }, {
-    maxPixels = RenderPhoto.SUGGEST_MAX_PX,
+    maxPixels  = RenderPhoto.SUGGEST_MAX_PX,
+    usePreset  = false,
+    sharpen    = false,
   })
 
   if #rendered == 0 then

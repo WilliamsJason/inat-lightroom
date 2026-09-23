@@ -248,13 +248,32 @@ def test_the_watermark_is_off_and_carries_no_id(settings):
     assert result["LR_watermarking_id"] is None
 
 
-def test_turning_the_watermark_on_names_the_built_in_one(settings):
-    # No plugin can enumerate the user's own watermark presets: watermarkPresets
-    # appears in no binary in the product. Turning the setting on without
-    # naming one would render nothing at all.
-    result = settings(render_use_watermark=True)
-    assert result["LR_useWatermark"] is True
-    assert result["LR_watermarking_id"] == "<simpleCopyrightWatermark>"
+def test_the_watermark_key_is_written_even_though_it_is_false(settings):
+    # Not "absent means off". Lightroom's fillInDefaultSettings fills an
+    # omitted key from the user's *last export*, so leaving this out would
+    # watermark uploads for anyone whose last export was watermarked.
+    assert "LR_useWatermark" in dict(settings())
+
+
+def test_uploads_are_sharpened_for_screen(settings):
+    # Measured from Export.lrmodule: the sharpening popup stores each title's
+    # value immediately after it, SharpeningLow -> 1, SharpeningStandard -> 2,
+    # SharpeningHigh -> 3. So 2 is Standard, and "screen" is Sharpen For
+    # Screen -- what Lightroom's own export dialog defaults to.
+    result = settings()
+    assert result["LR_outputSharpeningOn"] is True
+    assert result["LR_outputSharpeningLevel"] == 2
+    assert result["LR_outputSharpeningMedia"] == "screen"
+
+
+def test_sharpening_can_be_turned_off_for_the_throwaway_render(plugin, render):
+    # The computer-vision render is deleted the moment the model has answered,
+    # and sharpening cannot change what the model sees.
+    result = render["settingsFor"](plugin.runtime.table_from({
+        "folder": "/tmp/inat-test",
+        "sharpen": False,
+    }))
+    assert result["LR_outputSharpeningOn"] is False
 
 
 def test_the_metadata_option_is_passed_through(settings):
@@ -426,6 +445,201 @@ def test_a_failed_render_is_logged(plugin, render):
     render["render"](photos(plugin, 1))
 
     assert any("Disk full" in line for line in plugin.log_lines)
+
+
+# --- the user's own export preset -----------------------------------------
+#
+# Measured before any of this was written: a named watermark preset's id, read
+# out of a .lrtemplate and handed to LrExportSession, renders 575517 bytes
+# against 557475 for the same photo unwatermarked. It draws, and it draws that
+# watermark rather than the built-in one.
+
+
+def a_preset(plugin, **value):
+    fields = {
+        "size_doConstrain": True,
+        "size_resizeType": "longEdge",
+        "size_maxHeight": 4000,
+        "size_maxWidth": 1000,
+        "size_units": "pixels",
+        "jpeg_quality": 0.6,
+        "useWatermark": True,
+        "watermarking_id": "ECB47E01-C27C-4BD8-B27E-29D8F67AE37C",
+        "embeddedMetadataOption": "copyrightOnly",
+        # Every one of these would break the render if it were honoured.
+        "export_destinationType": "chooseLater",
+        "export_postProcessing": "revealInFinder",
+        "collisionHandling": "ask",
+        "format": "DNG",
+        "includeVideoFiles": True,
+        "reimportExportedPhoto": True,
+        "metadata_keywordOptions": "lightroomHierarchical",
+    }
+    fields.update(value)
+    return plugin.runtime.table_from({
+        "id": "guid-1",
+        "title": "iNaturalist",
+        "usable": True,
+        "value": plugin.runtime.table_from(fields),
+    })
+
+
+@pytest.fixture
+def with_preset(plugin, render):
+    def build(**value):
+        return render["settingsFor"](plugin.runtime.table_from({
+            "folder": "/tmp/inat-test",
+            "preset": a_preset(plugin, **value),
+        }))
+
+    return build
+
+
+def test_a_preset_s_watermark_is_passed_straight_through(with_preset):
+    result = with_preset()
+
+    assert result["LR_useWatermark"] is True
+    assert result["LR_watermarking_id"] == "ECB47E01-C27C-4BD8-B27E-29D8F67AE37C"
+
+
+def test_a_preset_s_size_wins_outright(with_preset):
+    # No 2048 clamp. Someone who deliberately exports larger has decided to
+    # spend their own bandwidth, and iNaturalist resizes anything bigger
+    # itself.
+    assert with_preset()["LR_size_maxHeight"] == 4000
+
+
+def test_the_resize_mode_arrives_with_the_size_it_explains(with_preset):
+    # Which of maxWidth and maxHeight Lightroom reads depends on the mode, so
+    # the three travel together and none of them is reinterpreted on the way.
+    result = with_preset()
+
+    assert result["LR_size_resizeType"] == "longEdge"
+    assert result["LR_size_maxWidth"] == 1000
+    assert result["LR_size_maxHeight"] == 4000
+
+
+def test_a_preset_s_metadata_option_wins_over_the_checkbox(plugin, render):
+    # Deliberate: the point of choosing a preset is to decide the file in one
+    # place, and honouring the resolution while overriding the metadata would
+    # be the worst of both.
+    result = render["settingsFor"](plugin.runtime.table_from({
+        "folder": "/tmp/inat-test",
+        "preset": a_preset(plugin),
+        "settings": plugin.runtime.table_from(
+            {"render_metadata_option": "all"}),
+    }))
+
+    assert result["LR_embeddedMetadataOption"] == "copyrightOnly"
+
+
+def test_a_preset_s_quality_is_used(with_preset):
+    assert with_preset()["LR_jpeg_quality"] == 0.6
+
+
+def test_a_preset_with_no_quality_of_its_own_gets_the_plugin_s(plugin, with_preset):
+    # A DNG or TIFF preset carries no jpeg_quality at all, and the format is
+    # forced to JPEG, so the number has to come from somewhere.
+    result = with_preset(jpeg_quality=None)
+
+    assert result["LR_jpeg_quality"] == 0.9
+
+
+@pytest.mark.parametrize("key,value", [
+    ("LR_exportServiceProvider", "com.adobe.ag.export.file"),
+    ("LR_export_destinationType", "specificFolder"),
+    ("LR_export_postProcessing", "doNothing"),
+    ("LR_collisionHandling", "rename"),
+    ("LR_format", "JPEG"),
+    ("LR_includeVideoFiles", False),
+    ("LR_reimportExportedPhoto", False),
+    ("LR_metadata_keywordOptions", "flat"),
+])
+def test_a_preset_cannot_change_what_makes_the_render_work(with_preset, key, value):
+    assert with_preset()[key] == value
+
+
+def test_the_render_folder_survives_the_preset(with_preset):
+    # The preset names a real folder on the user's disk, or "chooseLater",
+    # which prompts. Either way the caller has to find the files afterwards.
+    assert with_preset()["LR_export_destinationPathPrefix"] == "/tmp/inat-test"
+
+
+def test_a_chosen_preset_is_used_for_an_upload(plugin, render):
+    plugin.prefs["render_export_preset"] = "guid-1"
+    plugin.set_file(
+        "/appdata/Export Presets/iNaturalist.lrtemplate",
+        's = { id = "guid-1", title = "iNaturalist", type = "Export",'
+        ' value = { exportServiceProvider = "com.adobe.ag.export.file",'
+        ' size_doConstrain = true, size_resizeType = "longEdge",'
+        ' size_maxHeight = 4000, size_maxWidth = 4000 } }')
+
+    render["render"](photos(plugin, 1))
+
+    assert plugin.export_sessions[0]["settings"]["LR_size_maxHeight"] == 4000
+
+
+def test_a_preset_that_has_vanished_falls_back_rather_than_failing(plugin, render):
+    # A deleted preset, or a catalog opened on another machine. Refusing to
+    # upload over a render setting would be a worse answer than rendering the
+    # way the plugin used to.
+    plugin.prefs["render_export_preset"] = "guid-gone"
+    plugin.prefs["render_export_preset_title"] = "iNaturalist"
+
+    render["render"](photos(plugin, 1))
+
+    assert plugin.export_sessions[0]["settings"]["LR_size_maxHeight"] == 2048
+    assert any("was not found" in line for line in plugin.log_lines)
+
+
+def test_a_preset_that_cannot_be_used_falls_back_and_says_why(plugin, render):
+    plugin.prefs["render_export_preset"] = "guid-email"
+    plugin.set_file(
+        "/appdata/Export Presets/ForEmail.lrtemplate",
+        's = { id = "guid-email", title = "For Email", type = "Export",'
+        ' value = { exportServiceProvider = "com.adobe.ag.export.email" } }')
+
+    render["render"](photos(plugin, 1))
+
+    assert plugin.export_sessions[0]["settings"]["LR_size_maxHeight"] == 2048
+    assert any("Hard Drive" in line for line in plugin.log_lines)
+
+
+def test_a_watermark_that_will_not_draw_is_logged_at_render_time(plugin, render):
+    # Lightroom skips a watermark id that resolves to nothing, in silence --
+    # 557475 bytes, identical to no watermark, no error. Without this line an
+    # upload that lost its watermark leaves no trace anywhere.
+    plugin.prefs["render_export_preset"] = "guid-1"
+    plugin.set_file(
+        "/appdata/Export Presets/iNaturalist.lrtemplate",
+        's = { id = "guid-1", title = "iNaturalist", type = "Export",'
+        ' value = { exportServiceProvider = "com.adobe.ag.export.file",'
+        ' useWatermark = true, watermarking_id = "deleted-guid" } }')
+
+    render["render"](photos(plugin, 1))
+
+    assert any("no longer in Lightroom" in line for line in plugin.log_lines)
+
+
+def test_the_suggestions_render_ignores_the_chosen_preset(plugin, render):
+    # A throwaway file for the computer vision model. A watermark is drawn over
+    # the subject at worst, and a 4000 px preset makes every suggestion slower
+    # for an answer the model does not improve on.
+    plugin.prefs["render_export_preset"] = "guid-1"
+    plugin.set_file(
+        "/appdata/Export Presets/iNaturalist.lrtemplate",
+        's = { id = "guid-1", title = "iNaturalist", type = "Export",'
+        ' value = { exportServiceProvider = "com.adobe.ag.export.file",'
+        ' size_doConstrain = true, size_resizeType = "longEdge",'
+        ' size_maxHeight = 4000, size_maxWidth = 4000, useWatermark = true,'
+        ' watermarking_id = "wm-guid" } }')
+
+    render["renderForSuggestions"](plugin.new_photo())
+
+    settings_used = plugin.export_sessions[0]["settings"]
+    assert settings_used["LR_size_maxHeight"] == 1024
+    assert settings_used["LR_useWatermark"] is False
+    assert settings_used["LR_outputSharpeningOn"] is False
 
 
 # --- the suggestions render ----------------------------------------------

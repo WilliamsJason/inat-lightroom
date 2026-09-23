@@ -384,15 +384,42 @@ suggestion row above still reads the long way round if you want to copy it.
 - **Upload** — everything an upload decides. What the observation says:
   geoprivacy, whether to send the photo's GPS coordinates, an optional project
   ID, and whether to sync taxa back afterwards. And what the file carries:
-  which metadata to include, whether to strip location or person info, and an
-  optional copyright watermark.
+  which export preset to render with, which metadata to include, and whether
+  to strip location or person info.
 
 Every setting outside the Account tab is saved the moment you change it, so the
 window closes on **Done** and there is nothing to cancel.
 
-Uploads are always JPEG, sRGB, 2048 px on the long edge, quality 90, and that is
-not adjustable. iNaturalist rejects uploads over roughly 20 MB and displays at
-most 2048 px, so a full-resolution raw conversion would fail for no gain.
+#### Rendering with your own export preset
+
+By default, uploads are JPEG, sRGB, 2048 px on the long edge, quality 90, and
+sharpened for screen (Standard). iNaturalist displays at most 2048 px and
+rejects uploads over roughly 20 MB, so a full-resolution raw conversion would
+fail for no gain.
+
+If you want something else — a watermark, a different size, your own
+sharpening — make an export preset in Lightroom's Export dialog and pick it in
+**Render with**. The preset decides the resolution, quality, colour space,
+sharpening, watermark and metadata options. The plugin still forces the things
+that make the upload work at all: the destination folder, JPEG, no re-import,
+no post-processing action, and flat keywords.
+
+Two things to know about the popup:
+
+- Only presets whose **Export To** is **Hard Drive** can be used. A preset
+  built from "For Email" or "Burn Full-Sized JPEGs" names a different export
+  service, which this plugin cannot render through; those are listed
+  underneath the popup with the reason rather than quietly left out.
+- If a preset resizes by long or short edge, Lightroom stores both a width and
+  a height but only uses one of them. A preset carrying a leftover value from
+  however it was first set up will say so in the description under the popup.
+
+If the preset uses a watermark that has since been deleted or renamed,
+Lightroom skips it silently and exports an unwatermarked file with no error —
+so the settings window warns you about it there, where you can fix it.
+
+The species-suggestion render is not affected. It sends a small throwaway JPEG
+that is deleted as soon as the computer vision model has answered.
 
 Each photo upload is verified after the fact rather than trusted: iNaturalist
 returns success before it has finished processing an image, so the plugin polls
@@ -544,6 +571,7 @@ pinned.lrplugin/
 ├── ObservationPanel.lua       # The panel's window: view and wiring
 ├── PanelCore.lua              # What the panel's buttons do, minus the UI
 ├── RenderPhoto.lua            # Renders a JPEG without an export service
+├── ExportPresets.lua          # Reads the user's own export presets off disk
 ├── UploadCore.lua             # Creating and updating observations
 ├── SyncCore.lua               # Sync logic, callable from any entry point
 ├── LinkObservation.lua        # Adopting an existing observation

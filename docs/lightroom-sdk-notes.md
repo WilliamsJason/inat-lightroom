@@ -845,6 +845,110 @@ The full set of valid keys and values is easiest to read from the export
 presets embedded in `Export.lrmodule` as plain Lua source — search for
 `collisionHandling = "ask"`.
 
+## A plugin can use a named watermark preset, it just cannot list them
+
+This file used to say the opposite, and the correction is worth keeping
+because the wrong half was right: `watermarkPresets` appears in no binary in
+the product, so there is genuinely no SDK call that enumerates the user's
+named watermarks. The conclusion drawn from that — "so a plugin can only ask
+for `LR_watermarking_id = "<simpleCopyrightWatermark>"`" — does not follow.
+
+Watermark presets are `.lrtemplate` files on disk, and each one carries its own
+GUID in an `id` field. That GUID handed to `LrExportSession` works. Measured on
+Lightroom Classic 14, one photo, four renders differing only in the watermark
+keys, byte counts of the resulting JPEG:
+
+| Case | `LR_watermarking_id` | Bytes |
+| --- | --- | --- |
+| (a) no watermark | — | 557475 |
+| (b) built-in copyright | `<simpleCopyrightWatermark>` | 557475 |
+| (c) a named preset's GUID | `ECB47E01-…` | **575517** |
+| (d) a GUID matching no preset | `00000000-…` | 557475 |
+| (b2) built-in, after writing a copyright | `<simpleCopyrightWatermark>` | 559988 |
+
+Three things fall out of that, all of which change how code should be written:
+
+- **(c) drew, and drew that watermark.** It differs from both (a) and (b), so
+  a named watermark preset's id survives into an export session even though
+  the plugin cannot ask Lightroom what the ids are. Reading the preset files
+  is the whole trick.
+- **(d) is silent.** A watermark id that resolves to nothing does not raise,
+  does not warn, and produces an unwatermarked file byte-identical to (a). A
+  user who deletes or renames a watermark their export preset points at will
+  go on uploading unwatermarked photos and never be told. Check the id against
+  the `Watermarks` folder yourself and say something.
+- **(b) is a no-op more often than it looks.** The simple copyright watermark
+  stamps the IPTC copyright field; on a photo with no copyright there is
+  nothing to draw, so it silently does nothing. Writing a copyright and
+  re-rendering gave (b2), 2513 bytes larger. It works — it is just worth
+  nothing to anyone who does not set copyright.
+
+### Where the preset files are, and how to read one
+
+`Export.lrmodule` carries the template browser's data model verbatim —
+`templateType = "Export"`, `templateDirectoryName = "Export Presets"` — and
+`ui.dll` resolves that folder against `getStandardFilePath ... appData`, which
+is a path token a plugin already has. Watermarks are the same with
+`"Watermarks"`. `ui.dll` also branches on the host preference
+`AgTemplateBrowser_storePresetsWithCatalog` and moves the folder next to the
+catalog under "Lightroom Settings"; `LrPrefs` is per-plugin and cannot read a
+host preference, so scan both roots rather than guessing.
+
+A `.lrtemplate` is Lua source:
+
+```lua
+s = {
+  id = "7FF5B530-660A-44EB-A858-8406C40EDD11",
+  title = ZSTR "$$$/AgExport/Preset/ForEMail=For Email",
+  type = "Export",          -- or "WatermarkingPreset"
+  value = { exportServiceProvider = "com.adobe.ag.export.file", ... },
+}
+```
+
+Keys inside `value` are unprefixed; `exportSettings` wants `"LR_" .. key`.
+
+`LibraryToolkit.dll` loads one with `loadstring … loadfile … setfenv … ZSTR …
+pcall`, so the obvious approach is to do the same — and the sandbox will not
+let you. Measured from inside a plugin: `loadstring`, `loadfile`, `load`,
+`pcall`, `_G` and `rawget` are all present, but **`setfenv` and `getfenv` are
+both `nil`**, so a chunk cannot be confined to an environment of your own.
+Defining `ZSTR` as a global, running the chunk and reading back the global `s`
+does work. Parsing the table literal with string patterns and executing
+nothing also works, and returned identical results on every file tested,
+including nested tables — which is the better choice for a file found on disk,
+and cannot be taken away the way `setfenv` already was.
+
+### `resizeType` decides which of `maxWidth` and `maxHeight` is real
+
+A preset carries both size keys whatever its resize mode, so the mode is what
+says which one Lightroom reads and which is a leftover from however the preset
+was first set up. In `longEdge` and `shortEdge` mode it is **`maxHeight`**:
+
+- `Export.lrmodule`'s resize synopsis builds its text from the value list
+  `size_maxWidth, size_maxHeight` and formats
+  `$$$/AgExport/Synopsis/Resize/WidthHeight=Resize to W: ^1 H: ^2 ^3`, which
+  anchors `^1` to maxWidth and `^2` to maxHeight. In the same formatter,
+  `$$$/AgExport/Synopsis/Resize/LongEdge=Resize Long Edge to ^2 ^3` and the
+  ShortEdge string both read `^2`.
+- A real preset holding `longEdge` with `maxHeight = 2048` and
+  `maxWidth = 1000` shows a single box reading 2048 in the Export dialog, and
+  rendered far larger than a 1000 px constraint could produce.
+
+Pass `resizeType` and both size values through together and never reinterpret
+one without the other. Reading the pair is only worth doing to *describe* a
+preset to the user — which is worth doing, because the value Lightroom ignores
+is exactly the one a user would otherwise panic about.
+
+### Sharpening levels are 1, 2, 3
+
+`Export.lrmodule`'s sharpening popup stores each title's value immediately
+after it: `$$$/AgExport/PopupMenu/SharpeningLow=Low` → 1,
+`SharpeningStandard=Standard` → 2, `SharpeningHigh=High` → 3. The media popup
+in the same table maps Screen to `"screen"`. All four shipped presets carry
+`outputSharpeningLevel = 2, outputSharpeningMedia = "screen"` with
+`outputSharpeningOn = false`, so the numbers sitting in a preset file tell you
+nothing about whether they are in use.
+
 ## A plugin cannot add a panel to the Library right side
 
 There is no Info.lua key for it, and looking for one costs an afternoon because
