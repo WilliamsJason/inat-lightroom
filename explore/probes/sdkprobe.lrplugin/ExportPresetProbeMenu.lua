@@ -79,12 +79,21 @@ local MISSING_WATERMARK = "00000000-0000-0000-0000-000000000000"
 --
 -- The file is Lua: `s = { id = ..., title = ZSTR "...", value = { ... } }`.
 -- ZSTR is a call, not syntax, so a stub that hands the string back is enough to
--- make the chunk load; setfenv keeps it from reaching anything else.
+-- make the chunk load; setfenv would keep it from reaching anything else.
+--
+-- **Measured: setfenv is nil inside a plugin.** The first run of this probe
+-- reported `loadstring function / setfenv nil`, which killed every parse in
+-- steps 2 and 3 and left the watermark question unanswered rather than
+-- answered "no". Kept as one strategy among three so the next run says so in
+-- its own words rather than by its absence.
 --
 -- @return table, or nil plus the failure text verbatim
-local function parsePreset(source)
-  if type(loadstring) ~= "function" or type(setfenv) ~= "function" then
-    return nil, "loadstring/setfenv not available in this sandbox"
+local function parseViaSetfenv(source)
+  if type(loadstring) ~= "function" then
+    return nil, "loadstring is not available in this sandbox"
+  end
+  if type(setfenv) ~= "function" then
+    return nil, "setfenv is not available in this sandbox"
   end
 
   local chunk, syntaxError = loadstring(source, "lrtemplate")
@@ -100,6 +109,221 @@ local function parsePreset(source)
   end
 
   return env.s
+end
+
+--- Run the chunk and read the global it assigns.
+--
+-- Without setfenv there is no environment to read the result out of -- but a
+-- .lrtemplate does not need one. It assigns to a global `s`, so running it in
+-- whatever environment the sandbox provides and reading `s` afterwards is
+-- enough, as long as `ZSTR` exists as a global first.
+--
+-- The two globals it touches are saved and put back, because a probe that
+-- leaves `s` and `ZSTR` lying around in a shared environment is measuring
+-- Lightroom with one hand and changing it with the other.
+local function parseViaGlobals(source)
+  if type(loadstring) ~= "function" then
+    return nil, "loadstring is not available in this sandbox"
+  end
+  if type(_G) ~= "table" then
+    return nil, "_G is not a table in this sandbox (" .. type(_G) .. ")"
+  end
+
+  local chunk, syntaxError = loadstring(source, "lrtemplate")
+  if not chunk then return nil, tostring(syntaxError) end
+
+  -- rawget, so a sandbox that puts a metatable over the globals cannot answer
+  -- for `s` with something it invented.
+  local function readGlobal(key)
+    if type(rawget) == "function" then return rawget(_G, key) end
+    return _G[key]
+  end
+
+  local savedS    = readGlobal("s")
+  local savedZSTR = readGlobal("ZSTR")
+
+  local assigned, runError
+  local ok = pcall(function()
+    _G.ZSTR = function(text) return text end
+    _G.s    = nil
+
+    local ran, err = pcall(chunk)
+    if not ran then runError = tostring(err) end
+
+    assigned = readGlobal("s")
+  end)
+
+  pcall(function()
+    _G.s    = savedS
+    _G.ZSTR = savedZSTR
+  end)
+
+  if not ok then
+    return nil, "writing globals was refused: " .. tostring(runError)
+  end
+  if runError then return nil, runError end
+  if type(assigned) ~= "table" then
+    return nil, "no global named s after running (got " .. type(assigned) .. ")"
+  end
+
+  return assigned
+end
+
+--------------------------------------------------------------------------------
+-- Reading one without running it
+--------------------------------------------------------------------------------
+
+local function skipSpace(text, i)
+  local _, stop = text:find("^[%s]*", i)
+  return (stop or i - 1) + 1
+end
+
+local parseValue
+
+--- The body of a table literal, from the "{" at `i`.
+--
+-- Written as a real little parser rather than a line-by-line pattern match,
+-- because a preset's `value` is flat but a watermark's is not -- its `items`
+-- hold a list of tables -- and a pattern that ignores nesting reads the inner
+-- keys as if they were outer ones.
+local function parseTable(text, i)
+  local result = {}
+  i = i + 1
+
+  while true do
+    i = skipSpace(text, i)
+    local char = text:sub(i, i)
+
+    if char == "" then
+      return nil, i, "unterminated table"
+    elseif char == "}" then
+      return result, i + 1
+    elseif char == "," or char == ";" then
+      i = i + 1
+    else
+      local key
+      local name, afterName = text:match("^([%a_][%w_]*)%s*=%s*()", i)
+      local quoted, afterQuoted = text:match('^%[%s*"([^"]*)"%s*%]%s*=%s*()', i)
+
+      if quoted then
+        key, i = quoted, afterQuoted
+      elseif name then
+        key, i = name, afterName
+      end
+
+      local value, nextIndex, err = parseValue(text, i)
+      if err then return nil, nextIndex, err end
+
+      i = nextIndex
+      if key then
+        result[key] = value
+      else
+        result[#result + 1] = value
+      end
+    end
+  end
+end
+
+--- One value: a table, a string, a number, a boolean, nil, or a ZSTR call.
+function parseValue(text, i)
+  i = skipSpace(text, i)
+  local char = text:sub(i, i)
+
+  if char == "{" then
+    return parseTable(text, i)
+  end
+
+  -- ZSTR is a function call in the file. Nothing is being called here, so the
+  -- name is stepped over and the string behind it taken as the value -- which
+  -- is exactly what the ZSTR stub in the other two strategies does.
+  local afterZstr = text:match("^ZSTR%s*()", i)
+  if afterZstr then
+    i = afterZstr
+    char = text:sub(i, i)
+  end
+
+  if char == '"' or char == "'" then
+    local out, j = {}, i + 1
+    while j <= #text do
+      local c = text:sub(j, j)
+      if c == "\\" then
+        out[#out + 1] = text:sub(j + 1, j + 1)
+        j = j + 2
+      elseif c == char then
+        return table.concat(out), j + 1
+      else
+        out[#out + 1] = c
+        j = j + 1
+      end
+    end
+    return nil, j, "unterminated string"
+  end
+
+  local number, afterNumber = text:match("^(%-?%d+%.?%d*[eE]?[%+%-]?%d*)()", i)
+  if number and tonumber(number) then
+    return tonumber(number), afterNumber
+  end
+
+  local word, afterWord = text:match("^([%a_][%w_%.]*)()", i)
+  if word == "true" then return true, afterWord end
+  if word == "false" then return false, afterWord end
+  if word == "nil" then return nil, afterWord end
+
+  -- Anything else is a constructor this reader does not know -- AgRect(...)
+  -- and friends appear in preference files. Skipped to the next separator so
+  -- one unknown value does not cost the whole preset.
+  if word then
+    local _, stop = text:find("^[^,}]*", afterWord)
+    return nil, (stop or afterWord) + 1
+  end
+
+  return nil, i, "unexpected character " .. string.format("%q", char)
+end
+
+--- Parse without executing anything.
+--
+-- The fallback if neither Lua route survives the sandbox, and arguably the
+-- better thing to ship either way: a preset file is data the plugin found on
+-- disk, and this reads it as data instead of handing it to the interpreter.
+local function parseViaPatterns(source)
+  local start = source:find("[%a_][%w_]*%s*=%s*{")
+  if not start then return nil, "no table literal found" end
+
+  local brace = source:find("{", start, true)
+  local parsed, _, err = parseTable(source, brace)
+
+  if not parsed then return nil, tostring(err or "could not parse") end
+  return parsed
+end
+
+--- Every way of reading a preset, cheapest-to-trust first.
+--
+-- Ordered by how close each is to what Lightroom itself does: the two Lua
+-- routes run the file the way LibraryToolkit.dll does, the pattern reader does
+-- not run it at all. Which one the host actually allows is step 0's question.
+local PARSERS = {
+  { name = "loadstring + setfenv", parse = parseViaSetfenv },
+  { name = "loadstring + globals", parse = parseViaGlobals },
+  { name = "patterns, no execution", parse = parseViaPatterns },
+}
+
+--- The first strategy that works, remembered so steps 2 and 3 can name it.
+local chosenParser
+
+local function parsePreset(source)
+  if chosenParser then return chosenParser.parse(source) end
+
+  local firstError
+  for _, parser in ipairs(PARSERS) do
+    local parsed, err = parser.parse(source)
+    if parsed then
+      chosenParser = parser
+      return parsed
+    end
+    firstError = firstError or err
+  end
+
+  return nil, tostring(firstError)
 end
 
 --- The text a person should see for a preset.
@@ -330,29 +554,69 @@ end
 
 local function probeSandbox(report)
   report:step("Lua sandbox")
-  report:add("Step 0 - can a plugin load a .lrtemplate at all?")
+  report:add("Step 0 - can a plugin read a .lrtemplate at all?")
   report:addf("  %-24s %s", "loadstring", type(loadstring))
   report:addf("  %-24s %s", "setfenv", type(setfenv))
+  report:addf("  %-24s %s", "getfenv", type(getfenv))
   report:addf("  %-24s %s", "loadfile", type(loadfile))
+  report:addf("  %-24s %s", "load", type(load))
+  report:addf("  %-24s %s", "_G", type(_G))
+  report:addf("  %-24s %s", "rawget", type(rawget))
   report:addf("  %-24s %s", "pcall", type(pcall))
+  report:blank()
 
-  -- Tried on a literal that has both things a real preset has: a ZSTR call and
-  -- a nested value table. A sandbox that allows loadstring but blocks setfenv
-  -- would pass the type checks above and fail here.
-  local sample = 's = { id = "X", title = ZSTR "$$$/A/B=Display Name", '
-    .. 'type = "Export", value = { jpeg_quality = 0.9 } }'
-  local parsed, err = parsePreset(sample)
+  -- Tried on a literal that has everything a real preset has: a ZSTR call, a
+  -- nested value table and a list of tables like a watermark's items. A reader
+  -- that flattens nesting passes a simpler sample and then misreads the real
+  -- thing.
+  local sample = [[
+s = {
+  id = "X",
+  title = ZSTR "$$$/A/B=Display Name",
+  type = "Export",
+  value = {
+    jpeg_quality = 0.9,
+    size_maxWidth = 640,
+    useWatermark = true,
+    items = { { kind = "text", text = "hello, world" } },
+  },
+}
+]]
 
-  if parsed then
-    report:addf("  %-24s ok  (title %q -> %q, jpeg_quality %s)",
-      "parse a literal", tostring(parsed.title),
-      displayTitle(parsed.title), tostring(parsed.value.jpeg_quality))
-  else
-    report:addf("  %-24s FAILED  %s", "parse a literal", tostring(err))
+  report:add("  reading a sample preset, by strategy:")
+  local working
+
+  for _, parser in ipairs(PARSERS) do
+    local parsed, err = parser.parse(sample)
+
+    if not parsed then
+      report:addf("    %-24s FAILED  %s", parser.name, tostring(err))
+    else
+      -- Reported in full rather than as "ok", because a strategy that returns
+      -- a table which quietly lost the nested items or the ZSTR title is worse
+      -- than one that fails outright.
+      local value = type(parsed.value) == "table" and parsed.value or {}
+      local items = type(value.items) == "table" and value.items or {}
+      local first = type(items[1]) == "table" and items[1] or {}
+
+      report:addf("    %-24s ok  title %q / quality %s / watermark %s"
+        .. " / nested %q", parser.name, displayTitle(parsed.title),
+        tostring(value.jpeg_quality), tostring(value.useWatermark),
+        tostring(first.text))
+      working = working or parser
+    end
   end
 
   report:blank()
-  return parsed ~= nil
+  if working then
+    report:addf("  usable strategy: %s", working.name)
+  else
+    report:add("  NO STRATEGY WORKS. Export presets cannot be read from a"
+      .. " plugin at all, and the feature stops here.")
+  end
+
+  report:blank()
+  return working ~= nil
 end
 
 local function probeRoots(report, catalog, folderName, heading)
@@ -425,6 +689,10 @@ local function probeParsing(report, files, wantedType)
     end
   end
 
+  if chosenParser then
+    report:addf("  (read with: %s)", chosenParser.name)
+  end
+
   report:blank()
   return presets
 end
@@ -454,12 +722,83 @@ local function runCase(report, results, letter, description, photo, settings)
   return record
 end
 
---- What the five renders mean, spelled out.
+--- What the built-in copyright watermark has to draw.
+--
+-- The first run found (a) and (b) byte-identical, which has two very different
+-- explanations: either LR_watermarking_id = "<simpleCopyrightWatermark>" does
+-- nothing from a plugin, or it works perfectly and drew an empty string
+-- because the test photo carries no copyright. The Export dialog's own label
+-- for it is "$$$/AgWatermarking/Popup/OldCopyrightWatermark=Simple Copyright
+-- Watermark", and what it stamps is the IPTC copyright field.
+--
+-- Which one it is decides how honest the release note can be about deleting
+-- the checkbox, so the probe writes a copyright, renders again, and puts the
+-- photo back the way it found it.
+local function probeCopyright(report, catalog, photo, folder, results)
+  local function metadata(getter, key)
+    local ok, value = pcall(function() return photo[getter](photo, key) end)
+    if ok then return value end
+    return nil
+  end
+
+  local formatted = metadata("getFormattedMetadata", "copyright")
+  local raw       = metadata("getRawMetadata", "copyright")
+
+  report:blank()
+  report:addf("  photo copyright: formatted %q / raw %q",
+    tostring(formatted or ""), tostring(raw or ""))
+
+  if formatted and formatted ~= "" then
+    report:add("  the photo already carries a copyright, so (b) had something"
+      .. " to draw.")
+    return
+  end
+
+  report:add("  the photo carries NO copyright, so the built-in watermark had"
+    .. " nothing to stamp. Writing one temporarily and rendering again:")
+
+  local STAMP = "(c) iNat SDK probe"
+  local wrote, writeError = LrTasks.pcall(function()
+    catalog:withWriteAccessDo("iNat probe: temporary copyright", function()
+      photo:setRawMetadata("copyright", STAMP)
+    end, { timeout = 10 })
+  end)
+
+  if not wrote then
+    report:addf("    could not set a copyright: %s", tostring(writeError))
+    return
+  end
+
+  local settings = baseSettings(folder)
+  settings.LR_useWatermark    = true
+  settings.LR_watermarking_id = BUILT_IN_WATERMARK
+  runCase(report, results, "b2",
+    "built-in watermark, copyright set", photo, settings)
+
+  -- Put it back whatever happened above. The photo belongs to the user, and a
+  -- probe that leaves its own string in their metadata has stopped being a
+  -- measurement.
+  local restored, restoreError = LrTasks.pcall(function()
+    catalog:withWriteAccessDo("iNat probe: restore copyright", function()
+      photo:setRawMetadata("copyright", raw or "")
+    end, { timeout = 10 })
+  end)
+
+  if restored then
+    report:addf("    copyright restored to %q", tostring(raw or ""))
+  else
+    report:addf("    WARNING: could not restore the copyright (%s)."
+      .. " It currently reads %q -- clear it in the Metadata panel.",
+      tostring(restoreError), STAMP)
+  end
+end
+
+--- What the renders mean, spelled out.
 --
 -- A person reads this and then decides whether to build the feature, so the
--- comparisons are stated rather than left as five numbers to subtract.
+-- comparisons are stated rather than left as numbers to subtract.
 local function concludeRenders(report, results, namedId)
-  local a, b, c, d = results.a, results.b, results.c, results.d
+  local a, b, c, d, b2 = results.a, results.b, results.c, results.d, results.b2
 
   report:blank()
   report:add("Conclusion:")
@@ -467,6 +806,31 @@ local function concludeRenders(report, results, namedId)
   if not (a and a.size) then
     report:add("  (a) did not render, so nothing can be compared.")
     return
+  end
+
+  -- The built-in watermark is checked first now, because the first run found
+  -- it drawing nothing and the plugin currently ships it as a setting.
+  if b and b.size then
+    if b.size ~= a.size then
+      report:addf("  (b) vs (a): DIFFERENT (%d vs %d bytes)"
+        .. " -- the built-in copyright watermark drew.", b.size, a.size)
+    elseif b2 and b2.size and b2.size ~= a.size then
+      report:addf("  (b) vs (a): IDENTICAL (%d bytes), but with a copyright"
+        .. " set (b2) it drew %d bytes -- so the built-in watermark works and"
+        .. " simply had nothing to stamp. The shipped checkbox is a no-op for"
+        .. " anyone whose photos carry no copyright.", b.size, b2.size)
+    elseif b2 and b2.size then
+      report:addf("  (b) vs (a): IDENTICAL (%d bytes), and still identical"
+        .. " with a copyright set -- LR_watermarking_id ="
+        .. " \"<simpleCopyrightWatermark>\" draws NOTHING from a plugin."
+        .. " The shipped checkbox has never done anything.", b.size)
+    else
+      report:addf("  (b) vs (a): IDENTICAL (%d bytes), and the copyright test"
+        .. " did not run, so which of the two reasons it is stays open.",
+        b.size)
+    end
+  else
+    report:add("  (b) did not render.")
   end
 
   if not (c and c.size) then
@@ -605,6 +969,11 @@ local function probeRenders(report, catalog, watermarks, presets)
     settingsD.LR_useWatermark    = true
     settingsD.LR_watermarking_id = MISSING_WATERMARK
     runCase(report, results, "d", "GUID matching no preset", photo, settingsD)
+
+    -- Runs after (a)-(d) so it cannot disturb them: it writes metadata to the
+    -- photo, and a render that happened while the copyright was set would not
+    -- be comparable with one that happened before.
+    probeCopyright(report, catalog, photo, folder, results)
   end)
 
   if not ok then
