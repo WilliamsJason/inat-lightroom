@@ -75,19 +75,19 @@ MUTATIONS = [
     (
         "PanelCore",
         "location and date are left off the vision request",
-        "    payload, err = api:scoreImage(path, latitude, longitude,\n      UploadCore.observedOnFor(photo))",
-        "    payload, err = api:scoreImage(path)",
+        "  local payload, err = api:scoreImage(path, latitude, longitude,\n    UploadCore.observedOnFor(photo))",
+        "  local payload, err = api:scoreImage(path)",
     ),
     (
         "PanelCore",
         "the temporary render is never deleted",
-        "    RenderPhoto.cleanUp(folder)\n  end",
-        "  end",
+        "  RenderPhoto.cleanUp(folder)\n  return payload, err",
+        "  return payload, err",
     ),
     (
         "PanelCore",
         "a failed render is scored anyway",
-        "    if not path then\n      return nil, renderErr\n    end",
+        "  if not path then\n    return nil, renderErr\n  end",
         "",
     ),
     (
@@ -111,8 +111,8 @@ MUTATIONS = [
     (
         "PanelCore",
         "the scientific name is dropped from the list",
-        "    name = name .. \" (\" .. row.name .. \")\"",
-        "    name = name",
+        "    return common .. \" (\" .. scientific .. \")\"",
+        "    return common",
     ),
 
     # --- uploading -----------------------------------------------------------
@@ -207,8 +207,8 @@ MUTATIONS = [
     (
         "ObservationPanel",
         "a suggestion that is not there leaves the previous taxon armed",
-        "  if not row then\n    props.suggestionTaxonId = nil",
-        "  if not row then\n    props.suggestionTaxonId = row",
+        "  if not row then\n    props.selectedSuggestion = nil\n    props.suggestionTaxonId = nil",
+        "  if not row then\n    props.selectedSuggestion = nil",
     ),
     (
         "ObservationPanel",
@@ -344,8 +344,8 @@ MUTATIONS = [
     (
         "CustomMetadata",
         "the schema version is not bumped with the field changes",
-        "  schemaVersion = 5,",
-        "  schemaVersion = 4,",
+        "  schemaVersion = 8,",
+        "  schemaVersion = 7,",
     ),
     (
         "CustomMetadata",
@@ -745,7 +745,7 @@ MUTATIONS = [
     (
         "SyncCore",
         "applyTaxon writes the fields but never the keyword",
-        "  local leafKw = ensureKeywordPath(catalog, buildKeywordPath(taxon))\n  if leafKw then\n    photo:addKeyword(leafKw)\n  end",
+        "    local leafKw = ensureKeywordPath(catalog, buildKeywordPath(taxon))\n    if leafKw then\n      photo:addKeyword(leafKw)\n    end",
         "",
     ),
     (
@@ -769,8 +769,8 @@ MUTATIONS = [
     (
         "ObservationPanel",
         "a deselected suggestion leaves the buttons live against a stale taxon",
-        "    props.hasSuggestion     = false\n    ObservationPanel.applySuggestionSlots(props, rows, nil)\n    return nil",
-        "    ObservationPanel.applySuggestionSlots(props, rows, nil)\n    return nil",
+        "    props.hasSuggestion     = false\n    ObservationPanel.clearChosenName(props)\n    ObservationPanel.applySuggestionSlots(props, rows, nil)\n    return nil",
+        "    ObservationPanel.clearChosenName(props)\n    ObservationPanel.applySuggestionSlots(props, rows, nil)\n    return nil",
     ),
     (
         "ObservationPanel",
@@ -877,6 +877,7 @@ MUTATIONS = [
 def main() -> int:
     backups = {name: path.read_text(encoding="utf-8") for name, path in TARGETS.items()}
     survivors = []
+    stale = []
 
     try:
         for name, description, old, new in MUTATIONS:
@@ -884,8 +885,8 @@ def main() -> int:
             source = backups[name]
 
             if old not in source:
-                print(f"SKIP  {description}\n      (anchor not found -- fix the script)")
-                survivors.append(description)
+                print(f"STALE  {description}\n       (anchor not found -- fix the script)")
+                stale.append(description)
                 continue
 
             path.write_text(source.replace(old, new, 1), encoding="utf-8")
@@ -908,10 +909,27 @@ def main() -> int:
             path.write_text(backups[name], encoding="utf-8")
 
     print()
+
+    # Reported apart from the survivors, and reported first, because the two
+    # mean opposite things. A survivor is a hole in the suite; a stale anchor is
+    # a mutation that has not run at all, and folding it into the survivor list
+    # -- which is what this script used to do -- makes a refactor look like a
+    # coverage gap and hides the fact that the line is no longer being tested.
+    # Measured: #30 and #31 moved eight anchors between them, and every one was
+    # reported as a survivor for two merges despite the tests that catch them
+    # being present and passing the whole time.
+    if stale:
+        print(f"{len(stale)} of {len(MUTATIONS)} mutations never ran:")
+        for s in stale:
+            print(f"  - {s}")
+        print()
+
     if survivors:
         print(f"{len(survivors)} of {len(MUTATIONS)} mutations survived:")
         for s in survivors:
             print(f"  - {s}")
+
+    if stale or survivors:
         return 1
 
     print(f"All {len(MUTATIONS)} mutations caught.")
