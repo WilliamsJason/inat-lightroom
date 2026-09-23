@@ -98,22 +98,46 @@ end
 
 --- Why presets the user can see in Lightroom are missing from the popup.
 --
--- Returns "" when there is nothing to say, so the text can be bound with no
--- special case.
+-- Returns "" when nothing was rejected, so the text can be bound with no
+-- special case -- and so the rule is never explained to someone it excluded
+-- nobody from.
+--
+-- Names at most NAMED_REJECTS of them and counts the rest. The control is two
+-- lines, and a static_text that overflows drops the word that does not fit
+-- and says nothing about having done so, so an unbounded list would silently
+-- lose its own tail. A count cannot overflow, and "and 4 others" is honest
+-- about there being more in a way that a truncated list is not.
+local NAMED_REJECTS = 2
+
 function SettingsDialog.presetNotes(presets)
-  local lines = {}
+  local names = {}
+  local extra = 0
 
   for _, preset in ipairs(presets or {}) do
     if not preset.usable then
-      lines[#lines + 1] = "\"" .. tostring(preset.title) .. "\" "
-        .. tostring(preset.reason) .. "."
+      if #names < NAMED_REJECTS then
+        names[#names + 1] = "\"" .. tostring(preset.title) .. "\""
+      else
+        extra = extra + 1
+      end
     end
   end
 
-  if #lines == 0 then return "" end
+  if #names == 0 then return "" end
 
-  return "Not listed: " .. table.concat(lines, " ")
-    .. " Only Hard Drive presets can render a file for upload."
+  local list = names[1]
+  if #names > 1 then
+    list = table.concat(names, " and ", 1, #names)
+  end
+  if extra > 0 then
+    list = list .. " and " .. extra .. " other"
+      .. (extra == 1 and "" or "s")
+  end
+
+  return "Note: Only Hard Drive presets are listed as other presets cannot"
+    .. " render a file for upload. This includes " .. list
+    .. ", which export" .. (#names + extra == 1 and "s" or "")
+    .. " to other locations."
 end
 
 --- What the chosen preset will do to the file.
@@ -131,15 +155,26 @@ end
 -- discrepancy only the plugin can see is noise. The rule itself still matters
 -- and still has its evidence: see ExportPresets.effectiveSize.
 --
--- @param preset  an entry from ExportPresets.list(), or nil
-function SettingsDialog.presetSummary(preset)
+-- @param preset     an entry from ExportPresets.list(), or nil
+-- @param available  id -> title from ExportPresets.watermarks()
+function SettingsDialog.presetSummary(preset, available)
   if not preset then
     return "Uploads are JPEG, sRGB, 2048 px on the long edge, sharpened for"
       .. " screen, and not watermarked."
   end
 
   local size = ExportPresets.effectiveSize(preset.value)
-  return "This preset exports at " .. tostring(size.text) .. "."
+  local text = "This preset exports at " .. tostring(size.text)
+
+  -- The default line above ends on the watermark, so this one does too --
+  -- the watermark is most of why anyone chose a preset. Absent when it
+  -- cannot be stated truthfully; see ExportPresets.watermarkText.
+  local watermark = ExportPresets.watermarkText(preset.value, available)
+  if watermark then
+    text = text .. ", " .. watermark
+  end
+
+  return text .. "."
 end
 
 --- Why the chosen preset's watermark will not draw, or "".
@@ -443,7 +478,7 @@ function SettingsDialog.watchExportPresetPicker(props, presets, watermarks)
   local function refresh()
     local preset = byId[props.render_export_preset]
     props.render_export_preset_title = preset and preset.title or ""
-    props.exportPresetSummary = SettingsDialog.presetSummary(preset)
+    props.exportPresetSummary = SettingsDialog.presetSummary(preset, watermarks)
     props.exportPresetWarning = SettingsDialog.presetWarning(preset, watermarks)
   end
 

@@ -126,6 +126,16 @@ MUTATIONS = [
         "  if false then return nil end",
     ),
     (
+        "claims a preset watermarks when the watermark will not draw",
+        "  if ExportPresets.watermarkProblem(value, available) then return nil end",
+        "",
+    ),
+    (
+        "describes a preset that does not watermark as though it did",
+        '  if not value.useWatermark then return "not watermarked" end',
+        '  if false then return "not watermarked" end',
+    ),
+    (
         "reads the resource key instead of the title a person should see",
         '  local text = title:match("^%$%$%$/[^=]*=(.*)$")\n  return text or title',
         "  return title",

@@ -454,6 +454,59 @@ def test_watermarking_on_with_nothing_named_is_reported(plugin, presets):
     assert presets["watermarkProblem"](value, None) is not None
 
 
+# --- describing a preset's watermark ---------------------------------------
+
+
+def test_a_resolving_watermark_is_named(plugin, presets):
+    plugin.set_file(APPDATA_WATERMARKS + "/JasonWilliams.lrtemplate", WATERMARK)
+    value = presets["parse"](INATURALIST)["value"]
+
+    text = presets["watermarkText"](value, presets["watermarks"]())
+
+    assert text == "watermarked with JasonWilliams"
+
+
+def test_a_preset_that_does_not_watermark_says_so(presets):
+    value = presets["parse"](FOR_EMAIL)["value"]
+
+    assert presets["watermarkText"](value, presets["watermarks"]()) == \
+        "not watermarked"
+
+
+def test_a_watermark_that_will_not_draw_is_left_undescribed(presets):
+    # Exactly the cases watermarkProblem has something to say about. Two
+    # pieces of text describing one broken thing is how one of them ends up
+    # wrong -- a summary reading "watermarked with X" beside a warning saying
+    # it will not draw is worse than a summary that stops early.
+    value = presets["parse"](INATURALIST)["value"]
+
+    assert presets["watermarkText"](value, presets["watermarks"]()) is None
+
+
+def test_the_built_in_copyright_watermark_is_left_undescribed(plugin, presets):
+    # A preset can still carry it even though the plugin's own checkbox is
+    # gone. It draws nothing without an IPTC copyright, so calling it
+    # "watermarked" would promise something that may never appear.
+    value = plugin.runtime.table_from({
+        "useWatermark": True,
+        "watermarking_id": presets["BUILT_IN_WATERMARK"],
+    })
+
+    assert presets["watermarkText"](value, presets["watermarks"]()) is None
+
+
+def test_nothing_is_claimed_when_the_watermarks_were_never_listed(
+    plugin, presets
+):
+    # A nil listing is "unknown", not "fine": watermarkProblem cannot spot a
+    # deleted watermark without one either.
+    value = plugin.runtime.table_from({
+        "useWatermark": True, "watermarking_id": "some-guid",
+    })
+
+    assert presets["watermarkText"](value, None) is None
+
+
 # --- turning a preset into export settings ---------------------------------
 
 

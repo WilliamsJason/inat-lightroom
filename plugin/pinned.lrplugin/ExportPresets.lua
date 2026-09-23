@@ -607,6 +607,30 @@ function ExportPresets.watermarkProblem(value, available)
   return nil
 end
 
+--- How to describe a preset's watermark, or nil when it cannot be described.
+--
+-- nil in exactly the cases watermarkProblem has something to say -- a GUID
+-- that resolves to nothing, the built-in copyright watermark, watermarking
+-- turned on with nothing named. The warning control is already the right
+-- place for those, and two pieces of text describing one broken thing is how
+-- one of them ends up wrong: a summary reading "watermarked with X" beside a
+-- warning saying it will not draw is worse than a summary that stops early.
+--
+-- @param value      a preset's value table
+-- @param available  id -> title, from watermarks()
+function ExportPresets.watermarkText(value, available)
+  value = value or {}
+
+  if not value.useWatermark then return "not watermarked" end
+  if ExportPresets.watermarkProblem(value, available) then return nil end
+
+  -- A nil listing is "unknown", not "fine": watermarkProblem cannot spot a
+  -- deleted watermark without one either, so neither of us can say anything.
+  if not available then return nil end
+
+  return "watermarked with " .. tostring(available[value.watermarking_id])
+end
+
 --- One preset by its id, or nil.
 --
 -- Presets are stored by GUID rather than by path because a GUID survives the
