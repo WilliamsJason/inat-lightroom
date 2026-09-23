@@ -21,6 +21,7 @@ pinned.lrplugin/
 ├── ObservationPanel.lua       # The panel's window: view and wiring
 ├── PanelCore.lua              # What the panel's buttons do, minus the UI
 ├── RenderPhoto.lua            # Renders a JPEG with no export service to do it
+├── ExportPresets.lua          # The user's own export presets, read off disk
 ├── UploadCore.lua             # Creating and updating observations
 ├── SyncCore.lua               # Sync logic, callable from any entry point
 ├── LinkObservation.lua        # Adopting an observation that already exists
@@ -57,7 +58,7 @@ Only the second half can be tested outside Lightroom, so the split is drawn to
 leave as little as possible on the untestable side.
 
 `File > Plug-in Extras` holds two items, and both of them only *open*
-something: **Pinned Panel** and **Pinned Settings…**. That is the test
+something: **Observation Panel** and **Settings…**. That is the test
 for whether something belongs in the menu — features live where the user is
 already looking, and a menu is somewhere you have to go.
 
@@ -303,16 +304,17 @@ The panel therefore shows the location on its own row — it is the only field
 here the user can still act on — and `PanelCore.locationWarning` gates the
 upload behind a confirmation when the first photo has none.
 
-Three deliberate limits on that warning:
+Two deliberate limits on that warning:
 
 - **It fires only on upload, never on update.** An update posts an
   identification; it cannot add coordinates, so warning there would be a dialog
   with nothing behind it.
-- **It is silent when `inat_upload_location` is off.** The user switched
-  location off on purpose. A warning that fires when it should not is one people
-  learn to click through, and that costs us the times it is right.
 - **It is a warning, not a veto.** Plenty of observations are worth having
   without a location.
+
+It used to stay quiet when the user had turned "send GPS coordinates" off.
+That setting is gone: coordinates are sent whenever the photo has them, and
+`inat_geoprivacy` decides who may see them.
 
 It judges `photos[1]`, because the observation's details come from the first
 photo. Judging any other would warn about a location that is not the one being
@@ -410,8 +412,8 @@ observation than the one that now exists.
 `SettingsDialog.lua` is a modal `f:tab_view` with three tabs: **Account**
 (credentials), **Observations** (keyword root, **Sync All Linked Photos**,
 **Find Unlinked Observations…**) and **Upload** (geoprivacy, GPS, project,
-sync-after-upload, metadata inclusion, location and person stripping,
-watermark).
+sync-after-upload, which export preset to render with, metadata inclusion,
+location and person stripping).
 
 The split is by when a question is answered, not by which API field it lands
 in: what an observation *says* is decided at upload time alongside what the
@@ -671,8 +673,9 @@ photo.
 Select photos, choose a suggestion (or type a guess), click Upload
         │
         ▼
-RenderPhoto renders each photo: JPEG, 2048 px long edge, sRGB, q90,
-into a temp folder the plugin owns and cleans up
+RenderPhoto renders each photo: JPEG, 2048 px long edge, sRGB, q90, sharpened
+for screen -- or through the user's chosen export preset -- into a temp folder
+the plugin owns and cleans up
         │
         ▼
 POST /observations   ← species_guess only if no taxon was resolved
@@ -958,10 +961,28 @@ why. Renaming the default would dodge that only by coincidence.
 ## Export size
 
 iNaturalist displays at most **2048 px** on the long edge and rejects uploads
-over roughly 20 MB. `RenderPhoto.lua` therefore fixes JPEG / 2048 px long edge /
-sRGB / quality 90 rather than offering it as a default: a full-resolution raw
+over roughly 20 MB. `RenderPhoto.lua` therefore defaults to JPEG / 2048 px long
+edge / sRGB / quality 90 / sharpened for screen: a full-resolution raw
 conversion would fail the upload for an image nobody would ever see at that
 size.
+
+It is a default rather than a fixed rule. `ExportPresets.lua` reads the user's
+own Lightroom export presets off disk, and choosing one in the settings window
+hands its keys to `LrExportSession` — resolution, quality, sharpening,
+watermark and metadata options included, with no 2048 px clamp. Someone who
+deliberately exports larger has decided to spend their own bandwidth, and
+iNaturalist resizes anything bigger itself. The suggestion render is left out
+of this entirely: it is a 1024 px throwaway for the computer vision model,
+deleted as soon as it has answered.
+
+What a preset may **not** change is everything the render depends on: the
+export provider, the destination folder the caller then reads the files from,
+post-processing, re-import, collision handling, file naming, JPEG, video
+inclusion and flat keywords. That list is enforced twice — `ExportPresets.OVERRIDDEN`
+drops those keys while mapping the preset, and `RenderPhoto.OVERRIDES` writes
+the plugin's values back on top afterwards. Either alone would do; the cost of
+a preset silently moving the destination is an upload of the wrong files, or
+none.
 
 Omitted export settings are the hazard. `fillInDefaultSettings` fills gaps from
 the *user's own last export*, not from documented defaults, so an omitted key is

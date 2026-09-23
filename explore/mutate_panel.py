@@ -393,8 +393,8 @@ MUTATIONS = [
     ),
     (
         "PanelCore",
-        "the warning nags even when the user turned location off",
-        "  if not settings.inat_upload_location then return nil end",
+        "the warning gives up on an empty selection instead of ignoring it",
+        "  if not photos or #photos == 0 then return nil end",
         "",
     ),
     (

@@ -451,6 +451,24 @@ def test_every_probe_menu_item_says_it_is_temporary(plugin):
             assert "temporary" in str(item["title"]).lower(), item["title"]
 
 
+def test_the_two_menu_items_do_not_read_as_one_shape(plugin):
+    """They were "Pinned Panel" and "Pinned Settings…": same first word, near
+    enough the same length, so the eye had to reach the second word before
+    they differed -- and the owner kept opening the wrong one. Lightroom
+    already draws a "Pinned for iNaturalist" header above them, so the shared
+    prefix was spending the most distinctive position in a label on the one
+    thing they had in common."""
+    info = plugin.require("Info")
+    items = lua_list(info["LrExportMenuItems"])
+
+    permanent = [item for item in items if not str(item["id"]).endswith("_probe")]
+    first_words = {str(item["title"]).split()[0] for item in permanent}
+
+    assert len(first_words) == len(permanent)
+    for item in permanent:
+        assert not str(item["title"]).startswith("Pinned"), item["title"]
+
+
 def test_the_panel_menu_item_comes_first(plugin):
     """It is the one people will reach for repeatedly; settings is a
     once-per-install errand."""

@@ -305,9 +305,35 @@ local createdDirectories = {}
 local deletedPaths = {}
 local deleteFails = false
 
+-- A virtual filesystem, for the modules that read preset files off disk.
+-- Only paths a test has put there exist; a directory exists when some file
+-- sits under it. Paths use "/" throughout, which is what LrPathUtils.child
+-- builds above.
+local virtualFiles = {}
+
+local function virtualDirExists(path)
+  local prefix = tostring(path) .. "/"
+  for file in pairs(virtualFiles) do
+    if file:sub(1, #prefix) == prefix then return true end
+  end
+  return false
+end
+
 stubs.LrPathUtils = {
   child = function(directory, name)
     return tostring(directory) .. "/" .. tostring(name)
+  end,
+
+  extension = function(path)
+    return tostring(path):match("%.([^%./]+)$") or ""
+  end,
+
+  leafName = function(path)
+    return tostring(path):match("([^/]+)$") or tostring(path)
+  end,
+
+  parent = function(path)
+    return tostring(path):match("^(.*)/[^/]+$")
   end,
 
   -- The real one returns nil for a name it does not know, which is exactly how
@@ -316,6 +342,7 @@ stubs.LrPathUtils = {
   getStandardFilePath = function(name)
     if name == "temp" then return "/tmp" end
     if name == "home" then return "/home/tester" end
+    if name == "appData" then return "/appdata" end
     return nil
   end,
 }
@@ -347,7 +374,54 @@ stubs.LrFileUtils = {
     for _, made in ipairs(createdDirectories) do
       if made == path then return "directory" end
     end
+    if virtualFiles[path] then return "file" end
+    if virtualDirExists(path) then return "directory" end
     return false
+  end,
+
+  readFile = function(path)
+    local contents = virtualFiles[path]
+    if contents == nil then
+      error("could not read " .. tostring(path), 0)
+    end
+    return contents
+  end,
+
+  isDirectory = function(path)
+    return virtualDirExists(path)
+  end,
+
+  -- The real one is an iterator over the immediate children of a directory,
+  -- and raises on a directory that is not there. Both matter: the plugin
+  -- walks preset folders that may not exist on this machine.
+  directoryEntries = function(path)
+    if not virtualDirExists(path) then
+      error("no such directory: " .. tostring(path), 0)
+    end
+
+    local prefix = tostring(path) .. "/"
+    local children = {}
+    local seen = {}
+
+    for file in pairs(virtualFiles) do
+      if file:sub(1, #prefix) == prefix then
+        local rest = file:sub(#prefix + 1)
+        local head = rest:match("^([^/]+)")
+        local child = prefix .. head
+        if not seen[child] then
+          seen[child] = true
+          children[#children + 1] = child
+        end
+      end
+    end
+
+    table.sort(children)
+
+    local index = 0
+    return function()
+      index = index + 1
+      return children[index]
+    end
   end,
 }
 
@@ -684,6 +758,11 @@ end
 catalog = {
   _writing = false,
   _reading = false,
+
+  -- The catalog file itself. Lightroom keeps presets beside it when "Store
+  -- presets with this catalog" is on, and a plugin can only find that folder
+  -- by asking the catalog where it lives.
+  getPath = function(self) return "/catalogs/Test/Test.lrcat" end,
 
   -- Read access. Nests freely, unlike the write block: the real one is a lock
   -- that reads share.
@@ -1067,6 +1146,8 @@ return {
   exportSessions = exportSessions,
   createdDirectories = createdDirectories,
   deletedPaths = deletedPaths,
+  setFile = function(path, contents) virtualFiles[path] = contents end,
+  clearFiles = function() virtualFiles = {} end,
   setDeleteFails = function(fails) deleteFails = fails end,
   setKeywordsFail = function(fails) keywordsFail = fails end,
   setRenderFailure = function(message)
@@ -1410,6 +1491,14 @@ class LuaPlugin:
     def set_delete_fails(self, fails: bool = True) -> None:
         """Make LrFileUtils.delete raise, as a locked file would."""
         self.env["setDeleteFails"](fails)
+
+    def set_file(self, path: str, contents: str) -> None:
+        """Put a file in the virtual filesystem the preset reader walks."""
+        self.env["setFile"](path, contents)
+
+    def clear_files(self) -> None:
+        """Empty the virtual filesystem."""
+        self.env["clearFiles"]()
 
     def set_keywords_fail(self, fails: bool = True) -> None:
         """Make catalog:getKeywords raise, as a busy catalog would."""

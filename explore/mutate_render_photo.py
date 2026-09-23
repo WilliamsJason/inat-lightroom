@@ -30,8 +30,8 @@ MUTATIONS = [
     ),
     (
         "renders into a subfolder the caller does not know about",
-        "LR_export_useSubfolder          = false",
-        "LR_export_useSubfolder          = true",
+        "LR_export_destinationPathSuffix = \"\",\n    LR_export_useSubfolder          = false,\n\n    -- Nothing may open",
+        "LR_export_destinationPathSuffix = \"\",\n    LR_export_useSubfolder          = true,\n\n    -- Nothing may open",
     ),
     (
         "re-imports every uploaded photo back into the catalog",
@@ -130,22 +130,42 @@ MUTATIONS = [
     ),
     (
         "strips location from every upload",
-        "LR_removeLocationMetadata  = prefs.render_remove_location or false",
+        "LR_removeLocationMetadata  = false",
         "LR_removeLocationMetadata  = true",
     ),
     (
-        "turns the watermark on without naming one, so none is drawn",
-        'settings.LR_watermarking_id = "<simpleCopyrightWatermark>"',
-        "settings.LR_watermarking_id = nil",
+        "leaves the watermark key out, so Lightroom fills it from the last export",
+        "LR_useWatermark            = false",
+        "LR_useWatermark            = nil",
     ),
     (
-        "watermarks every upload",
-        "LR_useWatermark            = prefs.render_use_watermark or false",
-        "LR_useWatermark            = true",
+        "ships uploads unsharpened",
+        "LR_outputSharpeningOn      = options.sharpen ~= false",
+        "LR_outputSharpeningOn      = false",
     ),
     (
-        "hardcodes the metadata option instead of honouring the setting",
-        'LR_embeddedMetadataOption  = prefs.render_metadata_option or "all"',
+        "sharpens the throwaway computer-vision render too",
+        "LR_outputSharpeningOn      = options.sharpen ~= false",
+        "LR_outputSharpeningOn      = true",
+    ),
+    # RenderPhoto.OVERRIDES is deliberately not mutated here. It is the second
+    # of two layers -- ExportPresets.OVERRIDDEN already drops the same keys on
+    # the way in -- so removing either one alone changes nothing that any test
+    # could see. That is the point of it. The layer that does the work is
+    # mutated in mutate_export_presets.py.
+    (
+        "ignores the chosen export preset entirely",
+        "  if preset and type(preset.value) == \"table\" then",
+        "  if false then",
+    ),
+    (
+        "renders the computer-vision file through the user's export preset",
+        "    usePreset  = false,",
+        "    usePreset  = true,",
+    ),
+    (
+        "sends only the copyright instead of all the metadata",
+        'LR_embeddedMetadataOption  = "all"',
         'LR_embeddedMetadataOption  = "copyrightOnly"',
     ),
     (
@@ -180,7 +200,7 @@ MUTATIONS = [
     ),
     (
         "renders a full-size image just to ask the computer vision a question",
-        "  local rendered, failures, folder = RenderPhoto.render({ photo }, {\n    maxPixels = RenderPhoto.SUGGEST_MAX_PX,\n  })",
+        "  local rendered, failures, folder = RenderPhoto.render({ photo }, {\n    maxPixels  = RenderPhoto.SUGGEST_MAX_PX,\n    usePreset  = false,\n    sharpen    = false,\n  })",
         "  local rendered, failures, folder = RenderPhoto.render({ photo }, {})",
     ),
     (

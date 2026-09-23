@@ -249,7 +249,7 @@ local function refreshJwtFromOAuth()
     if status == 401 then
       return nil, "iNaturalist has rejected this plugin's access.\n\n"
         .. "That usually means access was revoked on the website. Open\n"
-        .. "File > Plug-in Extras > Pinned Settings… and sign in again."
+        .. "File > Plug-in Extras > Settings… and sign in again."
     end
     return nil, "iNaturalist refused to issue an API token (HTTP "
       .. tostring(status) .. ")."
@@ -348,12 +348,12 @@ function InatAuth.getToken(forceRefresh)
     return nil, "Your iNaturalist token has expired. Tokens last 24 hours.\n\n"
       .. "Sign in at inaturalist.org, open www.inaturalist.org/users/api_token, "
       .. "and paste the new token via\n"
-      .. "File > Plug-in Extras > Pinned Settings…\n\n"
+      .. "File > Plug-in Extras > Settings…\n\n"
       .. "Or use Sign In with iNaturalist there once, and this stops happening."
   end
 
   return nil, "iNaturalist credentials are not set up.\n\n"
-    .. "Use File > Plug-in Extras > Pinned Settings…."
+    .. "Use File > Plug-in Extras > Settings…."
 end
 
 --- A one-line summary of why a token could not be had.
@@ -390,7 +390,7 @@ end
 -- had been pressed.
 --
 -- It used to be a warning dialog whose whole content was directions to
--- File > Plug-in Extras > Pinned Settings…. Reading out a menu path is a
+-- File > Plug-in Extras > Settings…. Reading out a menu path is a
 -- worse version of opening the window, so when the window is the answer it
 -- opens the window -- on the Account tab, with the reason above the fields
 -- that answer it. The caller's message is kept for the log, which is where
@@ -401,7 +401,7 @@ end
 -- require at the top of the file would be circular.
 function InatAuth.reportMissingCredentials(message)
   local fallback = message or "iNaturalist credentials are not set up.\n\n"
-    .. "Use File > Plug-in Extras > Pinned Settings…."
+    .. "Use File > Plug-in Extras > Settings…."
 
   logger:info("No usable token: " .. tostring(fallback))
 

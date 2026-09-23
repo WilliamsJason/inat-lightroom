@@ -515,14 +515,13 @@ end
 -- without a location is a record that will mostly not count, and the moment to
 -- say so is before it happens rather than after.
 --
--- Silent when the user has turned off "send GPS coordinates". Warning about a
--- thing they have deliberately switched off is nagging, and a warning that
--- fires when it should not is a warning people learn to click past -- which
--- would cost us the times it is right.
+-- Always asked now. It used to stay silent when "send GPS coordinates" was
+-- off, on the grounds that warning about a deliberate choice is nagging --
+-- but that setting is gone, coordinates are always sent when the photo has
+-- them, and so a photo with none is unambiguously worth mentioning.
 function PanelCore.locationWarning(settings, photos)
   settings = settings or {}
 
-  if not settings.inat_upload_location then return nil end
   if not photos or #photos == 0 then return nil end
 
   -- The observation's details come from the first photo, so it is the first

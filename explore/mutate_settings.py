@@ -27,15 +27,9 @@ MUTATIONS = [
     ),
     (
         "Settings",
-        "location is stripped from the upload by default",
-        "  render_remove_location = false,",
-        "  render_remove_location = true,",
-    ),
-    (
-        "Settings",
-        "GPS is withheld from observations by default",
-        "  inat_upload_location = true,",
-        "  inat_upload_location = false,",
+        "geoprivacy defaults to private, so nothing is ever mappable",
+        "  inat_geoprivacy      = \"open\",",
+        "  inat_geoprivacy      = \"private\",",
     ),
     (
         "SettingsDialog",
@@ -49,11 +43,24 @@ MUTATIONS = [
         "  local value = props[key]\n  if value == nil then return end",
         "  local value = props[key]\n  if not value then return end",
     ),
+    # STALE, and left that way deliberately: this anchor has not matched since
+    # #18 renamed the heading to "Option 2: Paste an API token", so the
+    # mutation applies nothing and is reported as a survivor. It is not a gap
+    # in the export-preset work, and fixing it belongs with whoever next
+    # touches the Account tab -- but note the shape of the failure, because a
+    # mutation harness fails open: an anchor that stops matching stops testing
+    # the thing it names and still prints a line claiming to have tested it.
     (
         "SettingsDialog",
         "the OAuth password-grant form comes back into the Account tab",
         "      f:static_text { title = \"Option 2: Sign in with iNaturalist\", font = \"<system/bold>\" },",
         "      f:static_text { title = \"Option 2\", font = \"<system/bold>\" },\n      f:password_field { value = LrView.bind(\"app_secret\"), width = 380 },",
+    ),
+    (
+        "SettingsDialog",
+        "the preset rule is explained even when it excluded nobody",
+        "  return \"\"\nend",
+        "  return \"Note: Only Hard Drive presets are listed as other presets\"\n    .. \" cannot render a file for upload.\"\nend",
     ),
     (
         "SettingsDialog",

@@ -17,7 +17,7 @@ at once, and nothing it does can ship by accident.
 
 Plug-in Manager → Add → point it at `explore/probes/sdkprobe.lrplugin`.
 
-Its items appear under **File › Plug-in Extras**. Each writes its results to
+Its menu items appear under **File › Plug-in Extras**. Each writes its results to
 `inat-sdk-probe.txt` on the Desktop, appending, so several runs can be compared.
 
 ## iNat Probe: Catalog APIs
@@ -153,6 +153,63 @@ saw it. Whether a width-less row inside a scroller sizes to its text is still
 unknown — block D says a width-less row collapses outside one.
 
 
+## iNat Probe: Export Presets
+
+Whether the plugin can offer the user's own export presets instead of its
+hardcoded render settings — and whether a preset's **named watermark** survives
+into `LrExportSession`, which is the one claim the binaries cannot settle.
+
+Dumping the binaries answered everything else: `Export.lrmodule` names the
+folder (`templateType = "Export", templateDirectoryName = "Export Presets"`),
+`ui.dll` resolves it against `getStandardFilePath ... appData` and moves it
+beside the catalog when `AgTemplateBrowser_storePresetsWithCatalog` is on, and
+`LibraryToolkit.dll` loads an `.lrtemplate` with `loadstring` / `setfenv` /
+`ZSTR` / `pcall`. What is left is behaviour:
+
+| Step | Question |
+|---|---|
+| 0 | Can a plugin read an `.lrtemplate` at all? Everything else depends on it, so it is asked first — and asked of every strategy, not just the first one that works |
+| 1 | What `getStandardFilePath("appData")` returns, which of the two preset roots exist, and every file in them |
+| 2 | What each export preset parses to — `type`, `id`, title, `exportServiceProvider` — with failures verbatim |
+| 3 | The named watermark presets, and their GUID ids |
+| 4 | Renders of one selected photo, by byte size and duration |
+
+Run 1 measured **`setfenv` is nil inside a plugin sandbox**, which is how
+`LibraryToolkit.dll` loads these files and which killed every parse in steps 2
+and 3. So the probe now carries three readers and reports each one separately:
+
+| Strategy | How |
+|---|---|
+| `loadstring` + `setfenv` | What the host does. Known to fail; kept so the next run says so in its own words |
+| `loadstring` + globals | An `.lrtemplate` assigns to a global `s`, so no environment is needed — define `ZSTR` as a global, run the chunk, read `s`, and put both globals back |
+| patterns, no execution | A real little table-literal reader that runs no code. Handles nesting, because a watermark's `items` is a list of tables and a line-by-line match reads the inner keys as outer ones |
+
+Step 4 is still the point. Cases **(a)** no watermark, **(b)**
+`<simpleCopyrightWatermark>`, **(c)** a named watermark's GUID and **(d)** a
+GUID matching no preset hold the photo, the pixel dimensions and the JPEG
+quality constant, so a difference in bytes can only be the watermark. Case
+**(e)** is a whole user preset with the plugin's overrides applied; it changes
+everything at once by design and is reported separately, never compared.
+
+Run 1 returned **557475 bytes for (a), (b) and (d) alike** — so an unresolvable
+id silently skips rather than raising, and the built-in copyright watermark drew
+nothing. That has two very different explanations, and the plugin currently
+ships a checkbox for it, so case **(b2)** settles which: the probe reports the
+photo's copyright, and if it has none it writes one, renders again, and
+restores the original value. The write is disclosed in the output.
+
+The probe prints a conclusion rather than a column of numbers: whether (b) drew
+and whether (b2) explains it, whether (c) differs from (a) — the named watermark
+drew at all — whether it differs from (b) — it was *that* watermark and not the
+built-in one — and what (d) did with an unresolvable id.
+
+**Select one photo in the Library grid before running it.** Steps 0–3 work
+without a selection and say so; step 4 cannot. Case (e) is only worth much if
+you have saved at least one export preset of your own, since Lightroom's four
+shipped ones are not what the feature is for — two of them are not even file
+exports.
+
+## What they answered
 
 Measured against a 6,591 photo catalog on Lightroom Classic, Windows. The
 findings are written up properly in
