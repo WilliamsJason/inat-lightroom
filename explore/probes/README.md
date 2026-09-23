@@ -17,7 +17,7 @@ at once, and nothing it does can ship by accident.
 
 Plug-in Manager → Add → point it at `explore/probes/sdkprobe.lrplugin`.
 
-Its items appear under **File › Plug-in Extras**. Each writes its results to
+Its menu items appear under **File › Plug-in Extras**. Each writes its results to
 `inat-sdk-probe.txt` on the Desktop, appending, so several runs can be compared.
 
 ## iNat Probe: Catalog APIs
@@ -153,6 +153,43 @@ saw it. Whether a width-less row inside a scroller sizes to its text is still
 unknown — block D says a width-less row collapses outside one.
 
 
+## iNat Probe: Export Presets
+
+Whether the plugin can offer the user's own export presets instead of its
+hardcoded render settings — and whether a preset's **named watermark** survives
+into `LrExportSession`, which is the one claim the binaries cannot settle.
+
+Dumping the binaries answered everything else: `Export.lrmodule` names the
+folder (`templateType = "Export", templateDirectoryName = "Export Presets"`),
+`ui.dll` resolves it against `getStandardFilePath ... appData` and moves it
+beside the catalog when `AgTemplateBrowser_storePresetsWithCatalog` is on, and
+`LibraryToolkit.dll` loads an `.lrtemplate` with `loadstring` / `setfenv` /
+`ZSTR` / `pcall`. What is left is behaviour:
+
+| Step | Question |
+|---|---|
+| 0 | Are `loadstring` and `setfenv` reachable from inside a plugin's sandbox? Everything else depends on it, so it is asked first. |
+| 1 | What `getStandardFilePath("appData")` returns, which of the two preset roots exist, and every file in them |
+| 2 | What each export preset parses to — `type`, `id`, title, `exportServiceProvider` — with failures verbatim |
+| 3 | The named watermark presets, and their GUID ids |
+| 4 | Five renders of one selected photo, by byte size and duration |
+
+Step 4 is the point. Cases **(a)** no watermark, **(b)**
+`<simpleCopyrightWatermark>`, **(c)** a named watermark's GUID and **(d)** a
+GUID matching no preset hold the photo, the pixel dimensions and the JPEG
+quality constant, so a difference in bytes can only be the watermark. Case
+**(e)** is a whole user preset with the plugin's overrides applied; it changes
+everything at once by design and is reported separately, never compared.
+
+The probe prints a conclusion rather than five numbers: whether (c) differs
+from (a) — the named watermark drew at all — whether it differs from (b) — it
+was *that* watermark and not the built-in one — and what (d) did with an
+unresolvable id: raised, fell back, or silently skipped.
+
+**Select one photo in the Library grid before running it.** Steps 0–3 work
+without a selection and say so; step 4 cannot.
+
+## What they answered
 
 Measured against a 6,591 photo catalog on Lightroom Classic, Windows. The
 findings are written up properly in

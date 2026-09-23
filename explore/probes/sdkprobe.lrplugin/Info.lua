@@ -46,6 +46,11 @@ return {
       file  = "EditCommitProbeMenu.lua",
       id    = "inat_probe_edit_commit",
     },
+    {
+      title = "iNat Probe: Export Presets…",
+      file  = "ExportPresetProbeMenu.lua",
+      id    = "inat_probe_export_presets",
+    },
   },
 
   VERSION = { major = 0, minor = 0, revision = 1, display = "probe" },
