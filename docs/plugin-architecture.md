@@ -545,8 +545,15 @@ the field was given — in the same way `suggestionTaxonId`, `suggestionRank` an
 `PanelCore.guessToSend` picks between them at send time: the stored bare name
 only while the field still holds the offered string, and otherwise the field
 verbatim. So editing the box overrules the suggestion, which is what editing it
-means; and a field that has not been committed yet cannot make it send anything
-other than what the user last chose.
+means.
+
+That rule needs the field to have committed an edit by the time a button is
+pressed, and it does: an `immediate = false` `edit_field` has written its bound
+property before any click handler in the dialog runs, measured in
+[lightroom-sdk-notes.md](lightroom-sdk-notes.md#an-immediate--false-edit_field-has-committed-before-a-click-handler-runs)
+with `explore/probes/sdkprobe.lrplugin/EditCommitProbeMenu.lua`, including for
+a `static_text` `mouse_down`, which is not a focusable control and was the
+shape most likely to read stale.
 
 The three are written together in `chooseSuggestion` and cleared together in
 `clearChosenName`, which `clearSuggestions` calls. That matters most when the
@@ -562,10 +569,6 @@ Two deliberate asymmetries:
   there would defeat the same name matching on every later upload.
 - `confidenceWarning` is passed what the **field** shows. It is a sentence
   somebody has to decide on, not something transmitted.
-
-`explore/probes/sdkprobe.lrplugin/EditCommitProbeMenu.lua` measures the one
-thing this rests on that the documentation only asserts: when a non-immediate
-`edit_field` commits its binding.
 
 ### Arguing before a weak species claim
 

@@ -528,6 +528,12 @@ function ObservationPanel.contents(f, props, actions)
       f:edit_field {
         value           = LrView.bind("speciesGuess"),
         fill_horizontal = 1,
+        -- Per-keystroke writes buy nothing here and the field is committed in
+        -- time regardless: a probe measured this binding already written before
+        -- any click handler in the dialog runs -- a push_button action, a
+        -- static_text mouse_down, or work deferred onto a task. That is what
+        -- lets PanelCore.guessToSend tell an edited guess from an untouched one
+        -- at the moment a button is pressed. See docs/lightroom-sdk-notes.md.
         immediate       = false,
         enabled         = LrView.bind("hasPhoto"),
         placeholder_string = "What is it?",

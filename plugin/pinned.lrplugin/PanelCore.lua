@@ -796,6 +796,10 @@ end
 -- edited away from would be the plugin overruling them silently -- which is
 -- worse than the display format ever was.
 --
+-- Which needs the field to have committed that edit by now, and it has: an
+-- `immediate = false` edit_field was measured writing its binding before any
+-- click handler in the dialog runs (docs/lightroom-sdk-notes.md).
+--
 -- @param typed       What the species guess field currently holds.
 -- @param offered     The exact string a chosen suggestion wrote into it.
 -- @param scientific  That suggestion's bare name, or nil when none is chosen.

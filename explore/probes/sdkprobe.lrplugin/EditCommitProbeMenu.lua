@@ -12,7 +12,7 @@
   The documentation says a field with `immediate = false` writes its binding on
   Enter, Tab or losing focus rather than per keystroke. What it does not say is
   whether clicking a push_button in the same dialog counts as losing focus, and
-  that is the case the panel lives on. The plugin has behaved as if it does
+  that is the case the panel lives on. The plugin had behaved as if it does
   since long before this probe -- a hand-typed guess reaches iNaturalist -- but
   that is inference from a feature working, not a measurement.
 
@@ -20,6 +20,13 @@
   first, and read back what the properties held at the moment the click was
   handled. The immediate field sits beside it as a control -- it should never
   lag, and if it does the answer is about this probe rather than the binding.
+
+  Run in Lightroom Classic, and the answer is that the field has already
+  committed in all three shapes: the observer fires before every handler logs,
+  and each read shows text typed just before that click rather than a leftover.
+  The static_text mouse_down -- not a focusable control, and so the one that
+  might have read stale where a button did not -- committed the field too. Kept
+  as the evidence behind the note in docs/lightroom-sdk-notes.md.
 --]]
 
 local LrBinding         = import "LrBinding"
