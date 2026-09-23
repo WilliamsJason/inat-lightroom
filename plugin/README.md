@@ -404,6 +404,11 @@ sharpening, watermark and metadata options. The plugin still forces the things
 that make the upload work at all: the destination folder, JPEG, no re-import,
 no post-processing action, and flat keywords.
 
+A preset that strips metadata is safe. Even one set to Copyright Only, or with
+**Remove Location Info** ticked, leaves the observation itself mapped and
+dated: the plugin sends the location and the capture time to iNaturalist as
+observation fields read from the catalog, never out of the uploaded JPEG.
+
 Two things to know about the popup:
 
 - Only presets whose **Export To** is **Hard Drive** can be used. A preset

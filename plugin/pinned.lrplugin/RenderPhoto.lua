@@ -266,6 +266,18 @@ function RenderPhoto.settingsFor(options)
     -- place, and a plugin that honoured the resolution but overrode the
     -- metadata would be the worst of both.
     --
+    -- Safe because nothing iNaturalist needs is read out of this file. The
+    -- observation's location and time travel as API parameters read from the
+    -- catalog -- UploadCore.observationParamsFor takes observed_on_string
+    -- from photo:getRawMetadata("dateTimeOriginal") and latitude/longitude
+    -- from UploadCore.locationOf, which reads the "gps" raw field -- and the
+    -- vision request does the same (PanelCore passes locationOf's result to
+    -- InatAPI:scoreImage). So a preset set to Copyright Only, or one with
+    -- Remove Location Info ticked, renders a JPEG with no GPS and no capture
+    -- date and the observation still lands mapped and dated. That is the same
+    -- guarantee the plugin's own "Remove location info" checkbox has always
+    -- made in its description: it strips GPS from the JPEG only.
+    --
     -- size_resizeType travels with the size values and is never reinterpreted
     -- without them. A preset carries maxWidth and maxHeight whatever its mode,
     -- and in "longEdge" mode Lightroom reads maxHeight -- so a preset holding

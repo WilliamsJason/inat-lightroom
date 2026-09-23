@@ -49,6 +49,13 @@ MUTATIONS = [
         "  local value = props[key]\n  if value == nil then return end",
         "  local value = props[key]\n  if not value then return end",
     ),
+    # STALE, and left that way deliberately: this anchor has not matched since
+    # #18 renamed the heading to "Option 2: Paste an API token", so the
+    # mutation applies nothing and is reported as a survivor. It is not a gap
+    # in the export-preset work, and fixing it belongs with whoever next
+    # touches the Account tab -- but note the shape of the failure, because a
+    # mutation harness fails open: an anchor that stops matching stops testing
+    # the thing it names and still prints a line claiming to have tested it.
     (
         "SettingsDialog",
         "the OAuth password-grant form comes back into the Account tab",

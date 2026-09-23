@@ -149,6 +149,29 @@ def test_gps_is_uploaded_when_the_setting_is_on(plugin, upload):
     assert params["longitude"] == -0.1
 
 
+def test_location_and_time_come_from_the_catalog_not_the_rendered_file(
+    plugin, upload
+):
+    """The invariant that makes it safe for a user's export preset to own the
+    metadata options. A preset set to Copyright Only, or with Remove Location
+    Info ticked, renders a JPEG with no GPS and no capture date -- and the
+    observation must still land mapped and dated, because the plugin reads
+    both off the photo and sends them as parameters. If this ever stops being
+    true, the settings dialog has to start warning about such presets: the
+    failure is silent, the upload succeeds, and the observation quietly cannot
+    reach research grade."""
+    photo = plugin.new_photo(
+        raw={"gps": {"latitude": 51.5, "longitude": -0.1},
+             "dateTimeOriginal": 0},
+    )
+
+    params = upload["observationParamsFor"](settings(plugin), photo)
+
+    assert params["latitude"] == 51.5
+    assert params["longitude"] == -0.1
+    assert params["observed_on_string"] is not None
+
+
 def test_gps_is_withheld_when_the_setting_is_off(plugin, upload):
     """Uploading someone's location against their setting is not recoverable."""
     photo = plugin.new_photo(raw={"gps": {"latitude": 51.5, "longitude": -0.1}})
