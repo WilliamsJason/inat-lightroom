@@ -850,9 +850,46 @@ function ObservationPanel.uploadOrUpdate(props)
   local taxonId  = props.suggestionTaxonId
   local accuracy = props.accuracy
 
+  -- Both of these come before the confidence and location gates below, and
+  -- before anything is rendered. They ask whether this is the right operation
+  -- on the right photos at all; the two below ask about the content of an
+  -- operation already agreed to. Taking somebody's answer on the species and
+  -- only then telling them their selection was wrong wastes the answer they
+  -- just gave, and a refusal that arrives after twenty raw files have been
+  -- rendered wastes the whole wait as well.
+  --
+  -- Both decide for themselves whether they apply to this job, reading the
+  -- same signal the branch below reads -- whether photos[1] already carries an
+  -- inat_observation_id -- so neither needs that branch to have happened yet,
+  -- and neither can speak about uploading during an update.
+  local overLimit = PanelCore.tooManyPhotos(photos)
+  if overLimit then
+    LrDialogs.message("Pinned Upload", overLimit, "critical")
+    props.suggestionStatus = ""
+    return
+  end
+
+  -- A separate dialog rather than one merged with the gates below, deliberately.
+  -- They are three different questions, and a single OK answering all of them
+  -- is an OK that means nothing. Asked first, cancelling here costs one dialog
+  -- rather than three.
+  local merging = PanelCore.multiPhotoWarning(photos)
+  if merging then
+    local answer = LrDialogs.confirm(
+      "Upload " .. #photos .. " photos as one observation?", merging,
+      "Upload", "Cancel")
+    if answer ~= "ok" then
+      props.suggestionStatus = ""
+      return
+    end
+  end
+
   -- What the field says and what iNaturalist is told part company here, and
   -- only here. The field is the display form; this is the name a taxon lookup
   -- can match.
+  --
+  -- Computed after the gates above rather than before them, so a selection
+  -- that is refused never pays for it.
   local wireGuess = PanelCore.guessToSend(
     guess, props.suggestionOfferedName, props.suggestionScientificName)
 

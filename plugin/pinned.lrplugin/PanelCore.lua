@@ -273,6 +273,108 @@ function PanelCore.confidenceWarning(row)
     score, name)
 end
 
+--------------------------------------------------------------------------------
+-- How much of the selection is going up
+--------------------------------------------------------------------------------
+
+--- The most photos to put on one observation.
+--
+-- 20, read off iNaturalist's own mobile client: MAX_PHOTOS_ALLOWED in
+-- src/components/Camera/StandardCamera/StandardCamera.tsx and in
+-- src/components/Camera/CameraContainer.tsx of inaturalist/iNaturalistReactNative.
+--
+-- What that is worth, stated plainly, because it is weaker evidence than the
+-- other numbers in this file: it is a limit iNaturalist's *clients* enforce,
+-- not one the API was measured to reject. app/models/observation_photo.rb
+-- validates only the photo, the observation, uniqueness of photo_id per
+-- observation, and that the observer owns the photo;
+-- app/controllers/observation_photos_controller.rb#create -- the endpoint
+-- InatAPI:uploadPhoto posts to through /v1/observation_photos -- counts
+-- nothing. A 21st photo may well be accepted. Nobody here has tried it against
+-- the live API, and there is no sandbox to try it in cheaply.
+--
+-- So we stop where iNaturalist's own apps stop, rather than be the one client
+-- that quietly files observations no other client would let you make. If that
+-- number changes, or somebody measures a real rejection, this is the only line
+-- to edit.
+PanelCore.PHOTO_LIMIT = 20
+
+--- Whether this selection is too large to upload at all.
+--
+-- @return A message to show and refuse on, or nil when the selection fits.
+--
+-- A refusal rather than a warning, and the only one the upload has. Everything
+-- else in front of the upload is a judgement the photographer is entitled to
+-- overrule; this is a boundary, and "upload anyway" past it has no meaning --
+-- the whole selection goes into one observation, so there is nothing for an
+-- over-large upload to fall back to.
+--
+-- Callers must ask before rendering. Turning twenty-odd raw files into JPEGs
+-- and then refusing is the worst version of this: it costs the user the entire
+-- wait and tells them nothing they could not have been told immediately.
+function PanelCore.tooManyPhotos(photos)
+  local count = photos and #photos or 0
+  if count <= PanelCore.PHOTO_LIMIT then return nil end
+
+  -- Upload only. An update attaches no photos at all -- it posts an
+  -- identification to photos[1]'s observation -- so however many are selected,
+  -- nothing is being added to anything and there is no limit to be over.
+  if UploadCore.pluginField(photos[1], "inat_observation_id") then return nil end
+
+  return string.format(
+    "%d photos are selected, and an iNaturalist observation holds at most "
+    .. "%d.\n\nThe whole selection goes into one observation, so there is no "
+    .. "part of this that can go ahead. Select %d or fewer and upload again.",
+    count, PanelCore.PHOTO_LIMIT, PanelCore.PHOTO_LIMIT)
+end
+
+--- Whether an upload of several photos should be confirmed first.
+--
+-- @return A message to confirm, or nil when there is nothing worth asking.
+--
+-- Asked because of what the upload actually does, which is not what the button
+-- looks like it does: the whole selection becomes ONE observation carrying
+-- every photo, described by the first photo's date, location and caption. That
+-- is the point of the feature -- six frames of one damselfly are one sighting
+-- -- but it means a selection the user did not mean to have welds unrelated
+-- photos onto a single public record. Lightroom makes that easy to do by
+-- accident, because a filmstrip can carry a selection the photographer has
+-- stopped looking at.
+--
+-- So the message has to say "one observation carrying N photos" rather than
+-- "upload N photos". The second sentence describes an operation nobody would
+-- object to, and would not warn about the thing that goes wrong.
+--
+-- Silent for a single photo. That is the common case, and a click in front of
+-- it would be a regression paid for by everyone to protect a mistake nobody
+-- was making.
+--
+-- Plural throughout, with no "photo(s)" hedge. The unlink confirmation hedges
+-- because its count really can be one; this one cannot reach here below two,
+-- so the parenthetical would be a wart carried over without its reason.
+--
+-- @param photos  The selection, in order. photos[1] decides which job this is.
+function PanelCore.multiPhotoWarning(photos)
+  if not photos or #photos < 2 then return nil end
+
+  -- Upload only, and this is the answer to "why does update not ask when
+  -- upload does". An update posts one identification to photos[1]'s
+  -- observation and attaches no photos to anything, so the rest of the
+  -- selection receives only catalog metadata -- a species guess and a sync,
+  -- both local, both reversible, both visible in Lightroom. Over-selecting
+  -- here creates nothing public, so a dialog would be noise, and noise is what
+  -- teaches people to click past the warnings that are not.
+  if UploadCore.pluginField(photos[1], "inat_observation_id") then return nil end
+
+  return string.format(
+    "This creates one iNaturalist observation carrying all %d photos -- not "
+    .. "%d separate observations.\n\nIts date, location and description come "
+    .. "from the first photo, so this is right when the photos are of the same "
+    .. "individual, and wrong when they are not.\n\nIf you did not mean to "
+    .. "have %d photos selected, cancel and select just the ones you want.",
+    #photos, #photos, #photos)
+end
+
 --- What a chosen and an unchosen suggestion row are prefixed with.
 --
 -- A hand-built row has no selection highlight of its own -- that came free with

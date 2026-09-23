@@ -1432,6 +1432,127 @@ def test_the_warning_says_what_to_do_instead(core):
 
 
 # ---------------------------------------------------------------------------
+# Asking before the selection is merged into one observation
+# ---------------------------------------------------------------------------
+
+
+def selection(plugin, count, linked=False):
+    """A target selection of `count` photos, optionally already uploaded."""
+    first = plugin.new_photo(inat_observation_id="4242") if linked \
+        else plugin.new_photo()
+    photos = [first] + [plugin.new_photo() for _ in range(count - 1)]
+    return plugin.runtime.table_from(
+        {i + 1: photo for i, photo in enumerate(photos)})
+
+
+def test_uploading_one_photo_asks_nothing(plugin, core):
+    """The common case, and it has to stay one click. A dialog in front of
+    every single-photo upload would be a regression paid for by everybody to
+    protect a mistake nobody was making."""
+    assert core["multiPhotoWarning"](selection(plugin, 1)) is None
+
+
+def test_uploading_nothing_asks_nothing(plugin, core):
+    assert core["multiPhotoWarning"](plugin.runtime.table_from({})) is None
+    assert core["multiPhotoWarning"](None) is None
+
+
+def test_uploading_several_photos_is_confirmed(plugin, core):
+    warning = core["multiPhotoWarning"](selection(plugin, 5))
+
+    assert warning is not None
+    assert "5" in warning, "the user has to be told how many they have"
+
+
+def test_the_confirmation_says_the_photos_become_one_observation(plugin, core):
+    """The whole point. A message that only said "upload 5 photos?" would
+    describe something the plugin does not do, and would read as reassurance to
+    somebody who believes they are filing five separate records."""
+    warning = core["multiPhotoWarning"](selection(plugin, 5))
+
+    assert "one iNaturalist observation" in warning
+    assert "not 5 separate observations" in warning
+
+
+def test_the_confirmation_does_not_hedge_the_plural(plugin, core):
+    """The unlink confirmation says "photo(s)" because its count really can be
+    one. This dialog cannot appear below two, so the hedge would be a wart
+    carried over without its reason -- and it reads like software talking."""
+    warning = core["multiPhotoWarning"](selection(plugin, 5))
+
+    assert "photo(s)" not in warning
+    assert "5 photos" in warning
+
+
+def test_the_confirmation_says_where_the_details_come_from(plugin, core):
+    """The observation is described by photos[1] alone, so an accidental first
+    photo decides the date and place of the whole record."""
+    warning = core["multiPhotoWarning"](selection(plugin, 3))
+
+    assert "first photo" in warning
+
+
+def test_the_count_is_the_whole_selection(plugin, core):
+    """A count taken from anywhere but the selection would be the one number
+    the dialog exists to report, reported wrongly."""
+    assert "7" in core["multiPhotoWarning"](selection(plugin, 7))
+
+
+def test_updating_several_photos_asks_nothing(plugin, core):
+    """Not the same risk, so not the same dialog. updateSpeciesGuess and
+    updateAccuracy both act on photos[1]'s observation whatever else is
+    selected; the rest of the selection only gets catalog metadata, which is
+    local and reversible. Nothing public is created by over-selecting here, and
+    a warning that fires when it should not is one people learn to click past."""
+    assert core["multiPhotoWarning"](selection(plugin, 5, linked=True)) is None
+
+
+# ---------------------------------------------------------------------------
+# Refusing a selection too large for one observation
+# ---------------------------------------------------------------------------
+
+
+def test_a_selection_at_the_limit_is_allowed(plugin, core):
+    """The boundary itself is fine. Off by one here would refuse a legitimate
+    upload and there would be no way to tell from the message."""
+    limit = int(core["PHOTO_LIMIT"])
+
+    assert core["tooManyPhotos"](selection(plugin, limit)) is None
+
+
+def test_a_selection_over_the_limit_is_refused(plugin, core):
+    limit = int(core["PHOTO_LIMIT"])
+
+    message = core["tooManyPhotos"](selection(plugin, limit + 1))
+
+    assert message is not None
+    assert str(limit + 1) in message, "say how many are selected"
+    assert str(limit) in message, "say what the limit is"
+
+
+def test_the_refusal_says_to_select_fewer(plugin, core):
+    """It is a refusal, not a warning: there is no Upload Anyway. So it has to
+    name the way out, or it is a dead end."""
+    message = core["tooManyPhotos"](selection(plugin, int(core["PHOTO_LIMIT"]) + 1))
+
+    assert "fewer" in message
+
+
+def test_an_update_of_many_photos_is_not_refused(plugin, core):
+    """An update attaches no photos to anything -- it posts one identification
+    to photos[1]'s observation -- so there is no limit to be over, and refusing
+    would block an operation that is harmless."""
+    limit = int(core["PHOTO_LIMIT"])
+
+    assert core["tooManyPhotos"](selection(plugin, limit + 5, linked=True)) is None
+
+
+def test_nothing_selected_is_not_refused(plugin, core):
+    assert core["tooManyPhotos"](plugin.runtime.table_from({})) is None
+    assert core["tooManyPhotos"](None) is None
+
+
+# ---------------------------------------------------------------------------
 # Filing a name without publishing it
 # ---------------------------------------------------------------------------
 

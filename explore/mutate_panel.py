@@ -635,6 +635,76 @@ MUTATIONS = [
         "  local doubt = UploadCore.pluginField(photos[1], \"inat_observation_id\") and nil or PanelCore.confidenceWarning({",
     ),
 
+    # --- merging a selection into one observation ----------------------------
+    (
+        "PanelCore",
+        "confirms on a single photo",
+        "  if not photos or #photos < 2 then return nil end",
+        "  if not photos or #photos < 1 then return nil end",
+    ),
+    (
+        "PanelCore",
+        "several photos are merged without anybody being asked",
+        "  if not photos or #photos < 2 then return nil end",
+        "  if true then return nil end",
+    ),
+    (
+        "PanelCore",
+        "an update is interrogated as if it were an upload",
+        '  if UploadCore.pluginField(photos[1], "inat_observation_id") then return nil end\n\n  return string.format(\n    "This creates one iNaturalist observation',
+        '  if false then return nil end\n\n  return string.format(\n    "This creates one iNaturalist observation',
+    ),
+    (
+        "PanelCore",
+        "the confirmation counts only the first photo",
+        '    .. "have %d photos selected, cancel and select just the ones you want.",\n    #photos, #photos, #photos)',
+        '    .. "have %d photos selected, cancel and select just the ones you want.",\n    1, 1, 1)',
+    ),
+    (
+        "PanelCore",
+        "the dialog describes one observation per photo, which is not what happens",
+        '    "This creates one iNaturalist observation carrying all %d photos -- not "\n    .. "%d separate observations.\\n\\nIts date, location and description come "',
+        '    "This uploads %d photos, creating %d observations.\\n\\nIts date, location and description come "',
+    ),
+    (
+        "ObservationPanel",
+        "uploads anyway when the user cancels",
+        '      "Upload", "Cancel")\n    if answer ~= "ok" then',
+        '      "Upload", "Cancel")\n    if false then',
+    ),
+    (
+        "ObservationPanel",
+        "the selection is questioned only after the species has been",
+        "  local merging = PanelCore.multiPhotoWarning(photos)",
+        "  local merging = nil",
+    ),
+
+    # --- a selection too large for one observation ---------------------------
+    (
+        "PanelCore",
+        "the limit is off by one, so a legal selection is refused",
+        "  if count <= PanelCore.PHOTO_LIMIT then return nil end",
+        "  if count < PanelCore.PHOTO_LIMIT then return nil end",
+    ),
+    (
+        "PanelCore",
+        "there is no limit, so an over-large upload is attempted anyway",
+        "  local count = photos and #photos or 0\n  if count <= PanelCore.PHOTO_LIMIT then return nil end",
+        "  local count = photos and #photos or 0\n  if true then return nil end",
+    ),
+    (
+        "PanelCore",
+        "the refusal reports the limit where the selected count should be",
+        "    count, PanelCore.PHOTO_LIMIT, PanelCore.PHOTO_LIMIT)",
+        "    PanelCore.PHOTO_LIMIT, PanelCore.PHOTO_LIMIT, PanelCore.PHOTO_LIMIT)",
+    ),
+    (
+        "ObservationPanel",
+        "renders everything first and then refuses",
+        "  local overLimit = PanelCore.tooManyPhotos(photos)",
+        "  local overLimit = nil",
+    ),
+
     # --- filing a name without publishing it ----------------------------------
     (
         "PanelCore",
