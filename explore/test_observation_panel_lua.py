@@ -968,6 +968,180 @@ def test_uploading_a_located_photo_asks_nothing(plugin, panel):
     assert reached["count"] == 1
 
 
+# ---------------------------------------------------------------------------
+# Asking before a selection is merged into one observation
+# ---------------------------------------------------------------------------
+
+
+def located(plugin, count, linked=False):
+    """`count` photos that all have coordinates, so only the selection is
+    under test and the location warning stays out of the way.
+
+    The harness has one confirm answer for every dialog, so a second gate
+    firing would be answered by the same stub and the assertion would no
+    longer be about the gate it names.
+    """
+    photos = []
+    for i in range(count):
+        fields = {"inat_observation_id": "4242"} if linked and i == 0 else {}
+        photos.append(plugin.new_photo(
+            raw={"gps": {"latitude": 51.5, "longitude": -0.1}}, **fields))
+    return photos
+
+
+def test_uploading_several_photos_asks_first_and_cancelling_creates_nothing(
+        plugin, panel):
+    """The test this whole feature exists for. A confirmation that is shown but
+    whose answer is ignored is worse than no confirmation at all: it takes the
+    user's "no", says nothing, and files the observation anyway.
+
+    reached["count"] is PanelCore.upload, which is where rendering, the temp
+    folder and createObservation all live. Zero means nothing was rendered and
+    nothing reached iNaturalist."""
+    reached = stub_upload_path(plugin)
+    plugin.set_target_photos(located(plugin, 5))
+    # The harness answers Cancel unless told otherwise.
+
+    plugin.call(panel.uploadOrUpdate, plugin.runtime.table_from({}))
+    plugin.run_pending_tasks()
+
+    assert reached["count"] == 0, "answering no must create nothing"
+
+
+def test_confirming_the_merge_uploads(plugin, panel):
+    """It is a confirmation, not a veto. Several frames of one animal in one
+    observation is the feature, not the accident."""
+    reached = stub_upload_path(plugin)
+    plugin.set_target_photos(located(plugin, 5))
+    plugin.set_confirm_answer("ok")
+
+    plugin.call(panel.uploadOrUpdate, plugin.runtime.table_from({}))
+    plugin.run_pending_tasks()
+
+    assert reached["count"] == 1
+
+
+def test_uploading_a_single_photo_is_not_interrupted(plugin, panel):
+    """The common path, and it has to stay one click. Left on Cancel: if a
+    dialog had been shown, the upload would not have happened."""
+    reached = stub_upload_path(plugin)
+    plugin.set_target_photos(located(plugin, 1))
+
+    plugin.call(panel.uploadOrUpdate, plugin.runtime.table_from({}))
+    plugin.run_pending_tasks()
+
+    assert reached["count"] == 1
+    assert plugin.dialogs == [], "one photo must be asked nothing"
+
+
+def test_the_merge_confirmation_says_how_many_and_what_happens(plugin, panel):
+    """"Upload 5 photos?" would describe something the plugin does not do, and
+    would reassure somebody who thinks they are filing five records."""
+    stub_upload_path(plugin)
+    plugin.set_target_photos(located(plugin, 5))
+
+    plugin.call(panel.uploadOrUpdate, plugin.runtime.table_from({}))
+    plugin.run_pending_tasks()
+
+    shown = plugin.dialogs[-1]
+    assert "5" in shown["title"]
+    assert "one iNaturalist observation" in shown["message"]
+    assert "not 5 separate observations" in shown["message"]
+
+
+def test_the_selection_is_questioned_before_the_species_is(plugin, panel):
+    """Scope before content. Taking somebody's answer on a weak species claim
+    and only then telling them the selection was wrong wastes the answer they
+    just gave; this way cancelling costs one dialog rather than two."""
+    stub_upload_path(plugin)
+    plugin.set_target_photos(located(plugin, 5))
+
+    plugin.call(panel.uploadOrUpdate, choose_weak_species(plugin))
+    plugin.run_pending_tasks()
+
+    assert len(plugin.dialogs) == 1
+    assert "one iNaturalist observation" in plugin.dialogs[0]["message"]
+
+
+def test_updating_several_photos_asks_nothing(plugin, panel):
+    """Not the same risk. The update posts one identification to photos[1]'s
+    observation whatever else is selected; the rest of the selection only gets
+    catalog metadata, which is local and reversible. Left on Cancel, so a
+    dialog here would stop the update and fail this."""
+    reached = stub_upload_path(plugin)
+    plugin.set_target_photos(located(plugin, 5, linked=True))
+
+    plugin.call(panel.uploadOrUpdate, plugin.runtime.table_from({}))
+    plugin.run_pending_tasks()
+
+    assert reached["updates"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Refusing a selection too large for one observation
+# ---------------------------------------------------------------------------
+
+
+def photo_limit(plugin):
+    return int(plugin.require("PanelCore")["PHOTO_LIMIT"])
+
+
+def test_too_many_photos_is_refused_before_anything_is_rendered(plugin, panel):
+    """Rendering twenty-odd raw files and then refusing is the worst version of
+    this: it costs the entire wait and says nothing that could not have been
+    said immediately. reached["count"] is the render, so zero is the proof."""
+    reached = stub_upload_path(plugin)
+    plugin.set_target_photos(located(plugin, photo_limit(plugin) + 1))
+    plugin.set_confirm_answer("ok")
+
+    plugin.call(panel.uploadOrUpdate, plugin.runtime.table_from({}))
+    plugin.run_pending_tasks()
+
+    assert reached["count"] == 0, "nothing may be rendered or created"
+
+
+def test_the_refusal_is_not_a_question(plugin, panel):
+    """There is no Upload Anyway, because there is nothing for an over-large
+    upload to fall back to -- the whole selection goes into one observation."""
+    stub_upload_path(plugin)
+    limit = photo_limit(plugin)
+    plugin.set_target_photos(located(plugin, limit + 1))
+    plugin.set_confirm_answer("ok")
+
+    plugin.call(panel.uploadOrUpdate, plugin.runtime.table_from({}))
+    plugin.run_pending_tasks()
+
+    shown = plugin.dialogs[-1]
+    assert shown["style"] == "critical"
+    assert str(limit + 1) in shown["message"]
+    assert str(limit) in shown["message"]
+
+
+def test_a_selection_at_the_limit_still_uploads(plugin, panel):
+    """Off by one here would refuse a legitimate upload, and the message would
+    give the user no way of telling that was what had happened."""
+    reached = stub_upload_path(plugin)
+    plugin.set_target_photos(located(plugin, photo_limit(plugin)))
+    plugin.set_confirm_answer("ok")
+
+    plugin.call(panel.uploadOrUpdate, plugin.runtime.table_from({}))
+    plugin.run_pending_tasks()
+
+    assert reached["count"] == 1
+
+
+def test_updating_more_than_the_limit_is_not_refused(plugin, panel):
+    """An update attaches no photos to anything, so there is no limit to be
+    over and refusing would block something harmless."""
+    reached = stub_upload_path(plugin)
+    plugin.set_target_photos(located(plugin, photo_limit(plugin) + 5, linked=True))
+
+    plugin.call(panel.uploadOrUpdate, plugin.runtime.table_from({}))
+    plugin.run_pending_tasks()
+
+    assert reached["updates"] == 1
+
+
 def test_updating_an_existing_observation_asks_nothing(plugin, panel):
     """The update sends an identification, not coordinates, so warning about a
     location it could not set either way is a dialog with no answer behind it."""

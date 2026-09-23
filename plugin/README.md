@@ -156,6 +156,26 @@ selection into a **single observation** with several photos, which is what
 selecting several frames of one animal usually means. Date, location and
 description come from the first photo.
 
+Because that merge is easy to miss — Lightroom will happily keep a selection you
+have stopped looking at — **uploading more than one photo asks first**, and the
+dialog says plainly that the photos are about to become one observation rather
+than one observation each. A single photo is never questioned; that is the
+common case and it stays one click.
+
+More than **20** photos is refused outright rather than questioned, because
+there is no partial version of this upload to fall back on. That number is where
+iNaturalist's own apps stop (`MAX_PHOTOS_ALLOWED` in their mobile client). It is
+worth knowing that the API itself validates no such count — a 21st photo might
+well be accepted — so this is the plugin keeping step with every other iNat
+client rather than a server limit being reported. The refusal happens before
+anything is rendered, so it costs no time.
+
+Updating is not questioned however many photos are selected, and that asymmetry
+is deliberate: an update posts one identification to the first photo's
+observation whatever else is highlighted, and everything the rest of the
+selection receives is Lightroom-side and reversible. Over-selecting there
+publishes nothing.
+
 Suggestions cost nothing extra once a photo is linked: iNaturalist can score an
 observation it already holds, and scoring its own photos is a better question
 than scoring a fresh JPEG. Only a photo that has never been uploaded needs
