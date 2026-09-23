@@ -300,6 +300,21 @@ function ObservationPanel.watch(props, isOpen)
   end
 end
 
+--- Forget which name the field was given, without touching the field.
+--
+-- The two are cleared together and never apart. They exist only to answer "is
+-- the text in the box still ours?", and half an answer is worse than none: a
+-- scientific name that outlives the row it came from would be sent for a photo
+-- whose suggestions were never even asked for.
+--
+-- The field itself is deliberately left alone. It belongs to the person typing
+-- in it (PanelCore.PANEL_OWNED), and emptying it because the suggestion list
+-- went away would throw away a guess they are halfway through.
+function ObservationPanel.clearChosenName(props)
+  props.suggestionOfferedName    = nil
+  props.suggestionScientificName = nil
+end
+
 --- Empty the suggestion list and everything derived from it.
 --
 -- One function because the rows, the chosen row, and what the buttons below do
@@ -313,6 +328,7 @@ function ObservationPanel.clearSuggestions(props)
   props.suggestionScore    = nil
   props.hasSuggestion      = false
 
+  ObservationPanel.clearChosenName(props)
   ObservationPanel.applySuggestionSlots(props, {}, nil)
 end
 
@@ -512,6 +528,12 @@ function ObservationPanel.contents(f, props, actions)
       f:edit_field {
         value           = LrView.bind("speciesGuess"),
         fill_horizontal = 1,
+        -- Per-keystroke writes buy nothing here and the field is committed in
+        -- time regardless: a probe measured this binding already written before
+        -- any click handler in the dialog runs -- a push_button action, a
+        -- static_text mouse_down, or work deferred onto a task. That is what
+        -- lets PanelCore.guessToSend tell an edited guess from an untouched one
+        -- at the moment a button is pressed. See docs/lightroom-sdk-notes.md.
         immediate       = false,
         enabled         = LrView.bind("hasPhoto"),
         placeholder_string = "What is it?",
@@ -640,6 +662,7 @@ function ObservationPanel.loadSuggestions(props)
   props.suggestionRank     = nil
   props.suggestionScore    = nil
   props.hasSuggestion      = false
+  ObservationPanel.clearChosenName(props)
 
   if #rows == 0 then
     props.suggestionStatus = "iNaturalist had no suggestions for this photo."
@@ -651,8 +674,21 @@ end
 
 --- Copy a chosen suggestion into the species guess.
 --
--- The scientific name goes into the field, not the common name: it is
--- unambiguous, and it is what gets uploaded when there is no taxon to point at.
+-- Two names come off the row, because what the field shows and what
+-- iNaturalist is told are not the same string and should not be forced to be.
+--
+-- The field gets "Common name (Scientific name)", the way the row presents it.
+-- It is the only selectable control in the panel -- static text cannot be
+-- selected, and there is no read-only control that can (see Clipboard.lua) --
+-- so it is also the only place a name can be copied from for a caption, and a
+-- user who wanted the common name had to retype it.
+--
+-- The bare name is kept beside it for the upload, because iNaturalist matches
+-- species_guess against taxon names to identify an observation that has no
+-- taxon, and a parenthetical matches nothing. PanelCore.guessToSend is where
+-- that evidence is written down, and it is what decides between the two at send
+-- time.
+--
 -- The taxon id is remembered separately, and it is the more important half --
 -- it is what turns the next button press into a real identification rather than
 -- free text iNaturalist will ignore.
@@ -667,11 +703,18 @@ function ObservationPanel.chooseSuggestion(props, selection)
     props.suggestionRank    = nil
     props.suggestionScore   = nil
     props.hasSuggestion     = false
+    ObservationPanel.clearChosenName(props)
     ObservationPanel.applySuggestionSlots(props, rows, nil)
     return nil
   end
 
-  props.speciesGuess      = row.name or row.common_name or ""
+  -- All three written together, and only here. The pair below is only
+  -- trustworthy as a pair: a scientific name left over from a row the field no
+  -- longer shows is a wrong identification waiting to be sent.
+  props.speciesGuess             = PanelCore.suggestionName(row)
+  props.suggestionOfferedName    = props.speciesGuess
+  props.suggestionScientificName = row.name or row.common_name or ""
+
   props.selectedSuggestion = index
   props.suggestionTaxonId = row.taxon_id
   props.hasSuggestion     = row.taxon_id ~= nil
@@ -760,10 +803,20 @@ function ObservationPanel.uploadOrUpdate(props)
   local taxonId  = props.suggestionTaxonId
   local accuracy = props.accuracy
 
+  -- What the field says and what iNaturalist is told part company here, and
+  -- only here. The field is the display form; this is the name a taxon lookup
+  -- can match.
+  local wireGuess = PanelCore.guessToSend(
+    guess, props.suggestionOfferedName, props.suggestionScientificName)
+
   -- Asked before the branch, because both jobs end with iNaturalist holding a
   -- species-level claim. The location warning below is upload-only for a real
   -- reason -- an update cannot add coordinates -- but a weak identification is
   -- just as wrong on an observation that already exists.
+  --
+  -- Named with the displayed form rather than the wire one: this is a sentence
+  -- somebody has to decide on, and the name they are looking at on screen is
+  -- the one it should be about.
   local doubt = PanelCore.confidenceWarning({
     rank           = props.suggestionRank,
     combined_score = props.suggestionScore,
@@ -794,7 +847,7 @@ function ObservationPanel.uploadOrUpdate(props)
       return
     end
 
-    local ok, err = PanelCore.updateSpeciesGuess(catalog, api, photos, guess, taxonId)
+    local ok, err = PanelCore.updateSpeciesGuess(catalog, api, photos, wireGuess, taxonId)
     if not ok then
       LrDialogs.message("Pinned", err or "Could not update the observation.", "critical")
       props.suggestionStatus = ""
@@ -860,7 +913,7 @@ function ObservationPanel.uploadOrUpdate(props)
   -- identification needs an observation to attach to, and there was not one
   -- until a moment ago. So it is posted now, as a second step.
   if taxonId then
-    local ok, err = PanelCore.updateSpeciesGuess(catalog, api, photos, guess, taxonId)
+    local ok, err = PanelCore.updateSpeciesGuess(catalog, api, photos, wireGuess, taxonId)
     if not ok then
       errors[#errors + 1] = err
     end

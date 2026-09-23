@@ -212,9 +212,40 @@ MUTATIONS = [
     ),
     (
         "ObservationPanel",
-        "choosing a suggestion fills in the common name, which is ambiguous",
-        "  props.speciesGuess      = row.name or row.common_name or \"\"",
-        "  props.speciesGuess      = row.common_name or row.name or \"\"",
+        "choosing a suggestion fills in the bare name, which cannot be copied "
+        "into a caption",
+        "  props.speciesGuess             = PanelCore.suggestionName(row)",
+        "  props.speciesGuess             = row.name or row.common_name or \"\"",
+    ),
+    (
+        "ObservationPanel",
+        "the display form is sent to iNaturalist, where it matches no taxon",
+        "  local wireGuess = PanelCore.guessToSend(\n    guess, props.suggestionOfferedName, props.suggestionScientificName)",
+        "  local wireGuess = guess",
+    ),
+    (
+        "ObservationPanel",
+        "a name the user typed over is ignored in favour of the stored one",
+        "  local wireGuess = PanelCore.guessToSend(\n    guess, props.suggestionOfferedName, props.suggestionScientificName)",
+        "  local wireGuess = props.suggestionScientificName or guess",
+    ),
+    (
+        "ObservationPanel",
+        "a scientific name outlives the suggestions it came from",
+        "  ObservationPanel.clearChosenName(props)\n  ObservationPanel.applySuggestionSlots(props, {}, nil)",
+        "  ObservationPanel.applySuggestionSlots(props, {}, nil)",
+    ),
+    (
+        "PanelCore",
+        "the stored name is preferred even when the row carried none",
+        "  if scientific and scientific ~= \"\" and typed == offered then",
+        "  if typed == offered then",
+    ),
+    (
+        "PanelCore",
+        "the row and the field drift apart about what a taxon is called",
+        "  local name = PanelCore.suggestionName(row)",
+        "  local name = row.name or row.common_name or \"Unnamed taxon\"",
     ),
     (
         "ObservationPanel",

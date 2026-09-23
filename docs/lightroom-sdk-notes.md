@@ -580,6 +580,52 @@ it the text looks like every other label and nobody will try clicking it.
 This is read from the binary, not from a documented API. It has not been proven
 against a Lightroom that dislikes it.
 
+## An `immediate = false` `edit_field` has committed before a click handler runs
+
+The documentation says a field with `immediate = false` writes its bound
+property on Enter, Tab or losing focus rather than per keystroke. It does not
+say whether clicking something else in the same dialog counts, and that is the
+only case a panel with buttons actually depends on.
+
+Measured by `explore/probes/sdkprobe.lrplugin/EditCommitProbeMenu.lua`: type
+into the field, then click without pressing Enter or Tab first, and log what
+the property held at the moment the handler ran. An observer sits beside the
+reads, because "committed on focus loss" and "committed just after the click"
+look identical from a read alone and are not the same thing.
+
+```
+observer fired               deferred="typing here"  observed=1
+push_button action           deferred="typing here"  observed=1
+observer fired               deferred="bbb"          observed=2
+static_text mouse_down       deferred="bbb"          observed=2
+observer fired               deferred="ccc"          observed=3
+inside startAsyncTask        deferred="ccc"          observed=3
+```
+
+In all three shapes the observer fires *before* the handler logs: the property
+was already written by the time the click was handled. Fresh text was typed
+before each read — `"typing here"`, then `bbb`, then `ccc` — so no reading is a
+leftover from the first click having moved focus for good.
+
+The middle one is the one worth having. A `static_text` carrying a `mouse_down`
+is not a focusable control, so the plausible failure was that clicking it would
+not take focus from the field and would read stale where a real `push_button`
+would not. It does not: the field committed first. That is the shape the
+observation panel's suggestion rows use. The three repeated `mouse_down` lines
+all reading `observed=2` are the confirmation — the field had genuinely already
+flushed, so there was nothing left for a second click to commit.
+
+The `immediate = true` field beside it never lagged, which is what says the
+result is about the binding rather than about the probe.
+
+So: an action, a `mouse_down`, or work deferred onto `LrTasks.startAsyncTask`
+can all read a bound property and get what the user typed. What follows for
+this plugin is `PanelCore.guessToSend`, which sends a suggestion's stored bare
+name only while the species guess field still holds the offered string — a rule
+that is only correct if the field has committed an edit by then. Before this
+probe that was inference from the feature working at all (a hand-typed guess
+reaches iNaturalist, so *something* must commit it), not a measurement.
+
 ## A plugin is never told that a photo's metadata changed
 
 There is no observer for it. `LrCatalog`'s method table — the SDK-facing one, in

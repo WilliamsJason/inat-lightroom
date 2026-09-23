@@ -141,11 +141,12 @@ The usual run of it:
 1. Select the photo, or several photos of the same individual.
 2. Click **Get Suggestions**. The plugin asks iNaturalist's vision model what
    the photo is and lists what comes back, best first, with how confident it is.
-3. Click a suggestion's name. It fills in **Species guess** and, invisibly, the
-   taxon ID behind it, and marks the row. Each row also ends in a **View ↗**
-   link that opens that taxon's page on iNaturalist, for when two suggestions
-   look alike and the only way to decide is to go and look. Looking one up does
-   not choose it.
+3. Click a suggestion's name. It fills in **Species guess** with the name the
+   way the row reads it — *Western Honey Bee (Apis mellifera)*, ready to copy
+   into a caption — and, invisibly, the taxon ID behind it, and marks the row.
+   Each row also ends in a **View ↗** link that opens that taxon's page on
+   iNaturalist, for when two suggestions look alike and the only way to decide
+   is to go and look. Looking one up does not choose it.
 4. Click **Upload to iNaturalist** — or, if the selection is already linked to
    an observation, **Update species guess**.
 
@@ -328,6 +329,27 @@ nothing could be resolved to a taxon.
 It also never sets the observation's taxon directly. That moves the taxon but
 leaves your earlier identification standing, so the observation ends up
 disagreeing with itself. Posting a new identification withdraws the old one.
+
+### The name in the box is the one you want to paste
+
+Clicking a suggestion fills the **Species guess** box with the row as you see
+it — *Western Honey Bee (Apis mellifera)*. That box is the only text in the
+panel you can select, so it is the only place a name can be copied from for a
+caption, and a common name used to mean retyping it.
+
+What gets sent is the bare scientific name, not that string. iNaturalist turns
+free text into an identification by matching it against taxon names, and it
+matches *Apis mellifera*, not the version with the common name in front of it.
+The two are kept separately for that reason, and the difference is never
+something you have to think about.
+
+Type over the box and your own words are sent exactly as typed — editing it is
+how you overrule a suggestion, so a name you just deleted is never sent behind
+your back. Choosing another row replaces the text again.
+
+After the upload, the box shows the bare name: at that point it is reporting
+what iNaturalist was told rather than offering you something to send. The
+suggestion row above still reads the long way round if you want to copy it.
 
 ### The settings window
 

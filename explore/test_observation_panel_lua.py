@@ -565,8 +565,9 @@ def test_cancelling_when_nothing_is_running_does_nothing(plugin, panel):
 
 
 def test_choosing_a_suggestion_fills_the_species_guess(plugin, panel):
-    """Selecting a row is the point of the list. The scientific name goes in the
-    field because it is unambiguous and it is what gets uploaded."""
+    """Selecting a row is the point of the list. The field gets the row's own
+    display form, because it is the only control in the panel whose text can be
+    selected and copied into a caption."""
     props = plugin.runtime.table_from({})
     props["suggestions"] = plugin.runtime.table_from({
         1: plugin.runtime.table_from(
@@ -576,8 +577,100 @@ def test_choosing_a_suggestion_fills_the_species_guess(plugin, panel):
 
     plugin.call(panel.chooseSuggestion, props, 1)
 
-    assert props["speciesGuess"] == "Apis mellifera"
+    assert props["speciesGuess"] == "Western Honey Bee (Apis mellifera)"
     assert props["suggestionTaxonId"] == 47219
+
+
+def test_choosing_a_suggestion_keeps_the_bare_name_for_the_wire(plugin, panel):
+    """The display form is no good to iNaturalist, which matches species_guess
+    against taxon names. The bare name is kept beside the field for that, along
+    with the exact string the field was given."""
+    props = plugin.runtime.table_from({})
+    props["suggestions"] = plugin.runtime.table_from({
+        1: plugin.runtime.table_from(
+            {"taxon_id": 47219, "name": "Apis mellifera",
+             "common_name": "Western Honey Bee"}),
+    })
+
+    plugin.call(panel.chooseSuggestion, props, 1)
+
+    assert props["suggestionScientificName"] == "Apis mellifera"
+    assert props["suggestionOfferedName"] == props["speciesGuess"]
+
+
+def test_a_suggestion_with_no_scientific_name_falls_back(plugin, panel):
+    """The fallback the field has always had, now on the wire value rather than
+    on what is shown."""
+    props = plugin.runtime.table_from({})
+    props["suggestions"] = plugin.runtime.table_from({
+        1: plugin.runtime.table_from(
+            {"taxon_id": 47219, "common_name": "Western Honey Bee"}),
+    })
+
+    plugin.call(panel.chooseSuggestion, props, 1)
+
+    assert props["speciesGuess"] == "Western Honey Bee"
+    assert props["suggestionScientificName"] == "Western Honey Bee"
+
+
+def test_choosing_another_suggestion_replaces_both_names(plugin, panel):
+    """The three values are one state. A scientific name left over from the row
+    before would be sent for a name the field no longer shows."""
+    props = plugin.runtime.table_from({})
+    props["suggestions"] = plugin.runtime.table_from({
+        1: plugin.runtime.table_from(
+            {"taxon_id": 47219, "name": "Apis mellifera",
+             "common_name": "Western Honey Bee"}),
+        2: plugin.runtime.table_from(
+            {"taxon_id": 52775, "name": "Bombus", "common_name": "Bumble Bees"}),
+    })
+
+    plugin.call(panel.chooseSuggestion, props, 1)
+    props["speciesGuess"] = "something I typed instead"
+    plugin.call(panel.chooseSuggestion, props, 2)
+
+    assert props["speciesGuess"] == "Bumble Bees (Bombus)"
+    assert props["suggestionOfferedName"] == "Bumble Bees (Bombus)"
+    assert props["suggestionScientificName"] == "Bombus"
+
+
+def test_choosing_a_suggestion_that_is_not_there_clears_the_names(plugin, panel):
+    """Same reasoning as the taxon id: a name that outlives the row it came
+    from is an identification nobody picked."""
+    props = plugin.runtime.table_from({})
+    props["suggestionOfferedName"] = "Western Honey Bee (Apis mellifera)"
+    props["suggestionScientificName"] = "Apis mellifera"
+    props["suggestions"] = plugin.runtime.table_from({})
+
+    plugin.call(panel.chooseSuggestion, props, 3)
+
+    assert props["suggestionOfferedName"] is None
+    assert props["suggestionScientificName"] is None
+
+
+def test_clearing_the_suggestions_clears_the_names(plugin, panel):
+    """What the selection observer calls when the photo changes. The field is
+    refilled from the new photo's catalog value; a scientific name surviving
+    that would be sent for a photo it was never about."""
+    props = plugin.runtime.table_from({})
+    props["suggestionOfferedName"] = "Western Honey Bee (Apis mellifera)"
+    props["suggestionScientificName"] = "Apis mellifera"
+
+    plugin.call(panel.clearSuggestions, props)
+
+    assert props["suggestionOfferedName"] is None
+    assert props["suggestionScientificName"] is None
+
+
+def test_clearing_the_suggestions_leaves_the_field_alone(plugin, panel):
+    """The field belongs to the person typing in it. Emptying it because the
+    list went away would throw away a guess halfway through."""
+    props = plugin.runtime.table_from({})
+    props["speciesGuess"] = "Bombus"
+
+    plugin.call(panel.clearSuggestions, props)
+
+    assert props["speciesGuess"] == "Bombus"
 
 
 def test_choosing_a_suggestion_that_is_not_there_clears_the_taxon(plugin, panel):
@@ -769,7 +862,7 @@ def stub_upload_path(plugin):
       (function()
         local UploadCore = require "UploadCore"
         local PanelCore  = require "PanelCore"
-        local reached = { count = 0, updates = 0, accuracy = nil }
+        local reached = { count = 0, updates = 0, accuracy = nil, guess = nil }
 
         UploadCore.requireAPI = function()
           return {
@@ -783,8 +876,10 @@ def stub_upload_path(plugin):
           reached.count = reached.count + 1
           return 42, nil, {}
         end
-        PanelCore.updateSpeciesGuess = function()
+        PanelCore.updateSpeciesGuess = function(_catalog, _api, _photos, guess, taxonId)
           reached.updates = (reached.updates or 0) + 1
+          reached.guess   = guess
+          reached.taxonId = taxonId
           return true, nil
         end
 
@@ -884,6 +979,120 @@ def test_updating_an_existing_observation_asks_nothing(plugin, panel):
     assert reached["count"] == 0, "an update must not go through upload"
     assert reached["updates"] == 1, "it should have updated the identification"
     assert not any("casual" in d["message"].lower() for d in plugin.dialogs)
+
+
+# ---------------------------------------------------------------------------
+# What the field shows against what iNaturalist is told
+# ---------------------------------------------------------------------------
+
+
+def chosen(plugin, panel, props, row, index=1):
+    """Pick a suggestion the way a click on its row does."""
+    props["suggestions"] = deep(plugin, [row])
+    plugin.call(panel.chooseSuggestion, props, index)
+    return props
+
+
+def test_an_untouched_field_sends_the_bare_name(plugin, panel):
+    """iNaturalist matches species_guess against taxon names to identify an
+    observation that has no taxon (set_taxon_from_species_guess in its own
+    Observation model), and "Common (Scientific)" matches nothing. So what the
+    field shows and what is sent are allowed to differ."""
+    reached = stub_upload_path(plugin)
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="123")])
+    props = chosen(plugin, panel, plugin.runtime.table_from({}),
+                   {"taxon_id": 47219, "name": "Apis mellifera",
+                    "common_name": "Western Honey Bee"})
+
+    plugin.call(panel.uploadOrUpdate, props)
+    plugin.run_pending_tasks()
+
+    assert props["speciesGuess"] == "Western Honey Bee (Apis mellifera)"
+    assert reached["guess"] == "Apis mellifera"
+
+
+def test_an_edited_field_is_sent_exactly_as_typed(plugin, panel):
+    """The moment the text is not the text we put there, it is the user's, and
+    sending a stored name they have just edited away from would overrule them
+    silently."""
+    reached = stub_upload_path(plugin)
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="123")])
+    props = chosen(plugin, panel, plugin.runtime.table_from({}),
+                   {"taxon_id": 47219, "name": "Apis mellifera",
+                    "common_name": "Western Honey Bee"})
+
+    props["speciesGuess"] = "Bombus"
+
+    plugin.call(panel.uploadOrUpdate, props)
+    plugin.run_pending_tasks()
+
+    assert reached["guess"] == "Bombus"
+
+
+def test_a_hand_typed_name_with_no_suggestion_is_sent_as_is(plugin, panel):
+    """Nothing was chosen, so there is no bare name to prefer and the field is
+    the only thing anyone has said about this photo."""
+    reached = stub_upload_path(plugin)
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="123")])
+    props = plugin.runtime.table_from({})
+    props["speciesGuess"] = "Ischnura erratica"
+
+    plugin.call(panel.uploadOrUpdate, props)
+    plugin.run_pending_tasks()
+
+    assert reached["guess"] == "Ischnura erratica"
+
+
+def test_a_name_from_a_cleared_list_is_not_sent(plugin, panel):
+    """What the selection observer does when the photo changes: the field is
+    refilled from the new photo and the suggestions go. A scientific name
+    surviving that would be sent for a photo it was never about."""
+    reached = stub_upload_path(plugin)
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="123")])
+    props = chosen(plugin, panel, plugin.runtime.table_from({}),
+                   {"taxon_id": 47219, "name": "Apis mellifera",
+                    "common_name": "Western Honey Bee"})
+
+    plugin.call(panel.clearSuggestions, props)
+    props["speciesGuess"] = "Bombus vosnesenskii"
+
+    plugin.call(panel.uploadOrUpdate, props)
+    plugin.run_pending_tasks()
+
+    assert reached["guess"] == "Bombus vosnesenskii"
+
+
+def test_a_new_upload_posts_the_bare_name_too(plugin, panel):
+    """The identification after a create goes through the same resolution. It
+    is a separate call site, and one of the two is easy to forget."""
+    reached = stub_upload_path(plugin)
+    photo = plugin.new_photo(raw={"gps": {"latitude": 51.5, "longitude": -0.1}})
+    plugin.set_target_photos([photo])
+    props = chosen(plugin, panel, plugin.runtime.table_from({}),
+                   {"taxon_id": 47219, "name": "Apis mellifera",
+                    "common_name": "Western Honey Bee"})
+
+    plugin.call(panel.uploadOrUpdate, props)
+    plugin.run_pending_tasks()
+
+    assert reached["count"] == 1
+    assert reached["guess"] == "Apis mellifera"
+
+
+def test_the_confidence_dialog_names_what_the_user_can_see(plugin, panel):
+    """This one is read by a person deciding, not transmitted, so it uses the
+    form on screen rather than the form on the wire."""
+    stub_upload_path(plugin)
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="123")])
+    props = chosen(plugin, panel, plugin.runtime.table_from({}),
+                   {"taxon_id": 47219, "name": "Apis mellifera",
+                    "common_name": "Western Honey Bee", "rank": "species",
+                    "combined_score": 40})
+
+    plugin.call(panel.uploadOrUpdate, props)
+    plugin.run_pending_tasks()
+
+    assert "Western Honey Bee (Apis mellifera)" in plugin.dialogs[-1]["message"]
 
 
 # ---------------------------------------------------------------------------
