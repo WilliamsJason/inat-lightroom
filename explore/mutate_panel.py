@@ -11,6 +11,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import mutation_report
+
 PLUGIN = Path(__file__).parent.parent / "plugin" / "pinned.lrplugin"
 TARGETS = {
     "PanelCore": PLUGIN / "PanelCore.lua",
@@ -885,7 +887,7 @@ def main() -> int:
             source = backups[name]
 
             if old not in source:
-                print(f"STALE  {description}\n       (anchor not found -- fix the script)")
+                mutation_report.note_stale(description)
                 stale.append(description)
                 continue
 
@@ -908,32 +910,7 @@ def main() -> int:
         for name, path in TARGETS.items():
             path.write_text(backups[name], encoding="utf-8")
 
-    print()
-
-    # Reported apart from the survivors, and reported first, because the two
-    # mean opposite things. A survivor is a hole in the suite; a stale anchor is
-    # a mutation that has not run at all, and folding it into the survivor list
-    # -- which is what this script used to do -- makes a refactor look like a
-    # coverage gap and hides the fact that the line is no longer being tested.
-    # Measured: #30 and #31 moved eight anchors between them, and every one was
-    # reported as a survivor for two merges despite the tests that catch them
-    # being present and passing the whole time.
-    if stale:
-        print(f"{len(stale)} of {len(MUTATIONS)} mutations never ran:")
-        for s in stale:
-            print(f"  - {s}")
-        print()
-
-    if survivors:
-        print(f"{len(survivors)} of {len(MUTATIONS)} mutations survived:")
-        for s in survivors:
-            print(f"  - {s}")
-
-    if stale or survivors:
-        return 1
-
-    print(f"All {len(MUTATIONS)} mutations caught.")
-    return 0
+    return mutation_report.summarise(stale, survivors, len(MUTATIONS))
 
 
 if __name__ == "__main__":
