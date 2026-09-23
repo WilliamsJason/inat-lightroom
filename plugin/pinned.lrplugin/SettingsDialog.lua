@@ -69,17 +69,7 @@ SettingsDialog.GEOPRIVACY_ITEMS = {
   { title = "Private - location visible only to you",   value = "private" },
 }
 
---- How much of the photo's own metadata travels with the JPEG.
---
--- These five values are Lightroom's, read out of Export.lrmodule rather than
--- guessed; the Export dialog's Metadata popup offers exactly this list.
-SettingsDialog.METADATA_ITEMS = {
-  { title = "All metadata",                        value = "all" },
-  { title = "All except camera & Camera Raw info", value = "allExceptCameraInfo" },
-  { title = "All except Camera Raw info",          value = "allExceptCameraRawInfo" },
-  { title = "Copyright & contact info only",       value = "copyrightAndContactOnly" },
-  { title = "Copyright only",                      value = "copyrightOnly" },
-}
+
 
 --- What the popup calls rendering with the plugin's own settings.
 SettingsDialog.PRESET_NONE_TITLE =
@@ -134,6 +124,13 @@ end
 -- sign that anything is missing. Putting a warning at the end of a sentence
 -- of unknown length is how it disappears on the one machine where it matters.
 --
+-- Deliberately silent about a size value the preset stores and ignores -- a
+-- longEdge preset carrying a stale maxWidth. Lightroom's own Export dialog
+-- shows a single Long Edge box, so that number is not visible anywhere the
+-- user could have seen it and not something they can act on. Explaining a
+-- discrepancy only the plugin can see is noise. The rule itself still matters
+-- and still has its evidence: see ExportPresets.effectiveSize.
+--
 -- @param preset  an entry from ExportPresets.list(), or nil
 function SettingsDialog.presetSummary(preset)
   if not preset then
@@ -142,16 +139,7 @@ function SettingsDialog.presetSummary(preset)
   end
 
   local size = ExportPresets.effectiveSize(preset.value)
-  local text = "This preset exports at " .. tostring(size.text) .. "."
-
-  if size.ignored then
-    text = text .. " Note that " .. size.ignored .. "."
-  end
-
-  -- Said out loud because the Metadata popup and the two checkboxes below are
-  -- still on screen and no longer doing anything. A control that lies is
-  -- worse than a control that is missing.
-  return text .. " Its own metadata options are used, not the ones below."
+  return "This preset exports at " .. tostring(size.text) .. "."
 end
 
 --- Why the chosen preset's watermark will not draw, or "".
@@ -594,19 +582,17 @@ local function uploadTab(f, props)
         },
       },
 
-      f:row {
-        f:static_text { title = "", width = LABEL },
-        f:checkbox {
-          title = "Send the photo's GPS coordinates",
-          value = LrView.bind("inat_upload_location"),
-        },
-      },
+      -- No "send the coordinates" checkbox any more: the popup above is the
+      -- whole privacy answer. The checkbox's own help text already told
+      -- people to use Obscured instead of turning it off -- iNaturalist hides
+      -- the spot and still counts the sighting -- so the setting existed to
+      -- be talked out of. An observation with no location cannot reach
+      -- research grade, which is a poor thing to have behind a tickbox.
       f:static_text {
-        title = "An observation with no location is close to useless as a record.\n"
-          .. "Use Obscured rather than turning this off: iNaturalist then hides\n"
-          .. "the exact spot but still counts the sighting.",
+        title = "Coordinates are sent whenever the photo has them. Obscured\n"
+          .. "hides the exact spot but still counts the sighting.",
         width           = 500,
-        height_in_lines = 3,
+        height_in_lines = 2,
       },
 
       f:spacer { height = 8 },
@@ -650,6 +636,17 @@ local function uploadTab(f, props)
         width           = 500,
         height_in_lines = 3,
       },
+      -- The Metadata popup and the two Remove checkboxes that used to sit
+      -- below are gone; an export preset says all of this better, in the
+      -- place the user already edits it. So this line has to carry what they
+      -- were for, phrased as what you get rather than what the plugin does.
+      f:static_text {
+        title = "Make an export preset in Lightroom to add a watermark,\n"
+          .. "change the resolution, or choose what metadata travels with\n"
+          .. "the file. It shows up here.",
+        width           = 500,
+        height_in_lines = 3,
+      },
       -- Its own control, not the end of the sentence above: a static_text
       -- that overflows its width drops the word that does not fit and says
       -- nothing about having done so, so the warning would be the part that
@@ -668,41 +665,6 @@ local function uploadTab(f, props)
         title           = LrView.bind("exportPresetNotes"),
         width           = 500,
         height_in_lines = 2,
-      },
-
-      f:spacer { height = 8 },
-      f:separator { fill_horizontal = 1 },
-      f:spacer { height = 6 },
-
-      f:row {
-        f:static_text { title = "Metadata:", width = LABEL, alignment = "right" },
-        f:popup_menu {
-          value = LrView.bind("render_metadata_option"),
-          items = SettingsDialog.METADATA_ITEMS,
-          width = 320,
-        },
-      },
-
-      f:row {
-        f:static_text { title = "", width = LABEL },
-        f:checkbox {
-          title = "Remove location info from the uploaded file",
-          value = LrView.bind("render_remove_location"),
-        },
-      },
-      f:static_text {
-        title = "This strips GPS from the JPEG only. The observation's own\n"
-          .. "location is set above and is unaffected.",
-        width           = 500,
-        height_in_lines = 2,
-      },
-
-      f:row {
-        f:static_text { title = "", width = LABEL },
-        f:checkbox {
-          title = "Remove person info",
-          value = LrView.bind("render_remove_face"),
-        },
       },
     },
   }

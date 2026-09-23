@@ -69,7 +69,7 @@ and replace the folder by hand.
 
 ## First-time setup
 
-Go to **File → Plug-in Extras → Pinned Settings…** and open the
+Go to **File → Plug-in Extras → Settings…** and open the
 **Account** tab.
 
 You do not have to go looking for it, though: anything that needs iNaturalist
@@ -129,9 +129,9 @@ Everything the plugin does happens in two floating windows, both under
 entry in the Export dialog — see [Why there is no publish
 service](#why-there-is-no-publish-service).
 
-### The Pinned panel
+### The Observation Panel
 
-**File → Plug-in Extras → Pinned Panel** opens a window that follows
+**File → Plug-in Extras → Observation Panel** opens a window that follows
 whatever is selected in the filmstrip. It shows what the selection currently is
 on iNaturalist — observation ID, taxon, common name, quality grade, last sync —
 and carries every action.
@@ -235,10 +235,8 @@ iNaturalist's vision model, so a located photo gets better suggestions.
 
 Most cameras still have no GPS, so this is the common case, not the unusual one.
 Uploading a photo with no location therefore asks first. It is a warning and not
-a veto — plenty of observations are worth having without one — and it stays
-quiet entirely if you have turned **Send GPS coordinates** off in settings,
-because a warning that fires when it should not is one people learn to click
-past.
+a veto — plenty of observations are worth having without one — and the upload
+goes ahead with no coordinates and no error if that is what you want.
 
 The plugin does not offer its own coordinate fields. The Map module already has
 place search, a draggable pin, reverse geocoding, tracklog matching and saved
@@ -373,7 +371,7 @@ suggestion row above still reads the long way round if you want to copy it.
 
 ### The settings window
 
-**File → Plug-in Extras → Pinned Settings…**, in three tabs:
+**File → Plug-in Extras → Settings…**, in three tabs:
 
 - **Account** — credentials, as above. The only tab with buttons that save
   something: **Sign In with iNaturalist**, and for the pasted-token route a
@@ -382,10 +380,10 @@ suggestion row above still reads the long way round if you want to copy it.
   **Sync All Linked Photos**, which refreshes every photo in the catalog that
   has an observation ID, and **Find Unlinked Observations…**.
 - **Upload** — everything an upload decides. What the observation says:
-  geoprivacy, whether to send the photo's GPS coordinates, an optional project
-  ID, and whether to sync taxa back afterwards. And what the file carries:
-  which export preset to render with, which metadata to include, and whether
-  to strip location or person info.
+  geoprivacy, an optional project ID, and whether to sync taxa back
+  afterwards. And what the file carries: which export preset to render with.
+  Coordinates are sent whenever the photo has them; **Obscured** is how you
+  keep the exact spot to yourself while the sighting still counts.
 
 Every setting outside the Account tab is saved the moment you change it, so the
 window closes on **Done** and there is nothing to cancel.
@@ -398,11 +396,18 @@ rejects uploads over roughly 20 MB, so a full-resolution raw conversion would
 fail for no gain.
 
 If you want something else — a watermark, a different size, your own
-sharpening — make an export preset in Lightroom's Export dialog and pick it in
-**Render with**. The preset decides the resolution, quality, colour space,
-sharpening, watermark and metadata options. The plugin still forces the things
-that make the upload work at all: the destination folder, JPEG, no re-import,
-no post-processing action, and flat keywords.
+sharpening, or less metadata in the file — make an export preset in Lightroom's
+Export dialog and pick it in **Render with**. The preset decides the
+resolution, quality, colour space, sharpening, watermark and metadata options.
+The plugin still forces the things that make the upload work at all: the
+destination folder, JPEG, no re-import, no post-processing action, and flat
+keywords.
+
+There are no separate metadata controls in the settings window. A preset says
+all of it, in the place you already edit it, and two sets of the same
+switches is how you end up trusting the one that did not apply. With no preset
+chosen the plugin sends all metadata, keeps the location in the file, and
+strips person info.
 
 A preset that strips metadata is safe. Even one set to Copyright Only, or with
 **Remove Location Info** ticked, leaves the observation itself mapped and

@@ -61,9 +61,9 @@ MUTATIONS = [
     ),
     (
         "UploadCore",
-        "location is uploaded regardless of the setting",
-        "  if settings.inat_upload_location then",
-        "  if true then",
+        "a photo with no GPS sends latitude anyway",
+        "  local latitude, longitude = UploadCore.locationOf(photo)\n  if latitude then",
+        "  local latitude, longitude = UploadCore.locationOf(photo)\n  if true then",
     ),
     (
         "UploadCore",

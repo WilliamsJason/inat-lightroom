@@ -383,7 +383,7 @@ function InatOAuth.handleRedirect(params, onComplete)
     logger:warn("Authorization redirect carried no code")
     LrDialogs.message("Pinned",
       "iNaturalist sent this plugin back without an authorization code.\n\n"
-        .. "Try signing in again from Pinned Settings.", "warning")
+        .. "Try signing in again from the Settings window.", "warning")
     finish(false, "No authorization code.")
     return
   end
@@ -396,7 +396,7 @@ function InatOAuth.handleRedirect(params, onComplete)
     logger:warn("Authorization redirect with no sign-in in progress")
     LrDialogs.message("Pinned",
       "No sign-in is in progress, or it was started too long ago.\n\n"
-        .. "Open File > Plug-in Extras > Pinned Settings… and press "
+        .. "Open File > Plug-in Extras > Settings… and press "
         .. "Sign In with iNaturalist again.", "warning")
     finish(false, "No sign-in in progress.")
     return

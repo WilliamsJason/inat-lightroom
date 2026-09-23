@@ -27,15 +27,9 @@ MUTATIONS = [
     ),
     (
         "Settings",
-        "location is stripped from the upload by default",
-        "  render_remove_location = false,",
-        "  render_remove_location = true,",
-    ),
-    (
-        "Settings",
-        "GPS is withheld from observations by default",
-        "  inat_upload_location = true,",
-        "  inat_upload_location = false,",
+        "geoprivacy defaults to private, so nothing is ever mappable",
+        "  inat_geoprivacy      = \"open\",",
+        "  inat_geoprivacy      = \"private\",",
     ),
     (
         "SettingsDialog",

@@ -51,7 +51,6 @@ def deep(plugin, value):
 def settings(plugin, **overrides):
     values = {
         "inat_geoprivacy": "open",
-        "inat_upload_location": True,
         "inat_project_id": "",
         "inat_sync_after_upload": True,
     }
@@ -1034,15 +1033,16 @@ def test_uploading_a_located_photo_is_not_questioned(plugin, core):
                                    plugin.runtime.table_from({1: photo})) is None
 
 
-def test_nothing_is_said_when_the_user_has_turned_location_off(plugin, core):
-    """They switched it off on purpose. A warning that fires when it should not
-    is one people learn to click through, and we would lose the times it is
-    right."""
+def test_the_warning_no_longer_depends_on_a_setting(plugin, core):
+    """It used to stay silent when "send GPS coordinates" was off. That
+    setting is gone -- coordinates are always sent when the photo has them --
+    so a photo with none is unambiguously worth mentioning, and the warning
+    must survive settings it has never heard of."""
     warning = core["locationWarning"](
-        settings(plugin, inat_upload_location=False),
+        settings(plugin, inat_geoprivacy="private"),
         plugin.runtime.table_from({1: plugin.new_photo()}))
 
-    assert warning is None
+    assert warning is not None
 
 
 def test_nothing_is_said_when_nothing_is_selected(plugin, core):

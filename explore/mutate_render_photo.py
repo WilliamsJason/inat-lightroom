@@ -130,7 +130,7 @@ MUTATIONS = [
     ),
     (
         "strips location from every upload",
-        "LR_removeLocationMetadata  = prefs.render_remove_location or false",
+        "LR_removeLocationMetadata  = false",
         "LR_removeLocationMetadata  = true",
     ),
     (
@@ -164,8 +164,8 @@ MUTATIONS = [
         "    usePreset  = true,",
     ),
     (
-        "hardcodes the metadata option instead of honouring the setting",
-        'LR_embeddedMetadataOption  = prefs.render_metadata_option or "all"',
+        "sends only the copyright instead of all the metadata",
+        'LR_embeddedMetadataOption  = "all"',
         'LR_embeddedMetadataOption  = "copyrightOnly"',
     ),
     (

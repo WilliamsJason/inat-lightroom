@@ -58,7 +58,7 @@ Only the second half can be tested outside Lightroom, so the split is drawn to
 leave as little as possible on the untestable side.
 
 `File > Plug-in Extras` holds two items, and both of them only *open*
-something: **Pinned Panel** and **Pinned Settings…**. That is the test
+something: **Observation Panel** and **Settings…**. That is the test
 for whether something belongs in the menu — features live where the user is
 already looking, and a menu is somewhere you have to go.
 
@@ -304,16 +304,17 @@ The panel therefore shows the location on its own row — it is the only field
 here the user can still act on — and `PanelCore.locationWarning` gates the
 upload behind a confirmation when the first photo has none.
 
-Three deliberate limits on that warning:
+Two deliberate limits on that warning:
 
 - **It fires only on upload, never on update.** An update posts an
   identification; it cannot add coordinates, so warning there would be a dialog
   with nothing behind it.
-- **It is silent when `inat_upload_location` is off.** The user switched
-  location off on purpose. A warning that fires when it should not is one people
-  learn to click through, and that costs us the times it is right.
 - **It is a warning, not a veto.** Plenty of observations are worth having
   without a location.
+
+It used to stay quiet when the user had turned "send GPS coordinates" off.
+That setting is gone: coordinates are sent whenever the photo has them, and
+`inat_geoprivacy` decides who may see them.
 
 It judges `photos[1]`, because the observation's details come from the first
 photo. Judging any other would warn about a location that is not the one being

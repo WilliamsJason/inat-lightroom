@@ -140,20 +140,26 @@ function UploadCore.observationParamsFor(settings, photo, options)
     params.description = caption
   end
 
-  if settings.inat_upload_location then
-    local latitude, longitude = UploadCore.locationOf(photo)
-    if latitude then
-      params.latitude  = latitude
-      params.longitude = longitude
+  -- Sent whenever the photo has them. There is no longer a setting for this:
+  -- an observation with no location cannot be mapped and cannot reach
+  -- research grade, and the plugin's own help text already told people to use
+  -- Obscured rather than withhold the coordinates. inat_geoprivacy decides
+  -- who gets to see the spot, which is the question people actually have.
+  --
+  -- A photo with no GPS still uploads, with no coordinates and no error; that
+  -- is the ordinary case for a camera without a receiver.
+  local latitude, longitude = UploadCore.locationOf(photo)
+  if latitude then
+    params.latitude  = latitude
+    params.longitude = longitude
 
-      -- Only ever alongside coordinates. positional_accuracy on its own
-      -- describes the precision of a location that was not sent, which
-      -- iNaturalist has no use for and a reader of the observation would have
-      -- to guess at.
-      local accuracy = pluginField(photo, "inat_positional_accuracy")
-      if accuracy and tonumber(accuracy) then
-        params.positional_accuracy = tonumber(accuracy)
-      end
+    -- Only ever alongside coordinates. positional_accuracy on its own
+    -- describes the precision of a location that was not sent, which
+    -- iNaturalist has no use for and a reader of the observation would have
+    -- to guess at.
+    local accuracy = pluginField(photo, "inat_positional_accuracy")
+    if accuracy and tonumber(accuracy) then
+      params.positional_accuracy = tonumber(accuracy)
     end
   end
 

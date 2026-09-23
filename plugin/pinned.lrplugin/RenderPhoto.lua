@@ -249,9 +249,20 @@ function RenderPhoto.settingsFor(options)
     -- uploads for anyone whose last export was watermarked.
     LR_useWatermark            = false,
 
-    LR_removeLocationMetadata  = prefs.render_remove_location or false,
-    LR_removeFaceMetadata      = prefs.render_remove_face or false,
-    LR_embeddedMetadataOption  = prefs.render_metadata_option or "all",
+    -- Constants rather than preferences since the Metadata controls left the
+    -- settings dialog. All metadata travels because iNaturalist is a
+    -- biodiversity record and the camera and capture details are part of it;
+    -- location is NOT stripped for the same reason, and obscuring where a
+    -- rare thing was seen is inat_geoprivacy's job, which it does properly,
+    -- per observation, on iNaturalist's side. Person info is stripped,
+    -- keeping the shipped default: a face region names someone, which is not
+    -- part of the sighting.
+    --
+    -- A user who wants any of this different says so in an export preset,
+    -- whose own metadata keys win over these three.
+    LR_removeLocationMetadata  = false,
+    LR_removeFaceMetadata      = true,
+    LR_embeddedMetadataOption  = "all",
 
     -- Keywords go up as a flat list or not at all. iNaturalist has no use for
     -- Lightroom's hierarchy, and this plugin writes its own taxonomy keywords

@@ -229,7 +229,7 @@ def test_a_smaller_render_can_be_asked_for(plugin, render):
     assert result["LR_size_maxHeight"] == 1024
 
 
-# --- the preferences the settings dialog owns ----------------------------
+# --- what the plugin sends when no preset is chosen -----------------------
 
 
 def test_location_is_kept_in_the_file_by_default(settings):
@@ -238,8 +238,10 @@ def test_location_is_kept_in_the_file_by_default(settings):
     assert settings()["LR_removeLocationMetadata"] is False
 
 
-def test_location_can_be_stripped_when_the_user_asks(settings):
-    assert settings(render_remove_location=True)["LR_removeLocationMetadata"] is True
+def test_person_info_is_stripped(settings):
+    # A face region names somebody, which is no part of the sighting. This was
+    # the shipped default while it was still a checkbox, and it stays one.
+    assert settings()["LR_removeFaceMetadata"] is True
 
 
 def test_the_watermark_is_off_and_carries_no_id(settings):
@@ -276,12 +278,9 @@ def test_sharpening_can_be_turned_off_for_the_throwaway_render(plugin, render):
     assert result["LR_outputSharpeningOn"] is False
 
 
-def test_the_metadata_option_is_passed_through(settings):
-    result = settings(render_metadata_option="copyrightOnly")
-    assert result["LR_embeddedMetadataOption"] == "copyrightOnly"
-
-
-def test_all_metadata_is_sent_when_the_user_has_not_chosen(settings):
+def test_all_metadata_is_sent(settings):
+    # Not a preference any more: the camera and capture details are part of a
+    # biodiversity record. A user who wants less says so in an export preset.
     assert settings()["LR_embeddedMetadataOption"] == "all"
 
 
@@ -519,15 +518,14 @@ def test_the_resize_mode_arrives_with_the_size_it_explains(with_preset):
     assert result["LR_size_maxHeight"] == 4000
 
 
-def test_a_preset_s_metadata_option_wins_over_the_checkbox(plugin, render):
+def test_a_preset_s_metadata_option_wins_over_the_plugin_s(plugin, render):
     # Deliberate: the point of choosing a preset is to decide the file in one
     # place, and honouring the resolution while overriding the metadata would
-    # be the worst of both.
+    # be the worst of both. Safe because the observation's own location and
+    # time go up as API parameters read from the catalog, not out of the file.
     result = render["settingsFor"](plugin.runtime.table_from({
         "folder": "/tmp/inat-test",
         "preset": a_preset(plugin),
-        "settings": plugin.runtime.table_from(
-            {"render_metadata_option": "all"}),
     }))
 
     assert result["LR_embeddedMetadataOption"] == "copyrightOnly"

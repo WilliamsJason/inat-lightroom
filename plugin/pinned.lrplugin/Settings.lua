@@ -27,21 +27,18 @@ local Settings = {}
 Settings.DEFAULTS = {
   -- What the observation says
   inat_geoprivacy      = "open",
-  inat_upload_location = true,
   inat_project_id      = "",
   inat_sync_after_upload = true,
 
   -- What gets uploaded.
   --
-  -- Location is deliberately NOT stripped by default even though this is an
-  -- image going to a public website: iNaturalist is a biodiversity record and
-  -- a sighting without a place is close to worthless. Obscuring where a rare
-  -- thing was seen is what inat_geoprivacy is for, and it does it properly,
-  -- per observation, on iNaturalist's side.
-  render_remove_location = false,
-  render_remove_face     = true,
-  render_metadata_option = "all",
-
+  -- The Metadata popup and the two Remove checkboxes are gone, and their
+  -- three preferences with them. An export preset expresses all of it, in
+  -- Lightroom, where the user already edits it -- and a preference nothing
+  -- can set and nothing reads is worse than no preference. The no-preset
+  -- values now live in RenderPhoto as plain constants, which is where a
+  -- default that cannot be changed belongs.
+  --
   -- The user's own Lightroom export preset, by GUID, or "" for the plugin's
   -- own settings. The GUID rather than the path because renaming a preset in
   -- Lightroom renames the file, and the id survives it.

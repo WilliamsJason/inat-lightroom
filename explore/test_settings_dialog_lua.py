@@ -51,16 +51,15 @@ def test_false_is_a_value_not_an_absence(settings):
     """`prefs[key] or default` would turn every checkbox the user unticked
     back on, which is the kind of bug nobody reports because they assume they
     forgot to save."""
-    settings["set"]("inat_upload_location", False)
+    settings["set"]("inat_sync_after_upload", False)
 
-    assert settings["get"]("inat_upload_location") is False
+    assert settings["get"]("inat_sync_after_upload") is False
 
 
-def test_location_is_sent_by_default(settings):
+def test_location_is_kept_in_the_file_by_default(settings):
     """An observation with no location is close to worthless as a biodiversity
     record. Obscuring it is what geoprivacy is for, and it does it properly."""
-    assert settings["DEFAULTS"]["inat_upload_location"] is True
-    assert settings["DEFAULTS"]["render_remove_location"] is False
+    assert settings["DEFAULTS"]["inat_geoprivacy"] == "open"
 
 
 def test_all_returns_every_known_preference(settings):
@@ -91,9 +90,9 @@ def test_saving_stores_the_edited_preferences(plugin, dialog, settings):
 
 def test_saving_stores_a_preference_that_was_turned_off(plugin, dialog, settings):
     """The reason savePreferences checks for nil rather than falsiness."""
-    dialog["savePreferences"](props(plugin, inat_upload_location=False))
+    dialog["savePreferences"](props(plugin, inat_sync_after_upload=False))
 
-    assert settings["get"]("inat_upload_location") is False
+    assert settings["get"]("inat_sync_after_upload") is False
 
 
 def test_saving_ignores_keys_that_are_not_preferences(plugin, dialog):
@@ -171,9 +170,9 @@ def test_a_setting_turned_off_is_stored_without_a_save(plugin, dialog, settings)
     then close the window on."""
     props = watching(plugin, dialog)
 
-    props["inat_upload_location"] = False
+    props["inat_sync_after_upload"] = False
 
-    assert settings["get"]("inat_upload_location") is False
+    assert settings["get"]("inat_sync_after_upload") is False
 
 
 def test_a_typed_keyword_root_is_tidied_on_the_way_in(plugin, dialog, settings):
@@ -280,16 +279,23 @@ def test_the_chosen_preset_s_real_size_is_shown(plugin, dialog):
     assert "2048 px long edge" in dialog["presetSummary"](chosen)
 
 
-def test_a_size_value_the_preset_ignores_is_explained(plugin, dialog):
-    """The owner's own preset holds longEdge/2048 with a stale width of 1000.
-    Lightroom reads the height and the Export dialog shows one box reading
-    2048 -- but 1000 is exactly the number a user would panic about."""
+def test_a_size_value_the_preset_ignores_is_not_explained(plugin, dialog):
+    """Reversed deliberately. The owner's own preset holds longEdge/2048 with
+    a stale width of 1000, and the first instinct was to explain it -- but
+    Lightroom's Export dialog shows a single Long Edge box, so that 1000 is
+    not visible anywhere the user could have seen it and is not something
+    they can act on. Explaining a discrepancy only the plugin can see is
+    noise dressed up as diligence. The rule still governs the mapping; see
+    ExportPresets.effectiveSize."""
     chosen = preset(plugin, value={
         "size_doConstrain": True, "size_resizeType": "longEdge",
         "size_maxHeight": 2048, "size_maxWidth": 1000, "size_units": "pixels",
     })
 
-    assert "1000" in dialog["presetSummary"](chosen)
+    summary = dialog["presetSummary"](chosen)
+
+    assert "2048 px long edge" in summary
+    assert "1000" not in summary
 
 
 def test_a_watermark_that_is_no_longer_there_is_warned_about(plugin, dialog):
@@ -331,10 +337,15 @@ def test_there_is_nothing_to_warn_about_without_a_preset(dialog):
     assert dialog["presetWarning"](None, None) == ""
 
 
-def test_the_summary_says_the_preset_owns_the_metadata_options(plugin, dialog):
-    """The Metadata popup and the two checkboxes are still on screen below and
-    no longer apply. A control that lies is worse than one that is missing."""
-    assert "metadata" in dialog["presetSummary"](preset(plugin))
+def test_the_summary_is_only_about_the_file(plugin, dialog):
+    """It used to end with "its own metadata options are used, not the ones
+    below". There is no longer a below: those controls are gone, and a
+    sentence explaining a conflict that cannot happen is one more thing to
+    read."""
+    summary = dialog["presetSummary"](preset(plugin))
+
+    assert "below" not in summary
+    assert summary.startswith("This preset exports at")
 
 
 def test_choosing_a_preset_stores_its_title_alongside_the_id(plugin, dialog):
@@ -827,10 +838,31 @@ def tab_bindings(plugin, dialog, index):
 def test_the_upload_tab_holds_everything_an_upload_decides(plugin, dialog):
     bound = tab_bindings(plugin, dialog, 2)
 
-    for key in ("inat_geoprivacy", "inat_upload_location", "inat_project_id",
-                "inat_sync_after_upload", "render_metadata_option",
-                "render_remove_location", "render_export_preset"):
+    for key in ("inat_geoprivacy", "inat_project_id",
+                "inat_sync_after_upload", "render_export_preset"):
         assert key in bound, key
+
+
+def test_the_render_controls_the_preset_replaced_are_gone(plugin, dialog):
+    """The Metadata popup and the two Remove checkboxes were a second, weaker
+    way of saying what an export preset says properly, in the place the user
+    already edits it. Two sets of the same knobs is how somebody ends up
+    trusting the one that did not apply."""
+    bound = tab_bindings(plugin, dialog, 2)
+
+    for key in ("render_metadata_option", "render_remove_location",
+                "render_remove_face"):
+        assert key not in bound, key
+
+
+def test_withholding_coordinates_is_no_longer_a_setting(plugin, dialog):
+    """Deliberate behaviour change. An observation with no coordinates cannot
+    be mapped and effectively cannot reach research grade, and the checkbox's
+    own help text already told people to use Obscured instead of turning it
+    off. Geoprivacy decides who sees the spot; the plugin always sends it."""
+    bound = tab_bindings(plugin, dialog, 2)
+
+    assert "inat_upload_location" not in bound
 
 
 def test_the_watermark_checkbox_is_gone(plugin, dialog):
@@ -845,13 +877,35 @@ def test_the_watermark_checkbox_is_gone(plugin, dialog):
     assert "render_watermark_id" not in bound
 
 
+def test_the_preset_popup_says_what_a_preset_is_for(plugin, dialog):
+    """It is now the only place a watermark, a resolution or a metadata
+    choice can be expressed, so it has to carry what the deleted controls
+    were for."""
+    from test_plugin_info_provider_lua import is_table
+
+    def strings(node, found=None):
+        found = [] if found is None else found
+        if isinstance(node, str):
+            found.append(node)
+        elif is_table(node):
+            for _, value in node.items():
+                strings(value, found)
+        return found
+
+    text = " ".join(strings(tabs(plugin, dialog)[2]))
+
+    assert "watermark" in text
+    assert "resolution" in text
+    assert "metadata" in text
+
+
 def test_the_observations_tab_is_not_also_an_upload_tab(plugin, dialog):
     """They were split for a reason. A setting left behind on both tabs is two
     controls for one preference, which is how a user ends up believing the one
     they can see is the one that applied."""
     bound = tab_bindings(plugin, dialog, 1)
 
-    for key in ("inat_geoprivacy", "inat_upload_location", "inat_project_id",
+    for key in ("inat_geoprivacy", "inat_project_id",
                 "inat_sync_after_upload"):
         assert key not in bound, key
 

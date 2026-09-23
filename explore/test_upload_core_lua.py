@@ -39,7 +39,6 @@ def upload(plugin):
 def settings(plugin, **overrides):
     values = {
         "inat_geoprivacy": "open",
-        "inat_upload_location": True,
     }
     values.update(overrides)
     return plugin.runtime.table_from(values)
@@ -140,7 +139,7 @@ def test_the_caption_becomes_the_description(plugin, upload):
     assert params["description"] == "On a fence post"
 
 
-def test_gps_is_uploaded_when_the_setting_is_on(plugin, upload):
+def test_coordinates_go_up_whenever_the_photo_has_them(plugin, upload):
     photo = plugin.new_photo(raw={"gps": {"latitude": 51.5, "longitude": -0.1}})
 
     params = upload["observationParamsFor"](settings(plugin), photo)
@@ -172,16 +171,20 @@ def test_location_and_time_come_from_the_catalog_not_the_rendered_file(
     assert params["observed_on_string"] is not None
 
 
-def test_gps_is_withheld_when_the_setting_is_off(plugin, upload):
-    """Uploading someone's location against their setting is not recoverable."""
-    photo = plugin.new_photo(raw={"gps": {"latitude": 51.5, "longitude": -0.1}})
+def test_a_photo_with_no_location_uploads_without_one(plugin, upload):
+    """The case the removed "send GPS coordinates" checkbox used to make
+    obvious. A camera with no receiver is the ordinary case, and it must
+    produce an observation with no coordinates rather than an error or a
+    half-written pair."""
+    photo = plugin.new_photo(raw={"dateTimeOriginal": 0})
 
-    params = upload["observationParamsFor"](
-        settings(plugin, inat_upload_location=False), photo
-    )
+    params = upload["observationParamsFor"](settings(plugin), photo)
 
     assert params["latitude"] is None
     assert params["longitude"] is None
+    assert params["positional_accuracy"] is None
+    assert params["geoprivacy"] == "open"
+    assert params["observed_on_string"] is not None
 
 
 def test_locationof_reads_the_coordinates(plugin, upload):
@@ -518,14 +521,12 @@ def test_an_accuracy_without_coordinates_is_not_sent(plugin, upload):
     assert params["positional_accuracy"] is None
 
 
-def test_the_accuracy_is_withheld_with_the_location(plugin, upload):
-    """Location off means location off. An accuracy on its own still says
-    something about where the photo was taken."""
-    photo = plugin.new_photo(raw={"gps": {"latitude": 51.5, "longitude": -0.1}},
-                             inat_positional_accuracy="100")
+def test_the_accuracy_is_withheld_when_there_is_no_location(plugin, upload):
+    """An accuracy on its own describes the precision of a location that was
+    not sent, which iNaturalist has no use for."""
+    photo = plugin.new_photo(inat_positional_accuracy="100")
 
-    params = upload["observationParamsFor"](
-        settings(plugin, inat_upload_location=False), photo)
+    params = upload["observationParamsFor"](settings(plugin), photo)
 
     assert params["positional_accuracy"] is None
 

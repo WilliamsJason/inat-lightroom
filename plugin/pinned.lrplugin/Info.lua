@@ -113,18 +113,29 @@ return {
   -- both of these items open floating windows that work from anywhere, and
   -- neither is an operation on the selected photos.
   --
-  -- "Pinned", not "iNaturalist": Plug-in Extras is one flat shared submenu,
-  -- so these items sit directly alongside those of every other installed
-  -- plugin, and lr-inaturalist-publish puts its own unprefixed items in the
-  -- same list. The item text is the only thing distinguishing them.
+  -- Not prefixed with the plugin's name. Lightroom draws a greyed
+  -- "Pinned for iNaturalist" header above its own items, so a leading
+  -- "Pinned" on each spends the most distinctive position in a label -- the
+  -- start -- on the one word the two items share and on something the header
+  -- has already said. "Pinned Panel" and "Pinned Settings" read as one shape,
+  -- and the owner kept opening the wrong one.
+  --
+  -- "Observation Panel" rather than "Panel" because it names the thing, and
+  -- is what the window is called everywhere else in the code and the docs.
+  -- The ellipsis stays on Settings and off the panel, which is the SDK's own
+  -- convention and a second, quieter cue: one opens a dialog, one opens a
+  -- window.
+  --
+  -- Renames take effect at the next Lightroom launch, not on Reload Plug-in;
+  -- see PluginInit.lua.
   LrExportMenuItems = {
     {
-      title = LOC "$$$/iNatLightroom/Menu/Panel=Pinned Panel",
+      title = LOC "$$$/iNatLightroom/Menu/Panel=Observation Panel",
       file  = "ObservationPanelMenu.lua",
       id    = "inat_panel",
     },
     {
-      title = LOC "$$$/iNatLightroom/Menu/Settings=Pinned Settings…",
+      title = LOC "$$$/iNatLightroom/Menu/Settings=Settings…",
       file  = "SettingsMenu.lua",
       id    = "inat_settings",
     },
