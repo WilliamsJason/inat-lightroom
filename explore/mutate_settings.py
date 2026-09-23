@@ -58,6 +58,12 @@ MUTATIONS = [
     ),
     (
         "SettingsDialog",
+        "the preset rule is explained even when it excluded nobody",
+        "  return \"\"\nend",
+        "  return \"Note: Only Hard Drive presets are listed as other presets\"\n    .. \" cannot render a file for upload.\"\nend",
+    ),
+    (
+        "SettingsDialog",
         "Sync All trusts the catalog index and syncs unlinked photos too",
         "    local id = photo:getPropertyForPlugin(_PLUGIN, \"inat_observation_id\")\n    if id and id ~= \"\" then",
         "    local id = photo:getPropertyForPlugin(_PLUGIN, \"inat_observation_id\")\n    if true then",
