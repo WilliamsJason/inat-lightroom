@@ -86,36 +86,55 @@ combination is where the surprises are. `ui.dll` says the keys exist
 `horizontal_scroller`), but "the binary accepts this key" has never been the
 same as "this displays".
 
-Seven variants of the same four rows, plus two full-length ones, in a floating
-window built the way the panel builds its own:
+Seven row shapes, a width ladder, and two full-length lists, spread across
+**four short windows shown one after another** — each built the way the panel
+builds its own: floating rather than modal, titles bound and filled only once
+the window is up, and the string shapes `describeSuggestion` produces.
 
-| | Row shape | Question |
+| Window | Blocks | Question |
 |---|---|---|
-| A | `width=330, truncation="tail"` | control — the panel as it ships |
-| B | `width=330, height_in_lines=2`, no truncation | does a *bound* title wrap? |
-| C | as B plus `truncation="tail"` | does truncation defeat wrapping? |
-| D | no `width`, `fill_horizontal` only | the known zero-width collapse |
-| E | `width=330, height_in_lines=2` | is `width` a floor the window can stretch, or fixed? |
-| F | the rows inside a deliberately undersized `scrolled_view` | which scrollers does the host draw? |
-| G | `selectable=true` | can the text be selected — and does `mouse_down` still fire? |
-| H | A, ten rows deep | do all ten rows fit, or is the complaint vertical after all? |
-| I | B, ten rows deep | does wrapping make the list too tall to fit? |
+| 1 — widths | A `width=330, truncation="tail"` (the panel today), then the same long name at 440, 560, 680 | how wide does it have to be? |
+| 2 — shapes | B `height_in_lines=2` no truncation · C the same plus `truncation="tail"` · D no `width` · G `selectable=true` · F inside an undersized `scrolled_view` | can a name show its whole self where it is? |
+| 3 — ten plain rows | H, all ten as the panel draws them | do all ten fit? |
+| 4 — ten wrapped rows | I, all ten at `height_in_lines=2` | does wrapping make the list too tall? |
+
+Four windows rather than one because the first version came out taller than the
+screen: the last block sat below the bottom edge, the title bar was out of
+reach, and the questionnaire behind it could not be got to at all. A probe
+nobody can finish measures nothing. So each window stays short, the button that
+advances sits at the **top** and closes the window through
+`closeFloatingDialogsForPlugin` rather than trusting a title bar that may not be
+reachable, and the questionnaire lives inside a `scrolled_view` so it cannot
+outgrow the screen either.
+
+**Whether a floating window can be moved or resized at all is one of the
+measurements**, and it is made by comparison rather than by opinion.
+`presentFloatingDialog`'s key list in `ui.dll` reads `onShow save_frame
+blockTask background_color closable maximizable minimizable borderless skin
+margin position …` — `resizable` is *not* in it, though `AgViewWin32Window` one
+chunk away does read `resizable`, with `horizontally` and `vertically` beside
+it. So window 1 asks for every frame key including `resizable = true`, window 2
+asks for none (exactly as the real panel does), and window 4 asks for
+`resizable = "horizontally"`. Whatever the answers are, the difference between
+them is the finding — and if none of the three can be resized, then the panel
+can never be widened either, and "let the name column grow with the window" is
+dead rather than merely unproven.
 
 G is not only about readability: `selectable` may swallow the click that picks a
-suggestion, so the probe counts clicks per variant and reports them.
+suggestion, so every block's name carries the same `mouse_down` and the report
+prints clicks per block. If `selectable` eats the click, G's count stays at zero
+while the others rise — a number, not an impression.
 
-H and I are the question the user's own words asked for. Four rows fit anything,
-so nothing else here can say whether ten do — and if they do not, "add a scroll
-bar" was literally right and wrapping is the wrong first fix, because it makes
-the list taller still. Two more questions ask the same thing of the real panel,
-which is the only window with the saved frame the user lives with, so have it
-open with suggestions loaded before running the probe.
+Two further questions ask about the **real panel**, which is the only window
+carrying the saved frame the user lives with, so have it open with suggestions
+loaded before starting. If ten rows do not fit there, "add a scroll bar" was
+literally right and wrapping is the wrong first fix, because it makes the list
+taller still.
 
-Drag the window much wider before closing it — that is the measurement E and A
-exist for. Closing it opens a questionnaire, one question per variant, and the
-answers go into the Desktop log with the rest. Nothing in the SDK reports layout
-back: there is no way to ask a view how wide it ended up or how many lines it
-drew, so the person watching is the instrument.
+Nothing in the SDK reports layout back — there is no way to ask a view how wide
+it ended up or how many lines it drew — so the questionnaire at the end is the
+instrument, the same way the scrolled-view probe measures "press Escape when it
+is usable" against the user.
 
 
 
