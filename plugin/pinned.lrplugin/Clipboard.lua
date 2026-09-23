@@ -4,8 +4,12 @@
   Putting a short piece of text on the system clipboard.
 
   The SDK has no clipboard API at all -- there is no LrClipboard, and no view
-  control that is both read-only and selectable, so text the plugin shows can
-  normally only be retyped. That matters for the observation ID: linking a
+  control that is both read-only and clickable and selectable. `static_text`
+  does take `selectable = true`, and the text really can be selected and
+  copied -- but a selectable row stops reporting `mouse_down`, measured in
+  explore/probes/sdkprobe, so making a row copyable would cost the click that
+  uses it. Text the plugin shows can therefore only be retyped. That matters
+  for the observation ID: linking a
   second photo to an observation means getting that number from the panel into
   a dialog, and retyping a nine-digit number is exactly where a typo turns into
   a photo attached to a stranger's observation.

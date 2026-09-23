@@ -18,8 +18,8 @@
   asked: floating windows rather than modals, titles bound to a property table,
   built empty and filled only once the window is already on screen, and the
   string shapes `PanelCore.describeSuggestion` actually produces -- including
-  the `- <note>` tail ("genus, containing ... and 8 others") that is the
-  longest thing the panel can build.
+  the `- <note>` tail ("family, containing <name>") that is the longest thing
+  the panel can build.
 
   **Four short windows, shown one after another, rather than one tall one.**
   The first cut put every variant in a single window, which came out taller
@@ -87,9 +87,18 @@ local PANEL_ROWS = 10
 -- can produce belong to the rows whose tail carries the reason to pick them,
 -- which is what makes losing the tail expensive rather than untidy.
 --
+-- The first version of this string ended "and 8 others", which the formatter
+-- cannot emit: `coarserRows` builds the note as `<rank>, ` plus one of
+-- `agreed by top suggestions`, `containing <name>`, or `from the top
+-- suggestion`. An invented sample measures an invented problem, and this one
+-- was 30 characters short of what the panel really draws -- a width that
+-- passed against it would have shipped too narrow. Taken now from
+-- explore/measure_suggestion_widths.py, which runs real taxa through the real
+-- formatter; this is the longest of 2,400.
+--
 -- The chosen-row mark is included because it is part of what has to fit.
-local LONGEST = "\226\151\143 Bombardier Beetles (Brachinus) - genus, "
-  .. "containing Brachinus crepitans and 8 others"
+local LONGEST = "\226\151\143 Herb-Paris, False Hellebores, Trilliums and "
+  .. "allies (Melanthiaceae) - family, containing Trillium grandiflorum"
 
 local TITLES = {
   LONGEST,

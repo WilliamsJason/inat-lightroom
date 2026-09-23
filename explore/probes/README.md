@@ -136,6 +136,22 @@ it ended up or how many lines it drew — so the questionnaire at the end is the
 instrument, the same way the scrolled-view probe measures "press Escape when it
 is usable" against the user.
 
+**What it answered.** A floating dialog honours `resizable = true` and ignores
+`resizable = "horizontally"`; one given no frame keys cannot be dragged at all;
+`maximizable` produced no Maximize. Resizing gained nothing, because the extra
+width went to the margin and every control kept its declared width — a column
+cannot grow with its window. `height_in_lines` did not wrap a bound title, at
+either truncation setting or across ten rows. `selectable = true` made the text
+genuinely copyable and the click counter for that block stayed at zero while
+its neighbours rose. Ten rows fitted; the complaint was never vertical.
+
+One block misled us and is worth the warning: F scrolled horizontally with its
+contents still clickable, but scrolling right did **not** reveal the rest of the
+name, because the row inside it was the panel's own `width = 330,
+truncation = "tail"` row and had already truncated itself before the scroller
+saw it. Whether a width-less row inside a scroller sizes to its text is still
+unknown — block D says a width-less row collapses outside one.
+
 
 
 Measured against a 6,591 photo catalog on Lightroom Classic, Windows. The
