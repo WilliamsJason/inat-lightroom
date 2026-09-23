@@ -154,8 +154,8 @@ return {
   -- plugin that calls itself pre-release ships that label to everyone.
   VERSION = {
     major  = 0,
-    minor  = 2,
-    revision = 1,
-    display = "0.2.1",
+    minor  = 3,
+    revision = 0,
+    display = "0.3.0",
   },
 }
