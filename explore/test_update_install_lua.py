@@ -28,7 +28,7 @@ FAKE_FS = """
 function(initial)
   local fs = {
     files = {}, copies = {}, deletes = {}, writes = {}, ops = {},
-    failCopy = nil,
+    failCopy = nil, failCopyTimes = nil, vanishAfterCopy = nil,
   }
 
   for path, contents in pairs(initial or {}) do
@@ -55,9 +55,23 @@ function(initial)
   function api.copy(from, to)
     fs.copies[#fs.copies + 1] = from .. " -> " .. to
     fs.ops[#fs.ops + 1] = "copy"
+
     if fs.failCopy and from:find(fs.failCopy, 1, true) then
-      return false, "copy refused by the test"
+      -- failCopyTimes = n fails the first n attempts and then works, which is
+      -- what a scanner holding the file open looks like. Left nil, it never
+      -- works.
+      if fs.failCopyTimes == nil or fs.failCopyTimes > 0 then
+        if fs.failCopyTimes then fs.failCopyTimes = fs.failCopyTimes - 1 end
+        return false, "copy refused by the test"
+      end
     end
+
+    -- Reports success and writes nothing: the 0.3.0 bug exactly, and the only
+    -- way to reach the check that reads the folder back.
+    if fs.vanishAfterCopy and from:find(fs.vanishAfterCopy, 1, true) then
+      return true
+    end
+
     fs.files[to] = fs.files[from]
     return true
   end
@@ -380,6 +394,7 @@ def test_a_failed_copy_leaves_the_staging_folder_for_the_next_attempt(
 ):
     fs, state = staged_ready
     state.failCopy = "Updater.lua"
+    state.readOnly = True
 
     assert install.apply(PLUGIN, fs) is None
     assert state.files[PLUGIN + "/.update-staging/READY"] == "v0.2.0", (
@@ -391,6 +406,7 @@ def test_a_failed_copy_leaves_the_staging_folder_for_the_next_attempt(
 def test_a_failed_copy_is_logged_rather_than_raised(plugin, install, staged_ready):
     fs, state = staged_ready
     state.failCopy = "Updater.lua"
+    state.readOnly = True
 
     install.apply(PLUGIN, fs)
 
@@ -398,6 +414,127 @@ def test_a_failed_copy_is_logged_rather_than_raised(plugin, install, staged_read
         "this runs during shutdown, where there is no user to show a dialog "
         "to, so the log is the only place it can say anything"
     )
+
+
+# ---------------------------------------------------------------------------
+# Not giving up on the first refusal
+# ---------------------------------------------------------------------------
+
+
+def test_a_copy_that_fails_once_is_tried_again(install, staged_ready):
+    """The usual reason a copy into the plugin folder fails has nothing to do
+    with the plugin and nothing to do with the next second -- a scanner or a
+    sync client holding the destination open, which lets go."""
+    fs, state = staged_ready
+    state.failCopy = "Updater.lua"
+    state.failCopyTimes = 1
+
+    assert install.apply(PLUGIN, fs) == "v0.2.0"
+    assert state.files[PLUGIN + "/Updater.lua"] is not None
+
+
+def test_the_retries_do_not_go_on_forever(install, staged_ready):
+    fs, state = staged_ready
+    state.failCopy = "Updater.lua"
+    state.failCopyTimes = 99
+    state.readOnly = True
+
+    assert install.apply(PLUGIN, fs) is None
+    assert len(_from_lua(state.copies)) < 20, (
+        "this runs while Lightroom is trying to close; a folder that refuses "
+        "every write must not hold shutdown open indefinitely"
+    )
+
+
+def test_a_file_copy_will_not_write_is_written_byte_by_byte(install, staged_ready):
+    """A different SDK call and a different file handle, so whatever blocked
+    LrFileUtils.copy is not automatically blocking this."""
+    fs, state = staged_ready
+    state.failCopy = "Updater.lua"
+
+    assert install.apply(PLUGIN, fs) == "v0.2.0"
+    assert state.files[PLUGIN + "/Updater.lua"] is not None
+    assert PLUGIN + "/Updater.lua" in _from_lua(state.writes)
+
+
+def test_a_recovered_copy_says_so_in_the_log(plugin, install, staged_ready):
+    """Recovering silently would hide a folder that is starting to fail."""
+    fs, state = staged_ready
+    state.failCopy = "Updater.lua"
+
+    install.apply(PLUGIN, fs)
+
+    assert any("Updater.lua" in line and "warn" in line
+               for line in plugin.log_lines)
+
+
+# ---------------------------------------------------------------------------
+# Reading the folder back
+# ---------------------------------------------------------------------------
+
+
+def test_a_copy_that_lies_about_succeeding_is_caught(install, staged_ready):
+    """The 0.3.0 bug, reproduced: every copy reports success and one file is
+    not there. Believing the copies is what left a user with a plugin missing
+    ExportPresets.lua and no staged copy left to recover from."""
+    fs, state = staged_ready
+    state.vanishAfterCopy = "Updater.lua"
+
+    assert install.apply(PLUGIN, fs) is None
+
+
+def test_a_swap_that_cannot_be_verified_keeps_the_staging_folder(
+    install, staged_ready
+):
+    """The staged copy is the only remaining source of the missing file. The
+    whole failure mode is that it got deleted anyway."""
+    fs, state = staged_ready
+    state.vanishAfterCopy = "Updater.lua"
+
+    install.apply(PLUGIN, fs)
+
+    assert state.files[PLUGIN + "/.update-staging/READY"] == "v0.2.0"
+    assert state.files[STAGED + "/Updater.lua"] is not None
+
+
+def test_the_missing_file_is_named_in_the_log(plugin, install, staged_ready):
+    fs, state = staged_ready
+    state.vanishAfterCopy = "Updater.lua"
+
+    install.apply(PLUGIN, fs)
+
+    assert any("Updater.lua" in line and "could not apply" in line
+               for line in plugin.log_lines), (
+        "naming the file is the difference between a report someone can act "
+        "on and one that just says the update failed"
+    )
+
+
+def test_nothing_is_deleted_before_the_swap_is_verified(install, staged_ready):
+    """Deletions are what make a bad swap unrecoverable, so they wait until
+    every copied file has been found on disk."""
+    fs, state = staged_ready
+    state.vanishAfterCopy = "Updater.lua"
+
+    install.apply(PLUGIN, fs)
+
+    assert "delete" not in _from_lua(state.ops)
+
+
+def test_a_verified_swap_says_so_rather_than_counting_intentions(
+    plugin, install, staged_ready
+):
+    """The old line printed the length of the copy plan -- what was meant to
+    happen, worded as what did. It read identically whether or not the files
+    arrived, which made the one log line that should have caught this bug the
+    one line that could not."""
+    fs, _state = staged_ready
+    install.apply(PLUGIN, fs)
+
+    applied = [line for line in plugin.log_lines if "applied" in line]
+
+    assert applied, "a successful swap has to leave a trace"
+    assert "verified" in applied[0]
 
 
 def test_copies_happen_before_deletions(install, staged_ready):
