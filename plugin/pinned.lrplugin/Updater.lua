@@ -287,10 +287,19 @@ end
 
 --- The whole check: what is installed, what is published, and whether to care.
 --
--- @return a table { current, latest, isNewer, canInstall }, or nil plus a
---   message. canInstall is false for a release that has no archive attached --
---   which happens if a release is published by hand rather than by the
---   workflow -- so the UI can offer the release page instead of a dead button.
+-- @return a table { current, latest, isNewer, canInstall, canReinstall }, or
+--   nil plus a message.
+--
+-- canInstall is false for a release that has no archive attached -- which
+-- happens if a release is published by hand rather than by the workflow -- so
+-- the UI can offer the release page instead of a dead button.
+--
+-- canReinstall is the same question with the version comparison taken out,
+-- and it exists for repairing a damaged installation. A repair is by
+-- definition a reinstall of the release you are already on, so every check
+-- that guards an *update* -- "is it newer?" -- is the wrong guard for it. The
+-- two are kept as separate fields rather than one being derived at the call
+-- site, so that a button cannot accidentally be enabled by the wrong one.
 function Updater.check()
   local current = Updater.currentVersion()
 
@@ -298,6 +307,7 @@ function Updater.check()
   if not release then return nil, err end
 
   local newer = Updater.isNewer(release.version, current)
+  local downloadable = release.assetUrl ~= nil and release.sumsUrl ~= nil
 
   logger:info(string.format(
     "Updater: installed %s, published %s%s",
@@ -306,10 +316,11 @@ function Updater.check()
     newer and " (update available)" or ""))
 
   return {
-    current    = current,
-    latest     = release,
-    isNewer    = newer,
-    canInstall = newer and release.assetUrl ~= nil and release.sumsUrl ~= nil,
+    current      = current,
+    latest       = release,
+    isNewer      = newer,
+    canInstall   = newer and downloadable,
+    canReinstall = downloadable,
   }
 end
 

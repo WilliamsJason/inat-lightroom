@@ -172,6 +172,91 @@ def test_installing_without_checking_first_explains_itself(plugin, provider):
 
 
 # ---------------------------------------------------------------------------
+# A damaged installation
+# ---------------------------------------------------------------------------
+
+
+def test_a_missing_file_is_reported_the_moment_the_section_opens(
+        plugin, provider):
+    """The Plug-in Manager is where someone ends up after an internal error,
+    and it is the one surface that still draws when the folder has lost files
+    -- Lightroom loads this section itself. So it has to say what is wrong
+    without being asked, rather than waiting for Check for updates."""
+    plugin.remove_plugin_file("ExportPresets.lua")
+
+    p = props(plugin)
+    provider["initialise"](p, PLUGIN_PATH)
+
+    assert p["damaged"] is True
+    assert "ExportPresets.lua" in p["status"]
+    assert "Repair Installation" in p["status"]
+
+
+def test_a_complete_installation_is_not_called_damaged(plugin, provider):
+    p = props(plugin)
+    provider["initialise"](p, PLUGIN_PATH)
+
+    assert p["damaged"] is False
+
+
+def test_the_damage_is_said_before_anything_else(plugin, provider):
+    """A staged update and a damaged folder can be true at once. On its own,
+    "Restart to finish updating" is the more cheerful line and the less useful
+    one -- the restart is what the user was about to do anyway, and they have
+    no way to know it is also the thing that puts the missing file back. So
+    the damage leads, and the restart is offered as its cure."""
+    plugin.remove_plugin_file("ExportPresets.lua")
+    plugin.require("UpdateInstall")["pending"] = plugin.eval(
+        'function() return "v9.9.9" end')
+
+    p = props(plugin)
+    provider["initialise"](p, PLUGIN_PATH)
+
+    assert p["damaged"] is True
+    assert p["status"].startswith("This installation is damaged")
+    assert "restart" in p["status"].lower()
+
+
+def test_repair_does_not_require_checking_for_updates_first(plugin, provider):
+    """runInstall refuses without a check, and rightly. Repair must not copy
+    that rule: someone whose plugin is broken should not have to discover that
+    a different button has to be pressed first."""
+    plugin.require("UpdateCore")["repair"] = plugin.eval(
+        'function() return { latest = { tag = "v9.9.9" } } end')
+
+    p = props(plugin)
+    provider["initialise"](p, PLUGIN_PATH)
+
+    provider["runRepair"](p)
+
+    assert "Check for updates first" not in p["status"]
+
+
+def test_the_section_offers_a_repair_button(plugin, provider):
+    """The button is the second half of the message. Naming a repair the user
+    cannot find is worse than saying nothing."""
+    titles = button_titles(plugin, provider, props(plugin))
+
+    assert "Repair Installation" in titles
+
+
+def button_titles(plugin, provider, property_table):
+    found = []
+
+    def walk_buttons(node):
+        if not is_table(node):
+            return
+        title = node["title"]
+        if isinstance(title, str) and node["action"] is not None:
+            found.append(title)
+        for _, value in node.items():
+            walk_buttons(value)
+
+    walk_buttons(section(plugin, provider, property_table))
+    return found
+
+
+# ---------------------------------------------------------------------------
 # The bug: bindings that resolve against nothing
 # ---------------------------------------------------------------------------
 

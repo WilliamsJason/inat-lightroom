@@ -205,12 +205,28 @@ end
 
 function realFs.copy(from, to)
   LrFileUtils.createAllDirectories(LrPathUtils.parent(to))
-  -- LrFileUtils.copy will not overwrite, and every file in an update already
-  -- exists at the destination.
+  -- LrFileUtils.copy will not overwrite, and most files in an update already
+  -- exist at the destination. A release that adds a module is the exception,
+  -- and that is the case this whole path has to get right.
   if LrFileUtils.exists(to) then
     LrFileUtils.delete(to)
   end
-  return LrFileUtils.copy(from, to)
+
+  local ok, result = pcall(LrFileUtils.copy, from, to)
+  if not ok then return false, tostring(result) end
+
+  -- Checked by looking rather than by believing the return value. The SDK does
+  -- not document what LrFileUtils.copy returns on failure, and the caller's
+  -- guard tested `== false` -- so a copy that failed by returning nil would
+  -- have been read as success, the swap would have finished, and the staging
+  -- folder would then have been deleted. That is a plugin permanently missing
+  -- one file, with nothing in the log and nothing left to retry from, which is
+  -- indistinguishable from what a user reported on 0.3.0.
+  if LrFileUtils.exists(to) ~= "file" then
+    return false, "the file was not there afterwards"
+  end
+
+  return result == nil and true or result
 end
 
 function realFs.delete(path)
@@ -481,7 +497,11 @@ function UpdateInstall.apply(pluginPath, fs)
       local from = staged .. "/" .. relative
       local to   = pluginPath .. "/" .. relative
       local copied, copyErr = fs.copy(from, to)
-      if copied == false then
+      -- Any falsy answer, not just `false`. An fs.copy that reports failure by
+      -- returning nil used to pass this guard, and the cost of reading a
+      -- failed copy as a success is a file silently dropped from the
+      -- installation for good.
+      if not copied then
         error("could not copy " .. relative .. ": " .. tostring(copyErr), 0)
       end
     end

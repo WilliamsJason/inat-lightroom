@@ -32,6 +32,7 @@ pinned.lrplugin/
 ├── Clipboard.lua              # Puts short text on the system clipboard
 ├── fix_window_z_order.ps1     # The Win32 helper WindowFix shells out to
 ├── PluginInfoProvider.lua     # The plugin's section in the Plug-in Manager
+├── PluginFiles.lua            # What a complete installation contains, and what to say when it is not
 ├── PluginInit.lua             # Load hook: finishes an interrupted update, checks for new ones
 ├── PluginShutdown.lua         # Unload hook: applies a staged update
 ├── Updater.lua                # Reads the release feed and compares versions
@@ -1126,6 +1127,53 @@ what an observation says, and the floating panel is about the photo in front of
 you; neither is about the plugin. There is no SDK call that opens the Plug-in
 Manager, which is the other reason the dialog does the work rather than pointing
 at it.
+
+### Repairing an installation that has lost a file
+
+A user on 0.3.0 hit `Could not load toolkit script: ExportPresets`, days after
+that file first shipped. That is Lightroom's wording for **a file that is not
+on disk** — a syntax error names a line instead — so their plugin folder was
+incomplete. See the SDK notes for the two messages side by side.
+
+The published archive contained the file, the Lua parses, and the updater's
+copy loop handles new files, so how their copy of it went missing is still not
+proven. What the plugin does about it is defensible either way, and falls into
+three parts:
+
+**Stop failing fatally.** A top-level `require` in a menu script that cannot be
+resolved gives an internal-error dialog with no owner and no next step.
+`PluginFiles.protect` wraps the entry points so the failure becomes a sentence
+naming the missing file and the button that fixes it. It re-raises anything
+that is *not* a missing file, because turning a genuine bug into "reinstall the
+plugin" sends the user away with the only diagnostic anyone had.
+
+**Say so unprompted.** `PluginInfoProvider` compares the folder against
+`PluginFiles.FILES` when the Plug-in Manager section opens, and leads with the
+damage — ahead of a staged update, which is the cheerier line and the less
+useful one.
+
+**Offer a way back.** **Repair Installation** re-downloads the latest release
+and stages it through exactly the same verify-and-apply path an update uses. It
+reuses that path rather than re-fetching the one missing file, because a
+shortcut would be a second, less-tested way of writing into a folder that is
+already broken. `Updater.check` gained a separate `canReinstall` alongside
+`canInstall` so the button cannot be enabled by the wrong guard: every other
+gate on that path asks "is it newer?", and for a damaged copy of the current
+release the answer is no.
+
+`PluginFiles.lua` requires nothing but the SDK — not even `Log` — so that it
+stays loadable in a folder that has lost everything else. `PluginInfoProvider`
+requires it through a `pcall`, so a folder that has lost `PluginFiles.lua`
+itself still draws the section that can repair it.
+
+Two guardrails came with it: a test asserts every `require "X"` in the plugin
+has an `X.lua` next to it, and the release workflow now diffs the unpacked
+archive against `plugin/pinned.lrplugin` file by file rather than spot-checking
+four names.
+
+The repair lives in the Plug-in Manager because Lightroom loads that section
+from a file it reads itself, so it survives a folder that has lost other files.
+Plug-in Extras menu items do not.
 
 ## What comes next
 

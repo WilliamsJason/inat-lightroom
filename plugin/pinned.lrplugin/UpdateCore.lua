@@ -163,6 +163,71 @@ function UpdateCore.stagedText(result)
 end
 
 --------------------------------------------------------------------------------
+-- Repairing
+--------------------------------------------------------------------------------
+
+--- Reinstall the current release over a damaged installation.
+--
+-- Must be called from a task.
+--
+-- Applying an update is a file-by-file copy (UpdateInstall.apply), and a copy
+-- that stops part way leaves a folder that is mostly one version and missing
+-- some of it. Lightroom's report of that is "Could not load toolkit script:
+-- <module>" from whichever menu item happened to need the absent file, which
+-- names no cause and offers no action -- and until this existed there was no
+-- action to offer, because the updater only ever installs something *newer*
+-- and a repair is a reinstall of the version you already have.
+--
+-- Deliberately the same machinery as an update rather than a targeted
+-- re-fetch of the missing files: the archive is downloaded, checksummed,
+-- unpacked and applied at shutdown exactly as before. A repair that took a
+-- shortcut would be a second, less tested way of writing to the plugin folder,
+-- and the folder is the thing that is already broken.
+--
+-- It reinstalls the latest release rather than the installed version, because
+-- GitHub's releases/latest is the only archive the plugin can be sure still
+-- exists and still has a published checksum. For anyone on the current
+-- release -- which is everyone this is for -- they are the same thing, and the
+-- caller is told the version so it can say which one it will put back.
+--
+-- @return the check result, or nil plus a message fit to show a user
+function UpdateCore.repair()
+  local result, err = UpdateCore.check()
+  if not result then return nil, err end
+
+  if not result.canReinstall then
+    return nil, "the latest release has no downloadable plugin attached, so "
+      .. "it cannot be reinstalled from here. Download it from the releases "
+      .. "page and replace the folder by hand"
+  end
+
+  local hash, hashErr = Updater.expectedHash(result.latest)
+  if not hash then
+    return nil, "could not read the release checksum: " .. tostring(hashErr)
+  end
+
+  local ok, stageErr = UpdateInstall.stage(result.latest, hash)
+  if not ok then return nil, stageErr end
+
+  logger:info("Updater: staged a repair of " .. tostring(result.latest.tag))
+  return result
+end
+
+--- What to tell someone once a repair is staged.
+--
+-- Worded as a reinstall rather than as an update. Someone pressing Repair has
+-- a plugin that is already misbehaving, and "Version 0.3.0 is ready" reads as
+-- though nothing happened when 0.3.0 is the version they are on.
+function UpdateCore.repairedText(result)
+  local version = result and result.latest
+    and Updater.versionString(result.latest.version) or "this release"
+
+  return "Version " .. version .. " has been downloaded and checked. It will "
+    .. "be reinstalled over the damaged copy when you quit Lightroom, and the "
+    .. "restored files will be in use next time you start it."
+end
+
+--------------------------------------------------------------------------------
 -- The unattended check
 --------------------------------------------------------------------------------
 

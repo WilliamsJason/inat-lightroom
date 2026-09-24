@@ -65,6 +65,18 @@ Nothing is installed without you clicking it. If your plugin folder is
 read-only the plugin says so rather than failing half way — download the release
 and replace the folder by hand.
 
+### If a file has gone missing
+
+If Lightroom shows **"An internal error has occurred. Could not load toolkit
+script: …"**, a file is missing from the plugin folder. The plugin will now say
+so in plain words instead, and the **Updates** section names the missing files
+as soon as you open it.
+
+**Repair Installation** in that section downloads the current release and
+reinstalls it over the damaged copy, checksum and all. It works whether or not
+there is a newer version, and you do not have to press **Check for Updates**
+first. Like any update, it finishes when you quit Lightroom.
+
 ---
 
 ## First-time setup
