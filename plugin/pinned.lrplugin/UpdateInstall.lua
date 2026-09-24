@@ -57,6 +57,20 @@ UpdateInstall.WIN_SCRIPT    = "install_update.ps1"
 UpdateInstall.MAC_SCRIPT    = "install_update.sh"
 UpdateInstall.ARCHIVE_NAME  = "inat-lightroom-update.zip"
 
+--- How many times one file is handed to LrFileUtils.copy before giving up on it.
+--
+-- A copy into the plugin folder can fail for reasons that have nothing to do
+-- with the plugin and nothing to do with the next second: a virus scanner or a
+-- sync client holding the destination open is the usual one, and it lets go.
+-- Retrying costs nothing when the first attempt works, which is almost always.
+--
+-- Not retried with a pause between attempts, tempting as that is. The swap runs
+-- inside a plain pcall, and LrTasks.sleep yields -- yielding inside a C call is
+-- the mistake documented at length in lightroom-sdk-notes.md. The fallback below
+-- is the better answer anyway, because it does something different rather than
+-- the same thing more slowly.
+UpdateInstall.COPY_ATTEMPTS = 3
+
 --- How big a plugin archive is allowed to be, in bytes.
 --
 -- The whole download is held in memory as a Lua string before it reaches disk,
@@ -470,6 +484,84 @@ function UpdateInstall.swapPlan(installed, staged)
   return plan
 end
 
+--------------------------------------------------------------------------------
+-- The swap
+--------------------------------------------------------------------------------
+
+--- Copy one file the hard way: read it, write it.
+--
+-- The fallback for a destination LrFileUtils.copy will not write. It goes
+-- through a different SDK call and a different file handle, so the thing that
+-- blocked the copy is not automatically the thing that blocks this.
+--
+-- Only reached after the ordinary copy has failed every attempt, so being the
+-- slower route does not matter.
+local function copyBytes(fs, from, to)
+  if not fs.readFile or not fs.writeFile then
+    return false, "no byte-for-byte copy is available"
+  end
+
+  local contents = fs.readFile(from)
+  if not contents then return false, "the staged file could not be read" end
+
+  local written, writeErr = fs.writeFile(to, contents)
+  if not written then return false, tostring(writeErr) end
+
+  -- Same rule as realFs.copy: checked by looking, not by believing.
+  if not fs.exists(to) then return false, "the file was not there afterwards" end
+
+  return true
+end
+
+--- Put one staged file in place, trying more than once and then trying harder.
+--
+-- Returns true, or false plus the last thing that went wrong.
+local function copyFile(fs, from, to, relative)
+  local lastErr
+
+  for attempt = 1, UpdateInstall.COPY_ATTEMPTS do
+    local copied, copyErr = fs.copy(from, to)
+    if copied then
+      if attempt > 1 then
+        logger:warn("Updater: copied " .. relative .. " on attempt " .. attempt)
+      end
+      return true
+    end
+    lastErr = copyErr
+  end
+
+  logger:warn("Updater: could not copy " .. relative .. " in " ..
+    UpdateInstall.COPY_ATTEMPTS .. " attempts (" .. tostring(lastErr) ..
+    "); trying a byte-for-byte copy")
+
+  local written, writeErr = copyBytes(fs, from, to)
+  if written then
+    logger:warn("Updater: recovered " .. relative .. " with a byte-for-byte copy")
+    return true
+  end
+
+  return false, tostring(lastErr) .. "; byte-for-byte copy also failed: " ..
+    tostring(writeErr)
+end
+
+--- The staged files that did not end up in the plugin folder.
+--
+-- The swap's own evidence that it did what it said. Every copy reported success
+-- to get here, which is exactly what the 0.3.0 code reported while dropping a
+-- file, so the answer is read back off disk rather than inferred from the
+-- copying.
+local function notInPlace(fs, pluginPath, relatives)
+  local missing = {}
+
+  for _, relative in ipairs(relatives) do
+    if not fs.exists(pluginPath .. "/" .. relative) then
+      missing[#missing + 1] = relative
+    end
+  end
+
+  return missing
+end
+
 --- Apply a staged update over the installed plugin.
 --
 -- Called from LrShutdownPlugin, and again from LrInitPlugin for the case where
@@ -496,7 +588,7 @@ function UpdateInstall.apply(pluginPath, fs)
     for _, relative in ipairs(plan.copy) do
       local from = staged .. "/" .. relative
       local to   = pluginPath .. "/" .. relative
-      local copied, copyErr = fs.copy(from, to)
+      local copied, copyErr = copyFile(fs, from, to, relative)
       -- Any falsy answer, not just `false`. An fs.copy that reports failure by
       -- returning nil used to pass this guard, and the cost of reading a
       -- failed copy as a success is a file silently dropped from the
@@ -504,6 +596,17 @@ function UpdateInstall.apply(pluginPath, fs)
       if not copied then
         error("could not copy " .. relative .. ": " .. tostring(copyErr), 0)
       end
+    end
+
+    -- Read back before deleting anything. Every copy above said it worked;
+    -- this is the part that goes and looks. A swap that cannot prove it is
+    -- complete is treated as a failed swap, which keeps the staging folder and
+    -- gets the whole thing retried at the next launch -- rather than leaving
+    -- someone with a plugin missing a file and no copy of it left anywhere.
+    local missing = notInPlace(fs, pluginPath, plan.copy)
+    if #missing > 0 then
+      error(#missing .. " file(s) did not arrive: " ..
+        table.concat(missing, ", "), 0)
     end
 
     for _, relative in ipairs(plan.delete) do
@@ -522,8 +625,14 @@ function UpdateInstall.apply(pluginPath, fs)
   end
 
   UpdateInstall.discard(pluginPath, fs)
+  -- "verified present", not just a number. The old wording was the length of
+  -- the copy plan -- a count of what was meant to happen, printed as though it
+  -- were a count of what did, and it read identically whether or not every
+  -- file arrived. That made the one line in the log that should have caught
+  -- this bug the one line that could not. The count is only logged now if
+  -- every one of those files has been found on disk afterwards.
   logger:info("Updater: applied " .. tostring(tag) .. " (" ..
-    tostring(result) .. " files)")
+    tostring(result) .. " files, all verified present)")
   return tag
 end
 

@@ -1171,6 +1171,32 @@ has an `X.lua` next to it, and the release workflow now diffs the unpacked
 archive against `plugin/pinned.lrplugin` file by file rather than spot-checking
 four names.
 
+### The swap proves itself, and tries harder before failing
+
+`UpdateInstall.apply` used to log `applied <tag> (N files)`, where N was the
+length of the copy plan — a count of what was *meant* to happen, worded as a
+count of what did. It read identically whether or not every file arrived, which
+made the one line in the log that should have caught this bug the one line that
+could not. The swap now reads the folder back after copying and only reports a
+count it has confirmed on disk.
+
+A swap that cannot prove itself is treated as a failed swap: the staging folder
+is kept and the whole thing is retried at the next launch. Deletions wait until
+after the verification for the same reason — they are what makes a bad swap
+unrecoverable, and the staged copy is the only remaining source of a file that
+did not arrive.
+
+Before failing, a refused copy is retried (`COPY_ATTEMPTS`) and then attempted
+byte-for-byte through `readFile`/`writeFile`, which is a different SDK call and
+a different file handle, so whatever was holding the destination open is not
+automatically holding that one. Both recoveries log at `warn`, because a folder
+that is starting to fail is worth knowing about even when the update succeeds.
+
+There is deliberately no pause between attempts. The swap runs inside a plain
+`pcall` and `LrTasks.sleep` yields, which is the mistake documented at length in
+the SDK notes; the byte-for-byte fallback is the better answer anyway, because
+it does something different rather than the same thing more slowly.
+
 The repair lives in the Plug-in Manager because Lightroom loads that section
 from a file it reads itself, so it survives a folder that has lost other files.
 Plug-in Extras menu items do not.

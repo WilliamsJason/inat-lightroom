@@ -1751,7 +1751,8 @@ Two things follow for any plugin that updates itself:
 
 - a copy that "succeeds" without the destination existing is how a folder ends
   up incomplete, so verify the destination after copying rather than trusting
-  the return value (`LrFileUtils.copy` does not document one);
+  the return value (`LrFileUtils.copy` does not document one), and read the
+  whole folder back before deleting anything you cannot get again;
 - nothing in the SDK will tell a plugin its own folder is incomplete, so if
   that matters it has to check — see `PluginFiles.lua`, which compares the
   folder against a manifest and is required by nothing so that it stays
