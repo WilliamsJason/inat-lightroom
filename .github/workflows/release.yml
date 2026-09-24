@@ -78,14 +78,27 @@ jobs:
       # wrong produces a plugin folder Lightroom cannot load, and the updater
       # would have already overwritten the working copy by the time anyone found
       # out.
-      - name: Check the archive unpacks to a loadable plugin
+      #
+      # Compared file by file rather than by spot-checking a few names. A user
+      # on 0.3.0 hit "Could not load toolkit script: ExportPresets" -- the error
+      # Lightroom raises when a .lua file is not on disk -- and the four
+      # hardcoded checks that used to live here would have passed an archive
+      # missing every other module in the plugin.
+      - name: Check the archive unpacks to a complete plugin
         run: |
           set -euo pipefail
           unzip -q "dist/${{ steps.build.outputs.name }}" -d /tmp/check
-          test -f /tmp/check/pinned.lrplugin/Info.lua
-          test -f /tmp/check/pinned.lrplugin/fix_window_z_order.ps1
-          test -f /tmp/check/pinned.lrplugin/install_update.ps1
-          test -f /tmp/check/pinned.lrplugin/install_update.sh
+
+          find plugin/pinned.lrplugin -type f -not -path '*/.update-staging/*' \
+            -printf '%P\n' | sort > /tmp/expected.txt
+          find /tmp/check/pinned.lrplugin -type f -printf '%P\n' | sort > /tmp/packed.txt
+
+          if ! diff -u /tmp/expected.txt /tmp/packed.txt; then
+            echo "::error::the archive does not match plugin/pinned.lrplugin"
+            exit 1
+          fi
+
+          echo "$(wc -l < /tmp/packed.txt) files, matching the source folder"
 
       - name: Publish the release
         env:

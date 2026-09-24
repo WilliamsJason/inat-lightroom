@@ -448,6 +448,109 @@ def test_installing_without_checking_is_refused(pair):
     assert "Check for updates first" in state.status
 
 
+# ---------------------------------------------------------------------------
+# Repairing
+# ---------------------------------------------------------------------------
+
+
+def installed_tag() -> str:
+    """The tag of the release this working copy claims to be."""
+    version = LuaPlugin().require("Updater").currentVersion()
+    return "v%d.%d.%d" % (version.major, version.minor, version.revision)
+
+
+def stub_staging(plugin, *, succeeds=True):
+    """Replace UpdateInstall.stage, recording what it was asked to install.
+
+    Field assignment on the required module, which is the same table UpdateCore
+    holds: require caches. The real one downloads and shells out, neither of
+    which belongs in a test about which release a repair chooses.
+    """
+    calls = plugin.eval("function() return {} end")()
+    plugin.require("UpdateInstall").stage = plugin.eval(
+        """
+        function(calls, succeeds)
+          return function(release, hash)
+            calls[#calls + 1] = { tag = release.tag, hash = hash }
+            if succeeds then return true end
+            return nil, "the folder is read-only"
+          end
+        end
+        """
+    )(calls, succeeds)
+    return calls
+
+
+def test_repairing_reinstalls_a_release_that_is_not_newer():
+    """The whole reason repair exists. Every guard on the update path asks "is
+    it newer?", and for a damaged copy of the current release the answer is no
+    -- so an update could never put the missing files back."""
+    tag = installed_tag()
+    plugin, core, _fake = make(release=release_json(tag=tag))
+    calls = stub_staging(plugin)
+
+    result, err = plugin.call(core.repair)
+
+    assert err is None
+    assert result is not None
+    assert [call["tag"] for call in calls.values()] == [tag]
+
+
+def test_repairing_verifies_the_checksum_like_any_other_install():
+    tag = installed_tag()
+    plugin, core, _fake = make(release=release_json(tag=tag))
+    calls = stub_staging(plugin)
+
+    plugin.call(core.repair)
+
+    assert [call["hash"] for call in calls.values()] == [DIGEST], (
+        "a repair writes to the plugin folder exactly as an update does, so "
+        "it cannot be the one path that skips the checksum"
+    )
+
+
+def test_a_release_with_no_archive_cannot_be_repaired_from():
+    plugin, core, _fake = make(release=release_json(assets=False))
+    stub_staging(plugin)
+
+    ok, err = plugin.call(core.repair)
+
+    assert ok is None
+    assert "by hand" in err, "there is nothing here that can put the files back"
+
+
+def test_a_repair_cannot_start_when_github_is_unreachable():
+    plugin, core, _fake = make(reachable=False)
+    stub_staging(plugin)
+
+    ok, err = plugin.call(core.repair)
+
+    assert ok is None
+    assert err
+
+
+def test_a_failed_staging_is_reported_rather_than_claimed():
+    tag = installed_tag()
+    plugin, core, _fake = make(release=release_json(tag=tag))
+    stub_staging(plugin, succeeds=False)
+
+    ok, err = plugin.call(core.repair)
+
+    assert ok is None
+    assert "read-only" in err
+
+
+def test_a_repair_is_described_as_a_reinstall(pair):
+    """"Version 0.3.0 is ready" reads as though nothing happened when 0.3.0 is
+    the version you are already on and the one that is broken."""
+    plugin, core, _fake = pair
+    result, _err = plugin.call(core.check)
+
+    text = core.repairedText(result)
+    assert "reinstalled" in text
+    assert "quit Lightroom" in text
+
+
 def test_the_automatic_check_preference_round_trips(pair):
     plugin, _core, _fake = pair
     provider = plugin.require("PluginInfoProvider")

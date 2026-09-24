@@ -30,6 +30,11 @@ from lupa import lua51
 
 PLUGIN_DIR = Path(__file__).resolve().parent.parent / "plugin" / "pinned.lrplugin"
 
+# Where the fake SDK says the plugin is installed: _PLUGIN.path, in the stub
+# source below. Named here as well so the seeding of the virtual filesystem and
+# the Lua global cannot drift apart.
+PLUGIN_PATH = "/plugins/pinned.lrplugin"
+
 # Lua source for the fake SDK. Kept as Lua rather than built through the bridge
 # so that table semantics (methods called with ':') behave normally.
 _STUB_SOURCE = """
@@ -1147,6 +1152,7 @@ return {
   createdDirectories = createdDirectories,
   deletedPaths = deletedPaths,
   setFile = function(path, contents) virtualFiles[path] = contents end,
+  removeFile = function(path) virtualFiles[path] = nil end,
   clearFiles = function() virtualFiles = {} end,
   setDeleteFails = function(fails) deleteFails = fails end,
   setKeywordsFail = function(fails) keywordsFail = fails end,
@@ -1208,6 +1214,26 @@ class LuaPlugin:
         globals_["package"].path = str(PLUGIN_DIR / "?.lua")
 
         self.env = self.runtime.execute(_STUB_SOURCE)
+        self._seed_plugin_folder()
+
+    def _seed_plugin_folder(self) -> None:
+        """Put the plugin's own shipped files in the virtual filesystem.
+
+        _PLUGIN.path is a real directory in Lightroom, and PluginFiles reads it
+        to decide whether the installation is intact. Leaving it empty here
+        would make every test see a plugin with all of its files missing --
+        which is the state the check exists to find, so nothing would ever
+        exercise the healthy path. Seeded from the real folder rather than from
+        PluginFiles.FILES, so that a test removing a file is removing one that
+        genuinely ships.
+        """
+        for path in sorted(PLUGIN_DIR.iterdir()):
+            if path.is_file():
+                self.env["setFile"](f"{PLUGIN_PATH}/{path.name}", "")
+
+    def remove_plugin_file(self, name: str) -> None:
+        """Delete one of the plugin's own files, as a half-applied update would."""
+        self.env["removeFile"](f"{PLUGIN_PATH}/{name}")
 
     def require(self, module: str):
         """Load a plugin module by name, as the plugin itself would."""

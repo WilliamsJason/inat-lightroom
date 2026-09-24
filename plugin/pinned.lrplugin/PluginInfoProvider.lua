@@ -9,10 +9,18 @@
   dialog, which is about what an observation says, and not in the floating
   panel, which is about the photo in front of you.
 
-  The section is deliberately four lines and three buttons. Everything that can
+  The section is deliberately four lines and four buttons. Everything that can
   go wrong here is reported in the status line rather than in a dialog, because
   the Plug-in Manager is already a modal window and a modal on top of it is how
   you end up with a message nobody can dismiss.
+
+  Repair Installation is the fourth, and it is here rather than in the settings
+  dialog for a reason that is easy to get backwards: the settings dialog is
+  reached through Plug-in Extras, which is a menu of things this plugin's own
+  modules do, and those are exactly what stops working when a module is
+  missing. The Plug-in Manager section is drawn by Lightroom from a file it
+  loads itself, so it survives a folder that has lost other files -- which is
+  the only condition under which anyone needs it.
 --]]
 
 local LrFunctionContext = import "LrFunctionContext"
@@ -24,6 +32,18 @@ local Settings      = require "Settings"
 local Updater       = require "Updater"
 local UpdateCore    = require "UpdateCore"
 local UpdateInstall = require "UpdateInstall"
+local logger        = require "Log"
+
+-- Required defensively, and it is the one require here that has to be.
+--
+-- This section is where a user is sent when a file is missing, so it is the
+-- one surface that must still open when the folder is damaged. A plain
+-- `require` of a module that is itself absent would take the Plug-in Manager
+-- section down with it and close the only door to the repair. Nil means "the
+-- integrity check is not available", which reads as an installation too
+-- damaged to describe -- and the Repair button below does not depend on it.
+local ok, PluginFiles = pcall(require, "PluginFiles")
+if not ok then PluginFiles = nil end
 
 local PluginInfoProvider = {}
 
@@ -31,21 +51,54 @@ local PluginInfoProvider = {}
 -- The section
 --------------------------------------------------------------------------------
 
+--- Which shipped files are absent, as a list. Empty when nothing is, or when
+--- the check itself could not be loaded.
+local function missingFiles(pluginPath)
+  if not PluginFiles then return {} end
+
+  local found, result = pcall(PluginFiles.missing, pluginPath)
+  if not found or type(result) ~= "table" then return {} end
+  return result
+end
+
 --- Fill in the starting state: what is installed, and anything already staged.
 --
 -- Kept apart from the view so a test can watch it without a dialog.
+--
+-- The integrity check runs before the staged-update check and wins the status
+-- line, because a damaged installation is the more urgent of the two and the
+-- less self-explanatory. "Quit and restart to finish installing" is advice
+-- someone can act on without understanding it; "Could not load toolkit script"
+-- is not, and this is the only place that names the cause.
 function PluginInfoProvider.initialise(props, pluginPath)
   props.installedVersion = Updater.versionString(Updater.currentVersion())
   props.result           = nil
   props.busy             = false
 
+  local absent = missingFiles(pluginPath)
+  props.damaged = #absent > 0
+
+  if props.damaged then
+    logger:warn("PluginInfoProvider: missing from the plugin folder: " ..
+      table.concat(absent, ", "))
+  end
+
   local pending = UpdateInstall.pending(pluginPath)
-  if pending then
-    props.staged = true
+  props.staged = pending ~= nil
+
+  if props.damaged and not pending then
+    props.status = "This installation is damaged: " .. #absent ..
+      (#absent == 1 and " file is" or " files are") .. " missing (" ..
+      table.concat(absent, ", ") .. "). Press Repair Installation to download "
+      .. "this release again and put them back."
+  elseif props.damaged then
+    props.status = "This installation is damaged, and version " ..
+      tostring(pending) .. " is staged to replace it. Quit and restart "
+      .. "Lightroom to finish installing it."
+  elseif pending then
     props.status = "Version " .. tostring(pending) .. " is staged. Quit and "
       .. "restart Lightroom to finish installing it."
   else
-    props.staged = false
     props.status = "Not checked yet."
   end
 
@@ -90,6 +143,33 @@ function PluginInfoProvider.runInstall(props)
 
   props.staged = true
   props.status = UpdateCore.stagedText(result)
+  return true
+end
+
+--- Reinstall the current release over a damaged installation.
+-- Must be called from a task.
+--
+-- Unlike runInstall this does not require a prior check: someone arriving here
+-- has a plugin that is failing, and making them press Check for Updates first
+-- -- to be told they are up to date, which is true and unhelpful -- is a step
+-- between them and the fix for no benefit. UpdateCore.repair does its own
+-- check.
+function PluginInfoProvider.runRepair(props)
+  props.busy   = true
+  props.status = "Downloading…"
+
+  local result, err = UpdateCore.repair()
+
+  props.busy = false
+
+  if not result then
+    props.status = "Could not repair this installation: " .. tostring(err)
+    return false
+  end
+
+  props.result = result
+  props.staged = true
+  props.status = UpdateCore.repairedText(result)
   return true
 end
 
@@ -161,6 +241,26 @@ function PluginInfoProvider.sectionsForTopOfDialog(f, props)
             action = function()
               LrTasks.startAsyncTask(function()
                 PluginInfoProvider.runInstall(props)
+              end)
+            end,
+          },
+
+          f:push_button {
+            title = "Repair Installation",
+            -- Live whether or not the integrity check found anything. It is
+            -- the fallback for "the plugin is behaving strangely", and the
+            -- check only knows about files that are absent -- a folder can be
+            -- wrong in ways a list of names cannot see. Disabled only while
+            -- something else is already writing to the folder.
+            enabled = LrView.bind {
+              keys = { "busy", "staged" },
+              operation = function(_binder, values)
+                return not values.busy and not values.staged
+              end,
+            },
+            action = function()
+              LrTasks.startAsyncTask(function()
+                PluginInfoProvider.runRepair(props)
               end)
             end,
           },

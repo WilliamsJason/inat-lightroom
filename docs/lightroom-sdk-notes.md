@@ -1716,6 +1716,49 @@ displayed string from another, which makes it the wrong tool for an export
 
 ---
 
+## Lightroom words a missing script and a broken script differently
+
+Two failures that both look like "the plugin is broken" are actually two
+different diagnoses, and the wording is the only thing that separates them.
+
+A file that is **not on disk**:
+
+```
+An internal error has occurred.
+Could not load toolkit script: ExportPresets
+```
+
+A file that is there and does not **parse**:
+
+```
+An internal error has occurred.
+error loading toolkit script `json' ([string "json.lua"]:134: unexpected symbol near '<')
+```
+
+The distinction is worth knowing before spending a day on it. The second names
+a line, so it is a code bug and the file can be read. The first names no line
+because there was nothing to read: `require` looked for `ExportPresets.lua` in
+the plugin folder and did not find it. No amount of staring at the source will
+explain it, because the source is not the problem — it is the folder.
+
+That is the error a user reported on 0.3.0, days after `ExportPresets.lua`
+shipped. The file parses, it is in the published archive, it is plain ASCII
+with no BOM, and Lightroom's own scripts are `Ag`-prefixed so there is no name
+collision. The only explanation left is that the file was genuinely absent from
+that installation.
+
+Two things follow for any plugin that updates itself:
+
+- a copy that "succeeds" without the destination existing is how a folder ends
+  up incomplete, so verify the destination after copying rather than trusting
+  the return value (`LrFileUtils.copy` does not document one);
+- nothing in the SDK will tell a plugin its own folder is incomplete, so if
+  that matters it has to check — see `PluginFiles.lua`, which compares the
+  folder against a manifest and is required by nothing so that it stays
+  loadable when everything around it is gone.
+
+---
+
 ## A Plug-in Manager section binds to preferences unless told otherwise
 
 `sectionsForTopOfDialog(f, propertyTable)` hands you a property table, so it
