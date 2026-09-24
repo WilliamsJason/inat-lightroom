@@ -1131,21 +1131,21 @@ at it.
 ### Repairing an installation that has lost a file
 
 A user on 0.3.0 hit `Could not load toolkit script: ExportPresets`, days after
-that file first shipped. That is Lightroom's wording for **a file that is not
-on disk** — a syntax error names a line instead — so their plugin folder was
-incomplete. See the SDK notes for the two messages side by side.
+that file first shipped. That reads like **a file that is not on disk** — a
+syntax error names a line instead — so the first answer built here was a repair
+for an incomplete folder. See the SDK notes for the two messages side by side.
 
-The published archive contained the file, the Lua parses, and the updater's
-copy loop handles new files, so how their copy of it went missing is still not
-proven. What the plugin does about it is defensible either way, and falls into
-three parts:
+That answer was aimed at the wrong failure (the next section has the right
+one), but it stands on its own: an update writes into the plugin's own folder,
+so a folder that has lost files is a state worth being able to see and undo.
+It falls into three parts:
 
 **Stop failing fatally.** A top-level `require` in a menu script that cannot be
 resolved gives an internal-error dialog with no owner and no next step.
 `PluginFiles.protect` wraps the entry points so the failure becomes a sentence
-naming the missing file and the button that fixes it. It re-raises anything
-that is *not* a missing file, because turning a genuine bug into "reinstall the
-plugin" sends the user away with the only diagnostic anyone had.
+naming the missing file and the button that fixes it. It re-raises anything it
+cannot explain, because turning a genuine bug into "reinstall the plugin" sends
+the user away with the only diagnostic anyone had.
 
 **Say so unprompted.** `PluginInfoProvider` compares the folder against
 `PluginFiles.FILES` when the Plug-in Manager section opens, and leads with the
@@ -1162,14 +1162,58 @@ gate on that path asks "is it newer?", and for a damaged copy of the current
 release the answer is no.
 
 `PluginFiles.lua` requires nothing but the SDK — not even `Log` — so that it
-stays loadable in a folder that has lost everything else. `PluginInfoProvider`
-requires it through a `pcall`, so a folder that has lost `PluginFiles.lua`
+stays loadable in a folder that has lost everything else. Everything that uses
+it loads it through a `pcall`, so a folder that has lost `PluginFiles.lua`
 itself still draws the section that can repair it.
 
 Two guardrails came with it: a test asserts every `require "X"` in the plugin
 has an `X.lua` next to it, and the release workflow now diffs the unpacked
 archive against `plugin/pinned.lrplugin` file by file rather than spot-checking
 four names.
+
+### An update applied at startup cannot finish in that session
+
+The file was never missing. Lightroom fixes the set of toolkit scripts a plugin
+has when it loads the plugin, before `LrInitPlugin` runs, so a file an update
+*adds* cannot be required for the rest of that session no matter how correctly
+it was copied. Files that already existed are overwritten and load normally,
+which is why the update looks like it worked right up until something reaches
+for the new module. The SDK notes carry the evidence; two releases in a row
+tripped over it, and 0.3.2's victim was `PluginFiles.lua` itself — the module
+added to explain modules that will not load.
+
+Applying at startup is not a corner case. It is the path taken whenever the
+shutdown hook did not run, and for at least one user `LrShutdownPlugin` never
+runs at all, so it is every update they will ever get.
+
+Nothing can be done about it from inside the session, so the work is to say so
+clearly and in every place the user might end up:
+
+- **At the moment it happens.** `PluginInit` records the applied tag in a
+  preference and calls `UpdateCore.announceRestartNeeded`, which shows an
+  informational dialog — not a critical one, because nothing is damaged — after
+  the same delay the startup check uses, for the same reason.
+- **When it surfaces as an error.** `PluginFiles.report` now has a second
+  explanation. If nothing is missing but this launch applied an update, the
+  answer is a restart, not a repair; a repair would download a release the user
+  already has correctly.
+- **In the Plug-in Manager.** The section says the version was installed while
+  Lightroom was starting and that quitting and restarting finishes it. Real
+  damage still leads, because a restart will not bring a missing file back.
+- **When even that cannot load.** The menu scripts reach `PluginFiles` through
+  `pcall(require, ...)` and fall back to a dialog built only from
+  `import "LrDialogs"`. This is the direct fix for 0.3.2, where the guard was a
+  new file and so was the crash.
+
+The preference key is written by `PluginInit` and read by `PluginFiles` as a
+bare string on both sides, rather than shared through a module. This exists for
+a session in which a module might not load, so routing the two ends of it
+through a third file would reintroduce the thing it reports. A test pins the
+names together instead.
+
+**This release could not add a file.** A new file is exactly what a broken
+session cannot load, so the fix would have been unreachable in the only case it
+is for. Worth confirming before tagging anything that claims to fix this.
 
 ### The swap proves itself, and tries harder before failing
 

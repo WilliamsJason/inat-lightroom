@@ -51,8 +51,21 @@
 local LrDialogs   = import "LrDialogs"
 local LrFileUtils = import "LrFileUtils"
 local LrPathUtils = import "LrPathUtils"
+local LrPrefs     = import "LrPrefs"
 
 local PluginFiles = {}
+
+--- The preference PluginInit sets when it applies an update during startup.
+--
+-- Written by PluginInit and read here, as a bare string on both sides rather
+-- than through Settings. The whole point of this flag is a session where a
+-- module might not be loadable, so the two files that need it must not have to
+-- load a third to agree on the name. test_plugin_files_lua.py pins them
+-- together.
+--
+-- Cleared at the top of every launch, so "set" means "this launch", not "at
+-- some point in the past".
+PluginFiles.APPLIED_AT_STARTUP_PREF = "update_applied_at_startup"
 
 --- Every file a released copy of this plugin contains.
 --
@@ -154,6 +167,63 @@ function PluginFiles.brokenInstallText(pluginPath)
     .. "back."
 end
 
+--- The tag of an update applied during this launch, or nil.
+--
+-- Set by PluginInit when it applies a staged update that the shutdown hook
+-- never got to. See staleSessionText for why anyone cares.
+function PluginFiles.appliedAtStartup()
+  local ok, prefs = pcall(LrPrefs.prefsForPlugin, nil)
+  if not ok or not prefs then return nil end
+
+  local tag = prefs[PluginFiles.APPLIED_AT_STARTUP_PREF]
+  if type(tag) ~= "string" or tag == "" then return nil end
+  return tag
+end
+
+--- Record that this launch applied an update. Called by PluginInit only.
+function PluginFiles.setAppliedAtStartup(tag)
+  local ok, prefs = pcall(LrPrefs.prefsForPlugin, nil)
+  if not ok or not prefs then return false end
+
+  prefs[PluginFiles.APPLIED_AT_STARTUP_PREF] = tag or nil
+  return true
+end
+
+--- The sentence for a module that is on disk but that Lightroom will not load.
+--
+-- THE FAILURE THIS EXPLAINS
+-- -------------------------
+-- Lightroom decides which toolkit scripts a plugin has when it loads the
+-- plugin, which is *before* LrInitPlugin runs. A file that was not in the
+-- folder at that moment cannot be required for the rest of that session, even
+-- though it is sitting right there on disk.
+--
+-- That matters because applying an update at startup is a supported path: it
+-- is what happens when the shutdown hook never ran. Files that already existed
+-- are overwritten and load normally, so the update looks like it worked --
+-- until something requires a module the release *added*, which is the one file
+-- Lightroom is not expecting.
+--
+-- Two users' worth of the same shape:
+--
+--   0.3.0 added ExportPresets.lua   -> "Could not load toolkit script: ExportPresets"
+--   0.3.2 added PluginFiles.lua     -> "Could not load toolkit script: PluginFiles"
+--
+-- Both applied at startup, both logged a complete file count, both times the
+-- file was present. Nothing is damaged and a repair would download a folder
+-- that is already correct, so this has to be told apart from a missing file --
+-- the cure is a restart and nothing else.
+function PluginFiles.staleSessionText(tag)
+  tag = tag or PluginFiles.appliedAtStartup()
+  if not tag then return nil end
+
+  return "The update to " .. tostring(tag) .. " finished after Lightroom had "
+    .. "already started, so Lightroom is still working from the list of files "
+    .. "the plugin had when it launched and cannot load the new ones.\n\n"
+    .. "Nothing is broken and nothing needs downloading again. Quit Lightroom "
+    .. "and start it again, and the update will be in use."
+end
+
 --- Report a failure that might be a missing file, or let it through.
 --
 -- Menu item scripts call this. Lightroom runs one top to bottom when it is
@@ -166,10 +236,21 @@ end
 -- wrong answer, and the stack Lightroom prints is the only diagnostic a user
 -- can send.
 function PluginFiles.report(err, pluginPath)
+  -- Missing first. If a file really is absent, a repair is the answer whether
+  -- or not an update was applied during this launch.
   local text = PluginFiles.brokenInstallText(pluginPath)
+  local title = "Pinned could not load part of itself"
+
+  if not text then
+    -- Nothing absent, so the other explanation this module can offer is a
+    -- module Lightroom will not load until it is restarted.
+    text = PluginFiles.staleSessionText()
+    title = "Restart Lightroom to finish updating"
+  end
+
   if not text then error(err, 0) end
 
-  LrDialogs.message("Pinned could not load part of itself", text, "critical")
+  LrDialogs.message(title, text, "critical")
   return text
 end
 

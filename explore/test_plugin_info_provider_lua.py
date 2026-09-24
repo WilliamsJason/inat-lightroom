@@ -217,6 +217,39 @@ def test_the_damage_is_said_before_anything_else(plugin, provider):
     assert "restart" in p["status"].lower()
 
 
+def test_a_half_loaded_session_is_explained_rather_than_repaired(
+        plugin, provider):
+    """An update that landed at startup leaves a folder that is completely
+    correct and a session that cannot load part of it. Everything else this
+    section says points at Repair Installation, which here would download a
+    release the user already has and change nothing -- so this case has to be
+    told apart and answered with the only thing that works."""
+    plugin.require("PluginFiles")["setAppliedAtStartup"]("v0.3.2")
+
+    p = props(plugin)
+    provider["initialise"](p, PLUGIN_PATH)
+
+    assert p["damaged"] is False
+    assert "v0.3.2" in p["status"]
+    assert "quit Lightroom and start it again" in p["status"]
+    assert "Repair Installation" not in p["status"], (
+        "a repair would download a release the user already has correctly"
+    )
+
+
+def test_real_damage_still_leads_over_a_half_loaded_session(plugin, provider):
+    """Both are true after an update that applied at startup and lost a file
+    on the way. A restart will not bring the missing file back, so the one
+    that needs a button has to be the one that is said."""
+    plugin.require("PluginFiles")["setAppliedAtStartup"]("v0.3.2")
+    plugin.remove_plugin_file("ExportPresets.lua")
+
+    p = props(plugin)
+    provider["initialise"](p, PLUGIN_PATH)
+
+    assert p["status"].startswith("This installation is damaged")
+
+
 def test_repair_does_not_require_checking_for_updates_first(plugin, provider):
     """runInstall refuses without a check, and rightly. Repair must not copy
     that rule: someone whose plugin is broken should not have to discover that

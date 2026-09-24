@@ -155,7 +155,7 @@ return {
   VERSION = {
     major  = 0,
     minor  = 3,
-    revision = 2,
-    display = "0.3.2",
+    revision = 3,
+    display = "0.3.3",
   },
 }
