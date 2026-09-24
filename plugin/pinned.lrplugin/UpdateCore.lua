@@ -252,6 +252,39 @@ function UpdateCore.shouldNotify(result, alreadyNotifiedTag)
   return tag ~= alreadyNotifiedTag
 end
 
+--- What to say when an update was applied during startup.
+function UpdateCore.restartNeededText(tag)
+  return "Pinned for iNaturalist finished installing " .. tostring(tag) ..
+    " just now, while Lightroom was starting.\n\nLightroom works from the "
+    .. "list of plugin files it found when it launched, so parts of this "
+    .. "version will not load until you quit Lightroom and start it again. "
+    .. "Nothing is damaged and nothing needs downloading again."
+end
+
+--- Tell the user their session is running a half-loaded update.
+--
+-- Called from PluginInit, which only reaches it on the path where the shutdown
+-- hook never ran. For a user whose Lightroom never runs LrShutdownPlugin that
+-- is every single update, so this is not a rare corner.
+--
+-- In a task with the same delay as the startup check, for the same reason: a
+-- modal thrown during LrInitPlugin appears before Lightroom has drawn a
+-- window, and LrInitPlugin has to return promptly regardless.
+--
+-- Said once, at the moment it becomes true. Leaving the user to discover it by
+-- clicking a menu item and getting an internal error is how this took two
+-- releases to find.
+function UpdateCore.announceRestartNeeded(tag)
+  LrTasks.startAsyncTask(function()
+    LrTasks.sleep(UpdateCore.STARTUP_DELAY_SECONDS)
+
+    import("LrDialogs").message(
+      "Restart Lightroom to finish updating",
+      UpdateCore.restartNeededText(tag),
+      "info")
+  end)
+end
+
 --- The startup check: quiet, throttled, and never blocking.
 --
 -- Runs in its own task because it sleeps and then touches the network, and

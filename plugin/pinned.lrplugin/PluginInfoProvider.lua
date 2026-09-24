@@ -86,6 +86,12 @@ function PluginInfoProvider.initialise(props, pluginPath)
   local pending = UpdateInstall.pending(pluginPath)
   props.staged = pending ~= nil
 
+  -- An update applied while Lightroom was starting. Nothing is missing and a
+  -- repair would re-download a folder that is already correct, so this is said
+  -- before the ordinary "not checked yet" and after real damage.
+  local stale = PluginFiles and PluginFiles.appliedAtStartup
+    and PluginFiles.appliedAtStartup() or nil
+
   if props.damaged and not pending then
     props.status = "This installation is damaged: " .. #absent ..
       (#absent == 1 and " file is" or " files are") .. " missing (" ..
@@ -98,6 +104,10 @@ function PluginInfoProvider.initialise(props, pluginPath)
   elseif pending then
     props.status = "Version " .. tostring(pending) .. " is staged. Quit and "
       .. "restart Lightroom to finish installing it."
+  elseif stale then
+    props.status = "Version " .. tostring(stale) .. " was installed while "
+      .. "Lightroom was starting, so parts of it will not load until you quit "
+      .. "Lightroom and start it again. Nothing is damaged."
   else
     props.status = "Not checked yet."
   end

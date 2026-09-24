@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from lua_harness import LuaPlugin
+from lua_harness import PLUGIN_DIR, LuaPlugin
 
 TOOLKIT_ID = "com.github.inat-lightroom"
 
@@ -436,6 +436,58 @@ def test_the_menu_only_opens_things(plugin):
     assert len(permanent) == 2
     files = {item["file"] for item in permanent}
     assert files == {"ObservationPanelMenu.lua", "SettingsMenu.lua"}
+
+
+MENU_SCRIPTS = ("ObservationPanelMenu.lua", "SettingsMenu.lua")
+
+
+def unloadable(plugin, *modules) -> None:
+    """Make require() fail for a module the way Lightroom does for a file it
+    will not load, naming it the same way so the text is recognisable."""
+    for name in modules:
+        plugin.eval(
+            'function(name) package.preload[name] = function() '
+            'error("Could not load toolkit script: " .. name, 0) end end'
+        )(name)
+
+
+@pytest.mark.parametrize("script", MENU_SCRIPTS)
+def test_a_menu_item_never_hard_requires_the_thing_that_explains_failures(script):
+    """0.3.2's own bug. These files opened with a plain
+    ``require "PluginFiles"``, which was fine until PluginFiles.lua was the
+    file that would not load -- and then the guard against "Could not load
+    toolkit script" was raising "Could not load toolkit script: PluginFiles".
+
+    Anything a menu item reaches for before it has a way to report can only
+    fail as an internal error, so the guard has to be optional."""
+    source = (PLUGIN_DIR / script).read_text(encoding="utf-8")
+    code = source.split("--]]", 1)[1]
+
+    assert 'pcall(require, "PluginFiles")' in code, (
+        "PluginFiles must be loaded in a way that can fail"
+    )
+    for line in code.splitlines():
+        stripped = line.strip()
+        assert not stripped.startswith('local PluginFiles = require'), stripped
+
+
+@pytest.mark.parametrize("script", MENU_SCRIPTS)
+def test_a_menu_item_still_says_something_when_nothing_at_all_loads(script):
+    """The worst case, and the one a user actually met: an update applied at
+    startup, so neither what the menu item opens nor the module that would
+    explain it can be loaded this session. Lightroom's own answer is "An
+    internal error has occurred" naming a Lua file, which tells a user nothing
+    and offers them nothing -- so this must still reach a dialog that names
+    restarting, without raising."""
+    plugin = LuaPlugin()
+    unloadable(plugin, "PluginFiles", "ObservationPanel", "SettingsDialog")
+
+    plugin.require(script[: -len(".lua")])
+
+    assert len(plugin.dialogs) == 1, "the user must be told something"
+    message = plugin.dialogs[0]["message"]
+    assert "quit Lightroom and start it again" in message
+    assert "Repair Installation" in message
 
 
 def test_every_probe_menu_item_says_it_is_temporary(plugin):

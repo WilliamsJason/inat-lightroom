@@ -12,7 +12,7 @@ import json
 
 import pytest
 
-from lua_harness import LuaPlugin
+from lua_harness import PLUGIN_DIR, LuaPlugin
 
 OWNER_REPO = "WilliamsJason/inat-lightroom"
 DOWNLOAD = f"https://github.com/{OWNER_REPO}/releases/download"
@@ -389,6 +389,67 @@ def test_an_offline_startup_check_says_nothing_at_all():
     assert plugin.dialogs == [], (
         "a dialog about a failed background check is noise about something "
         "the user did not ask for"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Telling someone their session is half-updated
+# ---------------------------------------------------------------------------
+
+
+def test_the_restart_notice_names_the_version_and_the_cure(pair):
+    """Two facts and nothing else to do. Naming the version is what makes it
+    an update notice rather than an error, and the restart is the only action
+    -- the folder on disk is already correct."""
+    _plugin, core, _fake = pair
+
+    text = core.restartNeededText("v0.3.2")
+
+    assert "v0.3.2" in text
+    assert "quit Lightroom and start it again" in text
+    assert "Nothing is damaged" in text
+
+
+def test_the_restart_notice_does_not_interrupt_lightroom_starting(pair):
+    """Same reasoning as the startup check: a modal raised from LrInitPlugin
+    lands before Lightroom has drawn a window, and LrInitPlugin has to return
+    promptly either way."""
+    plugin, core, _fake = pair
+
+    plugin.call(core.announceRestartNeeded, "v0.3.2")
+
+    assert plugin.dialogs == [], "nothing may be shown during LrInitPlugin"
+
+    plugin.run_pending_tasks()
+
+    assert len(plugin.dialogs) == 1, "but it does have to be shown"
+    assert plugin.sleeps, "and only once Lightroom is up"
+
+
+def test_the_restart_notice_is_not_an_error(pair):
+    """The update worked. Every file copied, nothing is missing, and the only
+    consequence is that this session is running the old file list -- so a
+    critical alert would be claiming damage that is not there and inviting a
+    repair that would do nothing."""
+    plugin, core, _fake = pair
+
+    plugin.call(core.announceRestartNeeded, "v0.3.2")
+    plugin.run_pending_tasks()
+
+    assert plugin.dialogs[0]["style"] == "info"
+
+
+def test_plugin_init_says_so_at_the_moment_it_becomes_true():
+    """This is the whole fix. Two releases in a row, a user's session was left
+    unable to load a module and was told nothing until they clicked a menu
+    item and got "An internal error has occurred" naming a Lua file. The
+    notice has to be raised where the situation is created."""
+    init = (PLUGIN_DIR / "PluginInit.lua").read_text(encoding="utf-8")
+    body = init.split("--]]", 1)[1]
+
+    assert "announceRestartNeeded(applied)" in body, (
+        "an update applied here leaves the session half-loaded, and saying so "
+        "is the only thing that can be done about it"
     )
 
 

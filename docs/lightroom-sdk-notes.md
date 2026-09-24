@@ -1744,10 +1744,14 @@ explain it, because the source is not the problem — it is the folder.
 That is the error a user reported on 0.3.0, days after `ExportPresets.lua`
 shipped. The file parses, it is in the published archive, it is plain ASCII
 with no BOM, and Lightroom's own scripts are `Ag`-prefixed so there is no name
-collision. The only explanation left is that the file was genuinely absent from
-that installation.
+collision.
 
-Two things follow for any plugin that updates itself:
+**It was not absent.** That conclusion was drawn here first and it was wrong;
+what it actually turned out to be has its own section below. The wording does
+not distinguish "no such file" from "not a script this plugin has", and the
+second is a state Lightroom will happily put a running plugin into.
+
+Two things still follow for any plugin that updates itself:
 
 - a copy that "succeeds" without the destination existing is how a folder ends
   up incomplete, so verify the destination after copying rather than trusting
@@ -1757,6 +1761,62 @@ Two things follow for any plugin that updates itself:
   that matters it has to check — see `PluginFiles.lua`, which compares the
   folder against a manifest and is required by nothing so that it stays
   loadable when everything around it is gone.
+
+---
+
+## The set of toolkit scripts is fixed when the plugin loads
+
+A plugin that writes a new `.lua` file into its own folder while Lightroom is
+running cannot then `require` it. Lightroom decides which toolkit scripts a
+plugin has when it *loads* the plugin, which is before `LrInitPlugin` runs, and
+that decision stands for the rest of the session. The file is on disk, readable,
+and correct; `require` still answers:
+
+```
+An internal error has occurred.
+Could not load toolkit script: ExportPresets
+```
+
+Files that already existed are **overwritten normally** and load fine, which is
+what makes this so easy to miss. An update applied at startup looks completely
+successful — right file count, no errors, everything that was already there
+running the new code — until something reaches for the one module the release
+*added*.
+
+This cost two releases to find, because it reproduced only for a user whose
+`LrShutdownPlugin` never runs and whose updates therefore always land on the
+`LrInitPlugin` path:
+
+| Release | File the release added | Applied at | Error |
+| --- | --- | --- | --- |
+| 0.3.0 | `ExportPresets.lua` | `LrInitPlugin` | `Could not load toolkit script: ExportPresets` |
+| 0.3.2 | `PluginFiles.lua` | `LrInitPlugin` | `Could not load toolkit script: PluginFiles` |
+
+Both applies logged the complete file count, so nothing was missing either
+time. 0.3.2's entry is the instructive one: the file that would not load was
+the module added to *explain* files that would not load.
+
+What follows for a self-updating plugin:
+
+- **An update applied at startup cannot take effect in that session**, and if
+  it adds files it leaves the session actively broken rather than merely
+  stale. Say so at the moment you apply it — `UpdateCore.announceRestartNeeded`
+  — rather than leaving the user to find out by clicking something.
+- **A fix for this must not add a file**, or it is unreachable in exactly the
+  session that needs it. That is a real constraint on the release that ships
+  it, and worth checking before tagging.
+- **Anything that guards against a module failing to load must itself be
+  loaded in a way that can fail.** The menu-item scripts use
+  `pcall(require, "PluginFiles")` and fall back to a dialog built from
+  `import "LrDialogs"` alone, because the SDK is the only thing that cannot go
+  missing.
+- The staged-update-at-shutdown path does not have this problem, which is why
+  it is the normal one: the swap happens with the plugin unloaded, so the next
+  launch sees the new folder from the start.
+
+The precise mechanism is not documented — whether Lightroom caches a file
+listing, a module table, or something else is inferred from behaviour. The
+behaviour is consistent enough to design against.
 
 ---
 
