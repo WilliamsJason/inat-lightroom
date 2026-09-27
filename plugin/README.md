@@ -67,26 +67,24 @@ and replace the folder by hand.
 
 ### If Lightroom says it cannot load a toolkit script
 
-If Lightroom shows **"An internal error has occurred. Could not load toolkit
-script: …"**, **quit Lightroom and start it again first.** This is almost
-always a plugin update that finished while Lightroom was already running:
-Lightroom works from the list of plugin files it found when it launched, so any
-file the update *added* will not load until the next launch. Nothing is damaged
-and nothing needs downloading again.
+If Lightroom shows **"An internal error has occurred"** and names one of the
+plugin's own scripts, something in the plugin folder cannot be loaded. Nothing
+is wrong with your catalog and nothing you did caused it.
 
-The plugin now tells you this itself — when the update lands, and again if you
-run into it — instead of leaving you with the internal error.
+Open **File → Plug-in Manager**, select **Pinned for iNaturalist**, and click
+**Repair Installation** in the **Updates** section. It downloads the current
+release and reinstalls it over the existing copy, checksum and all. It works
+whether or not there is a newer version, and you do not have to press **Check
+for Updates** first. Like any update, it finishes when you quit Lightroom.
 
-### If a file really has gone missing
+The **Updates** section also names any files it can see are missing when you
+open it — though note that a file can be present and still fail to load, so an
+empty list there does not rule this out.
 
-If restarting does not help, a file is missing from the plugin folder. The
-plugin says so in plain words, and the **Updates** section names the missing
-files as soon as you open it.
-
-**Repair Installation** in that section downloads the current release and
-reinstalls it over the damaged copy, checksum and all. It works whether or not
-there is a newer version, and you do not have to press **Check for Updates**
-first. Like any update, it finishes when you quit Lightroom.
+If **Repair Installation** does not help, or the Plug-in Manager will not draw
+the section at all, download the latest release from GitHub and replace the
+plugin folder by hand. That is always a valid repair, and it is the one to
+reach for if the same script keeps failing after a repair.
 
 ---
 

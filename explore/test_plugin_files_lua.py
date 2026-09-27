@@ -143,102 +143,73 @@ def test_several_missing_files_are(plugin, files):
 
 
 # ---------------------------------------------------------------------------
-# A session that applied its own update
+# Present, and still no good
 # ---------------------------------------------------------------------------
+#
+# "Does the file exist" was the wrong question, and asking it was a real
+# weakness rather than merely an incomplete one: LrFileUtils.exists answers
+# "directory" for a folder wearing a .lua name and "file" for something with
+# no read permission, and both are truthy. A user whose folder was full of
+# unloadable files would have been told, confidently, that nothing was wrong.
+#
+# The bias runs one way throughout. A check that cannot be made is not a
+# failure, because reporting a healthy installation as damaged sends someone
+# round a download they did not need and teaches them to ignore the warning.
 
 
-def test_nothing_was_applied_at_startup_by_default(files):
-    assert files.appliedAtStartup() is None
+def test_a_zero_byte_file_is_not_a_usable_one(plugin, files):
+    """What a copy that created the destination and wrote nothing leaves.
 
-
-def test_the_applied_tag_round_trips(plugin, files):
-    files.setAppliedAtStartup("v0.3.2")
-
-    assert files.appliedAtStartup() == "v0.3.2"
-
-
-def test_clearing_the_flag_clears_it(files):
-    files.setAppliedAtStartup("v0.3.2")
-    files.setAppliedAtStartup(None)
-
-    assert files.appliedAtStartup() is None
-
-
-def test_plugin_init_and_plugin_files_agree_on_the_preference_name():
-    """Written by one file and read by another, as a bare string on both sides.
-
-    Deliberately not shared through a module: the flag exists for a session
-    where a module might not load, so making the two files agree via a third
-    would reintroduce the thing it is reporting. That leaves the names able to
-    drift, so they are pinned here instead.
+    Empty Lua parses -- it is a valid, empty chunk -- so nothing complains
+    until something tries to use what the module was supposed to return.
     """
-    init = (PLUGIN_DIR / "PluginInit.lua").read_text(encoding="utf-8")
-    files_lua = (PLUGIN_DIR / "PluginFiles.lua").read_text(encoding="utf-8")
+    plugin.empty_plugin_file("ExportPresets.lua")
 
-    key = re.search(r'APPLIED_AT_STARTUP_PREF\s*=\s*"([^"]+)"', files_lua).group(1)
-
-    assert f".{key} = nil" in init, "PluginInit must clear the flag each launch"
-    assert f".{key} = applied" in init, "PluginInit must set it when it applies"
+    assert lua_list(files.missing(PLUGIN_PATH)) == ["ExportPresets.lua"]
 
 
-def test_a_stale_session_is_described_without_being_asked_to_repair(files):
-    files.setAppliedAtStartup("v0.3.2")
+def test_a_file_that_cannot_be_read_is_not_a_usable_one(plugin, files):
+    """Present, the right size, and unopenable -- a copy that did not carry
+    permissions across. exists() calls this healthy."""
+    plugin.make_plugin_file_unreadable("ExportPresets.lua")
 
-    text = files.staleSessionText()
-
-    assert "v0.3.2" in text
-    assert "Quit Lightroom" in text
-    assert "Repair" not in text, (
-        "the folder is correct and a repair would download it again to no "
-        "effect; the only cure is a restart"
-    )
+    assert lua_list(files.missing(PLUGIN_PATH)) == ["ExportPresets.lua"]
 
 
-def test_no_stale_message_without_a_startup_apply(files):
-    assert files.staleSessionText() is None
+def test_the_reason_is_kept_for_the_sentence(plugin, files):
+    """missing() answers with bare names because that is what its callers
+    want. A human reading the dialog or the log is the one who needs to know
+    the file is there but empty, rather than gone."""
+    plugin.empty_plugin_file("ExportPresets.lua")
+    plugin.remove_plugin_file("RenderPhoto.lua")
+    plugin.make_plugin_file_unreadable("Settings.lua")
+
+    assert sorted(lua_list(files.problems(PLUGIN_PATH))) == [
+        "ExportPresets.lua (is empty)",
+        "RenderPhoto.lua (is missing)",
+        "Settings.lua (cannot be read)",
+    ]
 
 
-def test_a_module_lightroom_will_not_load_is_explained_as_a_restart(
-        plugin, files):
-    """The actual 0.3.2 failure. Every file is present -- the update copied
-    perfectly -- but Lightroom fixed the plugin's script list before the update
-    was applied, so the file it added cannot be required this session."""
-    files.setAppliedAtStartup("v0.3.2")
+def test_the_reason_reaches_the_user(plugin, files):
+    plugin.empty_plugin_file("ExportPresets.lua")
 
-    ran = files.protect(plugin.eval(
-        'function() return function() error("Could not load toolkit script: '
-        'PluginFiles", 0) end end')())
+    text = files.brokenInstallText(PLUGIN_PATH)
 
-    assert ran is False
-    assert len(plugin.dialogs) == 1
-    assert "start it again" in plugin.dialogs[0]["message"]
+    assert "ExportPresets.lua (is empty)" in text
+    assert "Repair Installation" in text
 
 
-def test_a_missing_file_still_wins_over_a_restart(plugin, files):
-    """Both can be true at once: an update applied at startup that also failed
-    to copy something. A file that is genuinely absent will not come back on
-    its own, so that is the one to act on."""
-    plugin.remove_plugin_file("ExportPresets.lua")
-    files.setAppliedAtStartup("v0.3.2")
+def test_a_check_that_cannot_be_made_is_not_a_failure(plugin, files):
+    """The direction that matters. An SDK call this plugin does not control
+    going away -- or raising -- must leave the file alone, not accuse it.
 
-    files.protect(plugin.eval(
-        'function() return function() error("boom", 0) end end')())
+    Without this, one unavailable API reports all forty files as broken and
+    every user is sent round a pointless download.
+    """
+    plugin.break_file_checks()
 
-    assert "ExportPresets.lua" in plugin.dialogs[0]["message"]
-
-
-def test_a_real_bug_in_a_stale_session_is_not_swallowed(plugin, files):
-    """A restart is not the answer to every error just because one happened to
-    be applied at startup -- but it is the answer to this class of them, and
-    telling them apart from the outside is not possible. Reported, not raised,
-    and deliberately: the alternative leaves the one case this exists for
-    showing an internal error."""
-    files.setAppliedAtStartup("v0.3.2")
-
-    files.protect(plugin.eval(
-        'function() return function() error("nil value in PanelCore", 0) end end')())
-
-    assert len(plugin.dialogs) == 1
+    assert lua_list(files.missing(PLUGIN_PATH)) == []
 
 
 # ---------------------------------------------------------------------------

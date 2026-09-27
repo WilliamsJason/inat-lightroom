@@ -126,8 +126,9 @@ return {
   -- convention and a second, quieter cue: one opens a dialog, one opens a
   -- window.
   --
-  -- Renames take effect at the next Lightroom launch, not on Reload Plug-in;
-  -- see PluginInit.lua.
+  -- Renames take effect on Reload Plug-in, verified against a probe plugin
+  -- that changed a title while keeping its id. An earlier comment here
+  -- claimed they needed a full launch; that was never tested.
   LrExportMenuItems = {
     {
       title = LOC "$$$/iNatLightroom/Menu/Panel=Observation Panel",

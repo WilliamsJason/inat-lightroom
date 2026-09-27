@@ -1746,12 +1746,14 @@ shipped. The file parses, it is in the published archive, it is plain ASCII
 with no BOM, and Lightroom's own scripts are `Ag`-prefixed so there is no name
 collision.
 
-**It was not absent.** That conclusion was drawn here first and it was wrong;
-what it actually turned out to be has its own section below. The wording does
-not distinguish "no such file" from "not a script this plugin has", and the
-second is a state Lightroom will happily put a running plugin into.
+**It is not known whether it was absent.** Two readings have been argued here
+and both were wrong. The wording was eventually tested directly, and a missing
+file produces a *different* message than the one reported — see the section
+below. Do not use this section to conclude anything about that report; it is
+kept because the general distinction between the two messages is still real
+and still useful.
 
-Two things still follow for any plugin that updates itself:
+Two things follow for any plugin that updates itself:
 
 - a copy that "succeeds" without the destination existing is how a folder ends
   up incomplete, so verify the destination after copying rather than trusting
@@ -1764,59 +1766,151 @@ Two things still follow for any plugin that updates itself:
 
 ---
 
-## The set of toolkit scripts is fixed when the plugin loads
+## A file added while the plugin is running *does* load
 
-A plugin that writes a new `.lua` file into its own folder while Lightroom is
-running cannot then `require` it. Lightroom decides which toolkit scripts a
-plugin has when it *loads* the plugin, which is before `LrInitPlugin` runs, and
-that decision stands for the rest of the session. The file is on disk, readable,
-and correct; `require` still answers:
+This section previously said the opposite, at length, with a table. It was
+wrong, and it shipped in a release whose entire user-facing explanation rested
+on it. What follows is what the probe actually showed.
+
+A plugin that writes a new `.lua` file into its own folder during
+`LrInitPlugin` **can** `require` it in that same session. There is no bound
+list of toolkit scripts, or if there is one it is built late enough not to
+matter. **Reload Plug-in** is enough; a full relaunch is not needed.
+
+The probe lives in `explore/probes/sdkprobe.lrplugin`. `ProbeInit.lua` runs as
+`LrInitPlugin`, writes `LateArrival_NNN.lua` into the plugin folder, and keeps
+the previous run's file as a control. `LateLoadProbeMenu.lua` then requires
+both. The run that settles it:
 
 ```
-An internal error has occurred.
-Could not load toolkit script: ExportPresets
+[require]
+  control        Report                    loaded   stamp=nil
+  today's        LateArrival_002           loaded   stamp=LateArrival_002
+  today's (copy) LateArrival_002_copied    loaded   stamp=nil
+  yesterday's    LateArrival_001           loaded   stamp=LateArrival_001
 ```
 
-Files that already existed are **overwritten normally** and load fine, which is
-what makes this so easy to miss. An update applied at startup looks completely
-successful — right file count, no errors, everything that was already there
-running the new code — until something reaches for the one module the release
-*added*.
+`LateArrival_002` did not exist when the plugin started loading, and it loaded.
+`dofile` works too, so neither path is gated.
 
-This cost two releases to find, because it reproduced only for a user whose
-`LrShutdownPlugin` never runs and whose updates therefore always land on the
-`LrInitPlugin` path:
+Two details make this a real result rather than a coincidence:
 
-| Release | File the release added | Applied at | Error |
-| --- | --- | --- | --- |
-| 0.3.0 | `ExportPresets.lua` | `LrInitPlugin` | `Could not load toolkit script: ExportPresets` |
-| 0.3.2 | `PluginFiles.lua` | `LrInitPlugin` | `Could not load toolkit script: PluginFiles` |
+- the probe plugin has **no `LrShutdownPlugin` at all**, so it is the reporting
+  user's situation by construction — nothing is ever applied at unload;
+- the first attempt at this probe was buggy in two ways that both flattered the
+  answer, and neither survived contact with Lua 5.1:
+  `string.format("%d", os.time() * 1000)` overflows to `-2147483648`, so every
+  run wrote the *same* filename and overwrote its own control; and the sweep
+  pattern `^LateArrival_%d+%.lua$` never matches a negative number, so the
+  control count read `0 found` forever. A probe that cannot fail is not a
+  probe. Check that the control can be observed *missing* before trusting it
+  when present.
 
-Both applies logged the complete file count, so nothing was missing either
-time. 0.3.2's entry is the instructive one: the file that would not load was
-the module added to *explain* files that would not load.
+So if a module will not load, it is not on disk. Go and look at the folder
+before theorising.
 
-What follows for a self-updating plugin:
+### The error message is still not reproduced, and that is the finding
 
-- **An update applied at startup cannot take effect in that session**, and if
-  it adds files it leaves the session actively broken rather than merely
-  stale. Say so at the moment you apply it — `UpdateCore.announceRestartNeeded`
-  — rather than leaving the user to find out by clicking something.
-- **A fix for this must not add a file**, or it is unreachable in exactly the
-  session that needs it. That is a real constraint on the release that ships
-  it, and worth checking before tagging.
-- **Anything that guards against a module failing to load must itself be
-  loaded in a way that can fail.** The menu-item scripts use
-  `pcall(require, "PluginFiles")` and fall back to a dialog built from
-  `import "LrDialogs"` alone, because the SDK is the only thing that cannot go
-  missing.
-- The staged-update-at-shutdown path does not have this problem, which is why
-  it is the normal one: the swap happens with the plugin unloaded, so the next
-  launch sees the new folder from the start.
+Three explanations have now been offered for `Could not load toolkit script:
+PluginFiles`, and all three were stated with more confidence than the evidence
+carried:
 
-The precise mechanism is not documented — whether Lightroom caches a file
-listing, a module table, or something else is inferred from behaviour. The
-behaviour is consistent enough to design against.
+1. **the file was absent** (0.3.1) — the plain reading;
+2. **the file was present but Lightroom would not bind it** (0.3.3) — the
+   stale-session theory, disproved by probe;
+3. **the file was present but unreadable** — proposed and disproved the same
+   afternoon.
+
+The disproof of all three is the same experiment: produce each failure
+deliberately and compare the wording. Seven routes were tried on Windows and
+every one of them is worded differently from the screenshot:
+
+| Route | Message |
+| --- | --- |
+| `require`, no file | ``error loading toolkit script `X' (Could not load script X.lua: doesn't seem to be in the toolkit.)`` |
+| `require`, folder named `X.lua` | same as above |
+| `require`, unparseable | ``error loading toolkit script `X' ([string "X.lua"]:1: ...)`` |
+| `require`, zero bytes | ``error loading toolkit script `X' (Could not load script X.lua: it appears to be in toolkit, but loading failed)`` |
+| `require`, read permission denied | same as zero bytes |
+| declared in `Info.lua`, no file | `No script by the name X.lua` |
+| declared in `Info.lua`, zero bytes | `Could not load script X.lua: it appears to be in toolkit, but loading failed` |
+| declared in `Info.lua`, unparseable | `[string "X.lua"]:1: ...` |
+| **the report** | **`Could not load toolkit script: PluginFiles`** |
+
+Every `require` failure arrives wrapped as ``error loading toolkit script `X'
+(reason)``. The report has no wrapper, no reason, and names `PluginFiles`
+**without `.lua`** — a module name, not a filename.
+
+The string is real and it is in the same `substrate.dll` these tests ran
+against, so this is not a version difference:
+
+```
+name conflict for module '%s' | tostring | Could not load toolkit script: %s | loadScript
+```
+
+Its neighbours — `loadScript`, `name conflict for module '%s'`, `_NAME`,
+`package`, `_BUNDLE` — are all module-registration strings, which fits a
+message that takes a module name. Which caller reaches it is not known, and
+finding out means disassembling rather than guessing.
+
+**So the cause is open.** What can be said:
+
+- a missing file produces different wording, so "the update did not copy it"
+  is not supported by the screenshot;
+- so does an unreadable or empty one;
+- `LrFileUtils.exists` returns truthy for a *directory* named `X.lua` and for
+  a file with no read permission, so every "is the install intact" check in
+  this plugin would call such a folder healthy. That is worth fixing on its
+  own merits whatever caused this.
+
+The lesson that generalises is not about Lightroom. Three releases went out on
+three readings of one string that nobody had tried to produce. Reproducing it
+costs an afternoon and would have prevented all three.
+
+### What survived the correction
+
+The 0.3.3 work was built on the wrong mechanism, but not all of it was wasted:
+
+- **Verify the destination after copying.** Sound for its own reasons — an
+  undocumented return value is not a result.
+- **`pcall(require, "PluginFiles")` in the menu scripts**, falling back to a
+  dialog built from `import "LrDialogs"` alone. Still exactly right: the guard
+  against a module going missing must not assume that module loaded.
+- **A fix for a missing-file bug should avoid adding files** — not because a
+  new file cannot load, but because it is one more file the same suspect copier
+  has to place correctly, in a folder that has already demonstrated it can lose
+  one.
+
+What did *not* survive is the advice to restart. A restart fixes nothing here,
+because nothing is waiting to take effect — the file is simply not there, and
+only **Repair Installation** brings it back.
+
+---
+
+## `import` is whitelisted, and there is no programmatic plugin reload
+
+`AgSdkPluginManager` really does exist inside Lightroom: a binary scan of
+`substrate.dll` turns up a method table with `reloadPlugin`,
+`reloadPluginIfNeededForEachUse`, `enablePlugin` and `disablePlugin`, and
+`LibraryToolkit.dll` has `reloadPluginFlag` and `reloadPluginSem` alongside it.
+None of it is reachable:
+
+```
+AgSdkPluginManager        unavailable: Could not find namespace: AgSdkPluginManager
+AgPluginManager           unavailable: Could not find namespace: AgPluginManager
+AgSdkPluginLoader         unavailable: Could not find namespace: AgSdkPluginLoader
+LrPluginManager           unavailable: Could not find namespace: LrPluginManager
+LrPlugin                  unavailable: Could not find namespace: LrPlugin
+AgNotARealNamespaceAtAll  unavailable: Could not find namespace: AgNotARealNamespaceAtAll
+```
+
+The last line is the point of the test. A deliberately fabricated namespace
+fails with the identical wording, which establishes that the message is the
+genuine not-found path rather than `import` handing back a stub for something
+real. `import` resolves `Lr*` and nothing else.
+
+So a plugin cannot reload itself or anything else, and "reload after updating"
+is not an option available to the update path. The user does it or nobody does.
 
 ---
 

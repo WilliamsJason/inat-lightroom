@@ -51,12 +51,17 @@ local PluginInfoProvider = {}
 -- The section
 --------------------------------------------------------------------------------
 
---- Which shipped files are absent, as a list. Empty when nothing is, or when
---- the check itself could not be loaded.
+--- Which shipped files are unusable, each with the reason, as a list.
+--- Empty when nothing is, or when the check itself could not be loaded.
+--
+-- The reason is carried here and nowhere else that shows a list, because this
+-- is the screen someone is sent to and the line that gets logged. "Missing"
+-- and "present but empty" call for the same repair but are very different
+-- evidence, and the user this was built for was told nothing at all.
 local function missingFiles(pluginPath)
   if not PluginFiles then return {} end
 
-  local found, result = pcall(PluginFiles.missing, pluginPath)
+  local found, result = pcall(PluginFiles.problems, pluginPath)
   if not found or type(result) ~= "table" then return {} end
   return result
 end
@@ -68,8 +73,13 @@ end
 -- The integrity check runs before the staged-update check and wins the status
 -- line, because a damaged installation is the more urgent of the two and the
 -- less self-explanatory. "Quit and restart to finish installing" is advice
--- someone can act on without understanding it; "Could not load toolkit script"
--- is not, and this is the only place that names the cause.
+-- someone can act on without understanding it; an internal error naming a
+-- module is not, and this is the only place that names the cause.
+--
+-- There used to be a fourth branch, for a session that applied an update at
+-- startup: it said parts of the new version would not load until a restart.
+-- That mechanism was disproved -- see PluginInit.lua -- and the branch has
+-- been removed rather than left saying something confident and untrue.
 function PluginInfoProvider.initialise(props, pluginPath)
   props.installedVersion = Updater.versionString(Updater.currentVersion())
   props.result           = nil
@@ -79,24 +89,19 @@ function PluginInfoProvider.initialise(props, pluginPath)
   props.damaged = #absent > 0
 
   if props.damaged then
-    logger:warn("PluginInfoProvider: missing from the plugin folder: " ..
-      table.concat(absent, ", "))
+    logger:warn("PluginInfoProvider: missing or unusable in the plugin " ..
+      "folder: " .. table.concat(absent, ", "))
   end
 
   local pending = UpdateInstall.pending(pluginPath)
   props.staged = pending ~= nil
 
-  -- An update applied while Lightroom was starting. Nothing is missing and a
-  -- repair would re-download a folder that is already correct, so this is said
-  -- before the ordinary "not checked yet" and after real damage.
-  local stale = PluginFiles and PluginFiles.appliedAtStartup
-    and PluginFiles.appliedAtStartup() or nil
-
   if props.damaged and not pending then
     props.status = "This installation is damaged: " .. #absent ..
-      (#absent == 1 and " file is" or " files are") .. " missing (" ..
-      table.concat(absent, ", ") .. "). Press Repair Installation to download "
-      .. "this release again and put them back."
+      (#absent == 1 and " file is" or " files are") ..
+      " missing or unusable (" .. table.concat(absent, ", ") ..
+      "). Press Repair Installation to download this release again and put "
+      .. "them back."
   elseif props.damaged then
     props.status = "This installation is damaged, and version " ..
       tostring(pending) .. " is staged to replace it. Quit and restart "
@@ -104,10 +109,6 @@ function PluginInfoProvider.initialise(props, pluginPath)
   elseif pending then
     props.status = "Version " .. tostring(pending) .. " is staged. Quit and "
       .. "restart Lightroom to finish installing it."
-  elseif stale then
-    props.status = "Version " .. tostring(stale) .. " was installed while "
-      .. "Lightroom was starting, so parts of it will not load until you quit "
-      .. "Lightroom and start it again. Nothing is damaged."
   else
     props.status = "Not checked yet."
   end
