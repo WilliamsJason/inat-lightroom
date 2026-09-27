@@ -1171,49 +1171,54 @@ has an `X.lua` next to it, and the release workflow now diffs the unpacked
 archive against `plugin/pinned.lrplugin` file by file rather than spot-checking
 four names.
 
-### An update applied at startup cannot finish in that session
+### The cause is still unknown, and three releases have guessed at it
 
-The file was never missing. Lightroom fixes the set of toolkit scripts a plugin
-has when it loads the plugin, before `LrInitPlugin` runs, so a file an update
-*adds* cannot be required for the rest of that session no matter how correctly
-it was copied. Files that already existed are overwritten and load normally,
-which is why the update looks like it worked right up until something reaches
-for the new module. The SDK notes carry the evidence; two releases in a row
-tripped over it, and 0.3.2's victim was `PluginFiles.lua` itself — the module
-added to explain modules that will not load.
+0.3.3 shipped an explanation that does not survive testing: that Lightroom
+fixes the set of toolkit scripts when it loads a plugin, so a file an update
+*added* could not be required until the next launch. A probe writes a `.lua`
+file during `LrInitPlugin` and requires it successfully in the same session,
+and a plain **Reload Plug-in** picks up new files, new menu items and renames.
+That mechanism is gone.
 
-Applying at startup is not a corner case. It is the path taken whenever the
-shutdown hook did not run, and for at least one user `LrShutdownPlugin` never
-runs at all, so it is every update they will ever get.
+What replaced it — that the file was simply never copied — does not survive
+either. The wording was finally produced deliberately, seven ways, and a
+missing file gives a different message than the report; so does an empty one,
+an unreadable one, and a directory wearing a `.lua` name. The SDK notes carry
+the table. The reported string is in the same `substrate.dll` those tests ran
+against, so it is not a version difference, but which caller reaches it is not
+known.
 
-Nothing can be done about it from inside the session, so the work is to say so
-clearly and in every place the user might end up:
+**So this section no longer claims a cause.** Three have been offered — a
+stale session, a dropped copy, an unreadable file — and each was written up as
+settled before it had been reproduced. The honest state is that one user's
+error message has never been produced on a machine we control.
 
-- **At the moment it happens.** `PluginInit` records the applied tag in a
-  preference and calls `UpdateCore.announceRestartNeeded`, which shows an
-  informational dialog — not a critical one, because nothing is damaged — after
-  the same delay the startup check uses, for the same reason.
-- **When it surfaces as an error.** `PluginFiles.report` now has a second
-  explanation. If nothing is missing but this launch applied an update, the
-  answer is a restart, not a repair; a repair would download a release the user
-  already has correctly.
-- **In the Plug-in Manager.** The section says the version was installed while
-  Lightroom was starting and that quitting and restarting finishes it. Real
-  damage still leads, because a restart will not bring a missing file back.
-- **When even that cannot load.** The menu scripts reach `PluginFiles` through
-  `pcall(require, ...)` and fall back to a dialog built only from
-  `import "LrDialogs"`. This is the direct fix for 0.3.2, where the guard was a
-  new file and so was the crash.
+Two defects were found along the way and are worth fixing on their own merits,
+independently of whether either caused the report:
 
-The preference key is written by `PluginInit` and read by `PluginFiles` as a
-bare string on both sides, rather than shared through a module. This exists for
-a session in which a module might not load, so routing the two ends of it
-through a third file would reintroduce the thing it reports. A test pins the
-names together instead.
+**The copier's assumption was false.** 0.3.0's `realFs.copy` carried the
+comment "every file in an update already exists at the destination", which is
+untrue of exactly the files a release *adds*, and handed `LrFileUtils.copy`'s
+undocumented return to a caller that only recognised `false` as failure. Fixed
+in 0.3.1 by verifying the destination after copying. This has a nasty
+distribution property regardless: **a self-updating plugin ships its copier's
+fixes through the broken copier**, so a copy bug reaches users a release later
+than expected, and never at all for anyone who skips the release that fixes
+it. The reporting user went `0.2.1 → 0.3.0 → 0.3.2` and never installed
+`0.3.1`.
 
-**This release could not add a file.** A new file is exactly what a broken
-session cannot load, so the fix would have been unreachable in the only case it
-is for. Worth confirming before tagging anything that claims to fix this.
+**`LrFileUtils.exists` is not an integrity check.** It returns `"directory"`
+for a folder named `X.lua` and `"file"` for a file with no read permission,
+both of which are unloadable. Every "is the install intact" check in this
+plugin asks exactly that question, so all of them would call such a folder
+healthy. `PluginFiles.report` checks for missing files *first* and would have
+found nothing missing in either case — which is consistent with what the
+reporter saw, and is a real weakness whatever the cause turns out to be.
+
+What the plugin should do about a failure it cannot explain is say what it
+observed rather than assert why. The log records no Lightroom version and no
+platform, which is why identifying even the operating system took inference
+from a temporary path.
 
 ### The swap proves itself, and tries harder before failing
 
