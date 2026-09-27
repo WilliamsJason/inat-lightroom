@@ -21,21 +21,25 @@
   and it is the cheaper of the two: the alternative is leaving the update
   unapplied indefinitely.
 
-  There is a second, sharper cost that took two releases and a user's log to
-  understand. Lightroom fixes the set of toolkit scripts a plugin has when it
-  loads the plugin, which is before this file runs. A file the release *adds*
-  therefore cannot be required for the rest of this session, however correctly
-  it was copied. Overwritten files are fine, which is what makes it so easy to
-  miss: the update looks applied until something reaches for the one module
-  that is new, and then Lightroom says "Could not load toolkit script: X".
+  A sharper claim used to be made here, and it was wrong. It said Lightroom
+  fixes the set of toolkit scripts when it loads the plugin, so a file an
+  update *added* could not be required for the rest of the session. A probe
+  disproved it: a .lua file written during LrInitPlugin is requireable in the
+  same session, and Reload Plug-in picks up new files, new menu items and
+  renames. The machinery that announced a needed restart has been removed
+  along with the claim. See docs/lightroom-sdk-notes.md for the runs.
 
-  0.3.0 added ExportPresets.lua and 0.3.2 added PluginFiles.lua, and a user
-  whose shutdown hook never runs -- so every update lands here -- got exactly
-  that error, twice, for exactly those two files.
+  What broke for the user who prompted all this is still not known. The error
+  they saw -- "Could not load toolkit script: PluginFiles" -- could not be
+  reproduced by any of seven deliberate attempts, and a missing, empty,
+  unreadable or directory-shaped file each produces different wording. They
+  were unblocked by installing 0.3.3 and restarting, which is not evidence for
+  any particular mechanism: that step also delivered a fresh copy of every
+  file, so "the restart fixed it" and "a correct copy finally landed" cannot
+  be told apart.
 
-  Nothing can be done about it from inside the session, so the job is to say
-  so: the flag below turns that internal error into an explanation, and the
-  notice tells the user before they go looking for it.
+  Worth revisiting the next time a release adds a file, which is the case that
+  went wrong twice. Until then, do not encode a theory here.
 
   Second, check for a newer release. Throttled to once a day, silent when the
   network is not there, and skippable with a preference.
@@ -45,23 +49,48 @@ local UpdateInstall = require "UpdateInstall"
 local UpdateCore    = require "UpdateCore"
 local logger        = require "Log"
 
--- Cleared before anything else, so the flag always means "during this launch".
--- Read back by PluginFiles, and written here rather than through PluginFiles
--- because this is precisely the session in which a module might not load.
-pcall(function()
-  import("LrPrefs").prefsForPlugin(nil).update_applied_at_startup = nil
-end)
+--- Write the Lightroom build and platform into the log, once per launch.
+--
+-- This exists because a user's 40,000-line log recorded neither, and working
+-- out even which operating system they were on came down to noticing a
+-- /var/folders path in a temp filename. A version-specific theory could not
+-- be checked at all.
+--
+-- Wrapped in pcall per field and never fatal: this is diagnostics, and a
+-- plugin that fails to start because it could not describe itself would be a
+-- poor trade. Anything unavailable is logged as unknown rather than skipped,
+-- because "we asked and could not tell" is itself worth seeing.
+local function logEnvironment()
+  local function ask(f)
+    local ok, value = pcall(f)
+    if not ok or value == nil then return "unknown" end
+    return tostring(value)
+  end
+
+  local version = ask(function()
+    local v = import("LrApplication").versionTable()
+    return string.format("%s.%s.%s build %s",
+      tostring(v.major), tostring(v.minor), tostring(v.revision),
+      tostring(v.build))
+  end)
+
+  local system = import "LrSystemInfo"
+
+  logger:info(string.format(
+    "Environment: Lightroom %s, %s, %s, %s RAM, plugin id %s",
+    version,
+    ask(system.summaryString),
+    ask(system.architecture),
+    ask(function() return system.memSize() end),
+    ask(function() return tostring(_PLUGIN and _PLUGIN.id or nil) end)))
+end
+
+pcall(logEnvironment)
 
 local applied = UpdateInstall.apply()
 if applied then
   logger:info("PluginInit: applied a staged update (" .. tostring(applied) ..
     ") that shutdown did not; Info.lua changes take effect next launch")
-
-  pcall(function()
-    import("LrPrefs").prefsForPlugin(nil).update_applied_at_startup = applied
-  end)
-
-  UpdateCore.announceRestartNeeded(applied)
 end
 
 UpdateCore.checkOnStartup()

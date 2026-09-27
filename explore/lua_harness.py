@@ -316,6 +316,10 @@ local deleteFails = false
 -- builds above.
 local virtualFiles = {}
 
+-- Paths a test has declared present but unreadable. Separate from
+-- virtualFiles because that is the whole point: the file is still there.
+local unreadableFiles = {}
+
 local function virtualDirExists(path)
   local prefix = tostring(path) .. "/"
   for file in pairs(virtualFiles) do
@@ -394,6 +398,22 @@ stubs.LrFileUtils = {
 
   isDirectory = function(path)
     return virtualDirExists(path)
+  end,
+
+  -- Present because PluginFiles asks whether a file is usable rather than
+  -- merely present. A file can exist and still be unloadable -- zero bytes,
+  -- or no read permission -- and LrFileUtils.exists returns a truthy string
+  -- for both, which is what made the old integrity check call a broken
+  -- folder healthy.
+  isReadable = function(path)
+    if unreadableFiles[path] then return false end
+    return virtualFiles[path] ~= nil
+  end,
+
+  fileAttributes = function(path)
+    local contents = virtualFiles[path]
+    if contents == nil then return {} end
+    return { fileSize = string.len(contents) }
   end,
 
   -- The real one is an iterator over the immediate children of a directory,
@@ -1154,6 +1174,19 @@ return {
   setFile = function(path, contents) virtualFiles[path] = contents end,
   removeFile = function(path) virtualFiles[path] = nil end,
   clearFiles = function() virtualFiles = {} end,
+  setUnreadable = function(path, unreadable)
+    unreadableFiles[path] = unreadable or nil
+  end,
+
+  -- Take away the two SDK calls the integrity check uses beyond exists(),
+  -- one by removal and one by making it raise. A plugin does not control
+  -- which SDK functions a given Lightroom provides, and the consequence of
+  -- getting this wrong is every user being told their installation is
+  -- damaged, so it is worth being able to test.
+  breakFileChecks = function()
+    stubs.LrFileUtils.isReadable = nil
+    stubs.LrFileUtils.fileAttributes = function() error("unavailable", 0) end
+  end,
   setDeleteFails = function(fails) deleteFails = fails end,
   setKeywordsFail = function(fails) keywordsFail = fails end,
   setRenderFailure = function(message)
@@ -1226,14 +1259,40 @@ class LuaPlugin:
         exercise the healthy path. Seeded from the real folder rather than from
         PluginFiles.FILES, so that a test removing a file is removing one that
         genuinely ships.
+
+        The placeholder contents are deliberately not "". PluginFiles treats a
+        zero-byte file as unusable -- an empty .lua parses fine and loads as
+        nothing, which is a plausible result of a half-finished copy -- so
+        seeding empty strings would report every healthy install as damaged
+        and hide the very case the check was added for.
         """
         for path in sorted(PLUGIN_DIR.iterdir()):
             if path.is_file():
-                self.env["setFile"](f"{PLUGIN_PATH}/{path.name}", "")
+                self.env["setFile"](f"{PLUGIN_PATH}/{path.name}", "-- placeholder\n")
 
     def remove_plugin_file(self, name: str) -> None:
         """Delete one of the plugin's own files, as a half-applied update would."""
         self.env["removeFile"](f"{PLUGIN_PATH}/{name}")
+
+    def empty_plugin_file(self, name: str) -> None:
+        """Truncate one of the plugin's files to zero bytes.
+
+        What a copy that created the destination and wrote nothing leaves
+        behind. LrFileUtils.exists still calls it a file.
+        """
+        self.env["setFile"](f"{PLUGIN_PATH}/{name}", "")
+
+    def make_plugin_file_unreadable(self, name: str) -> None:
+        """Leave the file in place but refuse to read it.
+
+        The macOS-flavoured failure: a copy that does not carry permissions
+        across. Present, non-empty, and unloadable.
+        """
+        self.env["setUnreadable"](f"{PLUGIN_PATH}/{name}", True)
+
+    def break_file_checks(self) -> None:
+        """Take away the SDK calls the integrity check uses beyond exists()."""
+        self.env["breakFileChecks"]()
 
     def require(self, module: str):
         """Load a plugin module by name, as the plugin itself would."""

@@ -7,18 +7,33 @@
   WHY THIS EXISTS
   ---------------
   A user on 0.3.0 reported "An internal error has occurred. Could not load
-  toolkit script: ExportPresets", and that message is worth reading carefully.
-  Lightroom words a Lua *syntax* failure differently -- "error loading toolkit
-  script `json' ([string "json.lua"]:134: ')' expected near '|')" -- and names
-  the line. "Could not load toolkit script: X" is what `require` raises when
-  the loader could not get hold of X.lua at all.
+  toolkit script: ExportPresets", and a second user-visible failure of the
+  same shape followed on 0.3.2 naming PluginFiles.
 
-  So the failure is a file that is not on disk, and nothing in the plugin was
-  able to say so. What the user saw instead was an internal error naming a
-  module they have never heard of, from a menu item that had worked the day
-  before, with no suggested action.
+  The wording was read three different ways across three releases -- a missing
+  file, a file Lightroom would not bind, a file it could not read -- and each
+  reading was shipped before anyone tried to produce the message on purpose.
+  When that was finally done, seven deliberate failures produced seven
+  different strings and none of them matched the report:
 
-  Two things made that worse than it had to be:
+    require, no file        error loading toolkit script `X' (Could not load
+                            script X.lua: doesn't seem to be in the toolkit.)
+    require, zero bytes     ... it appears to be in toolkit, but loading failed
+    require, unreadable     ... it appears to be in toolkit, but loading failed
+    require, bad parse      error loading toolkit script `X' ([string ...]:1: ...)
+    declared, no file       No script by the name X.lua
+    declared, zero bytes    Could not load script X.lua: it appears to be in
+                            toolkit, but loading failed
+    declared, bad parse     [string "X.lua"]:1: ...
+
+  So this module does NOT know why that user's plugin failed, and must not
+  pretend to. What it knows is narrower and still useful: which files that
+  ship are not usable on disk right now, and that a reinstall is how to get
+  them back. See docs/lightroom-sdk-notes.md for the full table and the probe
+  that produced it.
+
+  Two things made the original report worse than it had to be, and both are
+  still worth guarding:
 
     * RenderPhoto and SettingsDialog require ExportPresets at the top of the
       file, so one absent module takes out the whole Observation Panel *and*
@@ -31,7 +46,7 @@
       definition a reinstall of the one you already have.
 
   So this module answers one question -- which of the files that ship are
-  missing -- and turns the answer into a sentence that names the repair. The
+  unusable -- and turns the answer into a sentence that names the repair. The
   list is checked against the folder by a test, because a manifest that has
   drifted from what ships would report a healthy install as broken, and that is
   a worse failure than the one it is here to catch.
@@ -51,21 +66,8 @@
 local LrDialogs   = import "LrDialogs"
 local LrFileUtils = import "LrFileUtils"
 local LrPathUtils = import "LrPathUtils"
-local LrPrefs     = import "LrPrefs"
 
 local PluginFiles = {}
-
---- The preference PluginInit sets when it applies an update during startup.
---
--- Written by PluginInit and read here, as a bare string on both sides rather
--- than through Settings. The whole point of this flag is a session where a
--- module might not be loadable, so the two files that need it must not have to
--- load a third to agree on the name. test_plugin_files_lua.py pins them
--- together.
---
--- Cleared at the top of every launch, so "set" means "this launch", not "at
--- some point in the past".
-PluginFiles.APPLIED_AT_STARTUP_PREF = "update_applied_at_startup"
 
 --- Every file a released copy of this plugin contains.
 --
@@ -121,7 +123,49 @@ PluginFiles.FILES = {
   "no-photo.png",
 }
 
---- The files from FILES that are not in the plugin folder.
+--- Why a file that should ship cannot be used, or nil if it is fine.
+--
+-- "Does the file exist" is not the question worth asking, and asking it was a
+-- real weakness: LrFileUtils.exists returns the string "directory" for a
+-- folder wearing a .lua name and "file" for something with no read
+-- permission, and both are truthy. A folder whose files are all present and
+-- half of them unreadable would have been reported as healthy, which is
+-- exactly the experience of being told nothing is wrong while nothing works.
+--
+-- Each check is guarded separately so that a failure to *ask* is never
+-- reported as a failure of the file.
+local function unusable(path)
+  local ok, what = pcall(LrFileUtils.exists, path)
+  if not ok then return "could not be checked" end
+  if what == "directory" then return "is a folder, not a file" end
+  if what ~= "file" then return "is missing" end
+
+  -- Both of the checks below are optional in the sense that matters: if the
+  -- SDK call is not there, or raises, the file is left alone rather than
+  -- accused. Reporting a healthy installation as damaged sends a user round
+  -- a download they did not need and teaches them to ignore the warning,
+  -- which is worse than missing the case this is trying to catch.
+  if type(LrFileUtils.isReadable) == "function" then
+    local asked, readable = pcall(LrFileUtils.isReadable, path)
+    if asked and readable == false then return "cannot be read" end
+  end
+
+  -- Zero bytes parses to an empty chunk, so Lua will not complain, but
+  -- Lightroom's loader does and a module that returns nothing is not the
+  -- module anything expected. A plausible result of a copy that created the
+  -- destination and wrote nothing into it.
+  if type(LrFileUtils.fileAttributes) == "function" then
+    local asked, attributes = pcall(LrFileUtils.fileAttributes, path)
+    if asked and type(attributes) == "table"
+      and attributes.fileSize == 0 then
+      return "is empty"
+    end
+  end
+
+  return nil
+end
+
+--- The files from FILES that are not usable in the plugin folder.
 --
 -- @param pluginPath  defaults to the running plugin
 -- @return a list of names, empty when the installation is complete
@@ -131,13 +175,7 @@ function PluginFiles.missing(pluginPath)
   local absent = {}
 
   for _, name in ipairs(PluginFiles.FILES) do
-    local path = LrPathUtils.child(pluginPath, name)
-
-    -- Guarded, and the result compared against "file" rather than tested for
-    -- truth: LrFileUtils.exists returns the string "directory" for a folder,
-    -- which is truthy and is not a file the loader could read.
-    local ok, what = pcall(LrFileUtils.exists, path)
-    if not ok or what ~= "file" then
+    if unusable(LrPathUtils.child(pluginPath, name)) then
       absent[#absent + 1] = name
     end
   end
@@ -145,112 +183,69 @@ function PluginFiles.missing(pluginPath)
   return absent
 end
 
+--- The same question, answered with reasons: a list of "name (reason)".
+--
+-- Separate from missing() because the reason is for a human reading a
+-- sentence or a log, and every existing caller wants the bare names.
+function PluginFiles.problems(pluginPath)
+  pluginPath = pluginPath or _PLUGIN.path
+
+  local found = {}
+
+  for _, name in ipairs(PluginFiles.FILES) do
+    local why = unusable(LrPathUtils.child(pluginPath, name))
+    if why then
+      found[#found + 1] = name .. " (" .. why .. ")"
+    end
+  end
+
+  return found
+end
+
 --- The sentence to show someone whose installation is incomplete, or nil.
 --
--- nil when nothing is missing, because the caller's other possible reason for
+-- nil when nothing is wrong, because the caller's other possible reason for
 -- asking -- a real bug in a module that did load -- must not be dressed up as
 -- a broken install. Being told to repair a plugin that is not damaged sends a
 -- user round a download they did not need and leaves the actual fault
 -- unreported.
 function PluginFiles.brokenInstallText(pluginPath)
-  local absent = PluginFiles.missing(pluginPath)
-  if #absent == 0 then return nil end
+  local found = PluginFiles.problems(pluginPath)
+  if #found == 0 then return nil end
 
-  local count = #absent
+  local count = #found
   local noun  = count == 1 and "file is" or "files are"
 
-  return count .. " " .. noun .. " missing from this plugin's folder:\n\n"
-    .. table.concat(absent, ", ") .. "\n\n"
+  return count .. " " .. noun .. " missing or unusable in this plugin's "
+    .. "folder:\n\n" .. table.concat(found, ", ") .. "\n\n"
     .. "This usually means an update did not finish copying. Open "
     .. "File \226\150\184 Plug-in Manager, select Pinned for iNaturalist, and "
     .. "press Repair Installation to download this release again and put them "
     .. "back."
 end
 
---- The tag of an update applied during this launch, or nil.
---
--- Set by PluginInit when it applies a staged update that the shutdown hook
--- never got to. See staleSessionText for why anyone cares.
-function PluginFiles.appliedAtStartup()
-  local ok, prefs = pcall(LrPrefs.prefsForPlugin, nil)
-  if not ok or not prefs then return nil end
-
-  local tag = prefs[PluginFiles.APPLIED_AT_STARTUP_PREF]
-  if type(tag) ~= "string" or tag == "" then return nil end
-  return tag
-end
-
---- Record that this launch applied an update. Called by PluginInit only.
-function PluginFiles.setAppliedAtStartup(tag)
-  local ok, prefs = pcall(LrPrefs.prefsForPlugin, nil)
-  if not ok or not prefs then return false end
-
-  prefs[PluginFiles.APPLIED_AT_STARTUP_PREF] = tag or nil
-  return true
-end
-
---- The sentence for a module that is on disk but that Lightroom will not load.
---
--- THE FAILURE THIS EXPLAINS
--- -------------------------
--- Lightroom decides which toolkit scripts a plugin has when it loads the
--- plugin, which is *before* LrInitPlugin runs. A file that was not in the
--- folder at that moment cannot be required for the rest of that session, even
--- though it is sitting right there on disk.
---
--- That matters because applying an update at startup is a supported path: it
--- is what happens when the shutdown hook never ran. Files that already existed
--- are overwritten and load normally, so the update looks like it worked --
--- until something requires a module the release *added*, which is the one file
--- Lightroom is not expecting.
---
--- Two users' worth of the same shape:
---
---   0.3.0 added ExportPresets.lua   -> "Could not load toolkit script: ExportPresets"
---   0.3.2 added PluginFiles.lua     -> "Could not load toolkit script: PluginFiles"
---
--- Both applied at startup, both logged a complete file count, both times the
--- file was present. Nothing is damaged and a repair would download a folder
--- that is already correct, so this has to be told apart from a missing file --
--- the cure is a restart and nothing else.
-function PluginFiles.staleSessionText(tag)
-  tag = tag or PluginFiles.appliedAtStartup()
-  if not tag then return nil end
-
-  return "The update to " .. tostring(tag) .. " finished after Lightroom had "
-    .. "already started, so Lightroom is still working from the list of files "
-    .. "the plugin had when it launched and cannot load the new ones.\n\n"
-    .. "Nothing is broken and nothing needs downloading again. Quit Lightroom "
-    .. "and start it again, and the update will be in use."
-end
-
---- Report a failure that might be a missing file, or let it through.
+--- Report a failure that might be a broken install, or let it through.
 --
 -- Menu item scripts call this. Lightroom runs one top to bottom when it is
 -- clicked and reports anything that escapes as "An internal error has
--- occurred", which for a missing module names a Lua file and no action -- so
--- the case worth intercepting is exactly the one this module can explain.
+-- occurred", which for a module that will not load names a Lua file and no
+-- action -- so the case worth intercepting is exactly the one this module can
+-- explain.
 --
 -- Anything else is re-raised untouched, deliberately. Swallowing a genuine bug
 -- into a dialog about reinstalling would be trading a reportable error for a
 -- wrong answer, and the stack Lightroom prints is the only diagnostic a user
 -- can send.
+--
+-- There used to be a second branch here, for a session that had applied an
+-- update at startup: it told the user to restart. The mechanism it described
+-- does not exist -- see PluginInit.lua -- so it has been removed rather than
+-- left to offer a confident wrong answer to a failure nobody has explained.
 function PluginFiles.report(err, pluginPath)
-  -- Missing first. If a file really is absent, a repair is the answer whether
-  -- or not an update was applied during this launch.
   local text = PluginFiles.brokenInstallText(pluginPath)
-  local title = "Pinned could not load part of itself"
-
-  if not text then
-    -- Nothing absent, so the other explanation this module can offer is a
-    -- module Lightroom will not load until it is restarted.
-    text = PluginFiles.staleSessionText()
-    title = "Restart Lightroom to finish updating"
-  end
-
   if not text then error(err, 0) end
 
-  LrDialogs.message(title, text, "critical")
+  LrDialogs.message("Pinned could not load part of itself", text, "critical")
   return text
 end
 

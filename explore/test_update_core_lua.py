@@ -393,64 +393,48 @@ def test_an_offline_startup_check_says_nothing_at_all():
 
 
 # ---------------------------------------------------------------------------
-# Telling someone their session is half-updated
+# Saying what this copy of Lightroom is
 # ---------------------------------------------------------------------------
 
 
-def test_the_restart_notice_names_the_version_and_the_cure(pair):
-    """Two facts and nothing else to do. Naming the version is what makes it
-    an update notice rather than an error, and the restart is the only action
-    -- the folder on disk is already correct."""
-    _plugin, core, _fake = pair
+def test_startup_records_the_lightroom_build_and_platform():
+    """A user sent a 40,000-line log that named neither. Working out that they
+    were on macOS came down to spotting a /var/folders path inside a temp
+    filename, and no version-specific theory could be checked at all.
 
-    text = core.restartNeededText("v0.3.2")
-
-    assert "v0.3.2" in text
-    assert "quit Lightroom and start it again" in text
-    assert "Nothing is damaged" in text
-
-
-def test_the_restart_notice_does_not_interrupt_lightroom_starting(pair):
-    """Same reasoning as the startup check: a modal raised from LrInitPlugin
-    lands before Lightroom has drawn a window, and LrInitPlugin has to return
-    promptly either way."""
-    plugin, core, _fake = pair
-
-    plugin.call(core.announceRestartNeeded, "v0.3.2")
-
-    assert plugin.dialogs == [], "nothing may be shown during LrInitPlugin"
-
-    plugin.run_pending_tasks()
-
-    assert len(plugin.dialogs) == 1, "but it does have to be shown"
-    assert plugin.sleeps, "and only once Lightroom is up"
-
-
-def test_the_restart_notice_is_not_an_error(pair):
-    """The update worked. Every file copied, nothing is missing, and the only
-    consequence is that this session is running the old file list -- so a
-    critical alert would be claiming damage that is not there and inviting a
-    repair that would do nothing."""
-    plugin, core, _fake = pair
-
-    plugin.call(core.announceRestartNeeded, "v0.3.2")
-    plugin.run_pending_tasks()
-
-    assert plugin.dialogs[0]["style"] == "info"
-
-
-def test_plugin_init_says_so_at_the_moment_it_becomes_true():
-    """This is the whole fix. Two releases in a row, a user's session was left
-    unable to load a module and was told nothing until they clicked a menu
-    item and got "An internal error has occurred" naming a Lua file. The
-    notice has to be raised where the situation is created."""
+    Asserted against the source because LrInitPlugin is run by Lightroom, not
+    required, so there is no handle to call in the harness.
+    """
     init = (PLUGIN_DIR / "PluginInit.lua").read_text(encoding="utf-8")
     body = init.split("--]]", 1)[1]
 
-    assert "announceRestartNeeded(applied)" in body, (
-        "an update applied here leaves the session half-loaded, and saying so "
-        "is the only thing that can be done about it"
-    )
+    assert "versionTable" in body, "the Lightroom build has to be in the log"
+    assert "LrSystemInfo" in body, "and which machine it is running on"
+    assert "logEnvironment" in body
+
+
+def test_describing_the_environment_cannot_stop_the_plugin_starting():
+    """Diagnostics. Every field is asked for through pcall and the whole thing
+    is wrapped again, because a plugin that refuses to load because it could
+    not say what version of Lightroom it is running under would be a poor
+    trade for the log line."""
+    init = (PLUGIN_DIR / "PluginInit.lua").read_text(encoding="utf-8")
+    body = init.split("--]]", 1)[1]
+
+    assert "pcall(logEnvironment)" in body
+
+
+def test_no_restart_notice_survives():
+    """Three releases told users to restart on the strength of a mechanism
+    that a probe disproved -- a file added during LrInitPlugin is requireable
+    in the same session. Leaving the notice in would keep offering a confident
+    answer to a failure nobody has explained."""
+    core_lua = (PLUGIN_DIR / "UpdateCore.lua").read_text(encoding="utf-8")
+    init = (PLUGIN_DIR / "PluginInit.lua").read_text(encoding="utf-8")
+
+    assert "restartNeededText" not in core_lua
+    assert "announceRestartNeeded" not in core_lua
+    assert "announceRestartNeeded" not in init
 
 
 # ---------------------------------------------------------------------------
