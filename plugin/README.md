@@ -171,6 +171,31 @@ The usual run of it:
 4. Click **Upload to iNaturalist** — or, if the selection is already linked to
    an observation, **Update species guess**.
 
+Choosing a suggestion also fills in its **taxonomy**, on the line under the
+list: *Animalia › Arthropoda › Insecta › … › Ischnura erratica*, kingdom down to
+the thing itself. It is there to answer the question a scientific name on its
+own does not — is this even in the right group? — at a glance and without
+leaving Lightroom. Long lineages are cut off with an ellipsis; the whole of it
+is one button away.
+
+The line is not selectable, because Lightroom will not let a piece of text be
+both clickable and selectable. Copying is what the two buttons beside it are
+for:
+
+- **Copy Taxonomy** — puts every rank on the clipboard at once, one per line,
+  with the rank name and the taxon separated by a tab. Pasted into a spreadsheet
+  that is two columns; pasted anywhere else it is a readable list. This is the
+  one to use when you want the taxonomy in your notes and do not need to look at
+  it.
+- **Taxonomy…** — opens a window with one row per rank, each with its own
+  **Copy** button, so you can take just the family, or just the genus, without
+  editing anything afterwards. **Copy All** at the bottom does the same as Copy
+  Taxonomy.
+
+Both are greyed out until a suggestion is chosen. The lineage comes from
+iNaturalist rather than from the photo, and for the top suggestion it has
+already been fetched by the time you click, so it normally appears instantly.
+
 The button is one button that changes its name, because upload-or-update is one
 decision and the answer is already on screen. Uploading takes the whole
 selection into a **single observation** with several photos, which is what
@@ -606,6 +631,7 @@ pinned.lrplugin/
 ├── UploadCore.lua             # Creating and updating observations
 ├── SyncCore.lua               # Sync logic, callable from any entry point
 ├── LinkObservation.lua        # Adopting an existing observation
+├── TaxonomyDialog.lua         # The chosen suggestion's lineage, one rank per row
 ├── SettingsMenu.lua           # Plug-in Extras entry: opens settings
 ├── SettingsDialog.lua         # The settings window
 ├── Settings.lua               # Reading, writing and validating settings

@@ -589,6 +589,43 @@ Not established: whether `visible` works on other view types, or only fails to
 collapse layout while still hiding content. Neither was worth another probe
 once the padding removed the need for it.
 
+This is also what rules out a collapsible section anywhere in the panel. The
+feature request that asked for one was the chosen suggestion's full taxonomy —
+seven or eight ranks — and a block that cannot be hidden is a block that is
+always there. The answer was to put the readable form in a dialog, which is
+built fresh each time it opens and is therefore exactly as tall as what it was
+handed, and to leave the panel one line and two buttons.
+
+## Several lines onto the clipboard, without a newline in the command
+
+`Clipboard.lua` shells out because the SDK has no clipboard API. That made a
+newline a problem rather than a character: `LrTasks.execute` hands the whole
+line to the shell, and a raw newline in it is a second command rather than a
+second line of text. The original rule was to refuse newlines outright, which
+was fine while the only thing copied was an observation ID.
+
+The rule that replaced it is that a newline still never reaches the command
+line. Several lines become several **arguments**, and the helper on each
+platform is what joins them:
+
+```
+powershell … -Command "Set-Clipboard -Value @('Kingdom\tAnimalia','Phylum\tArthropoda')"
+printf '%s\n' 'Kingdom\tAnimalia' 'Phylum\tArthropoda' | pbcopy
+```
+
+`Set-Clipboard` joins an array with the platform's own line ending. `printf`
+applies its format once per argument, which is also why the multi-line form on
+macOS ends in a trailing newline and the single-line form does not: the format
+is applied to the last argument too and there is no way to skip it. A block of
+text ending in a line break is what a text field would have produced anyway; a
+nine-digit ID ending in one is not, so the single-argument form was left exactly
+as it was.
+
+A tab inside the quoted argument is safe on both and needs no escape. One
+trailing newline on the input is dropped, so text built by appending `\n` to
+every line does not copy with a blank last one; a blank line in the middle is
+kept, because that one is deliberate.
+
 ## A `scrolled_view` cannot be scrolled from code
 
 There is no scroll position to read or write. `f:scrolled_view` takes

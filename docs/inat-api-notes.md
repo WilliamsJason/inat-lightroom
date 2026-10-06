@@ -359,6 +359,26 @@ GET /taxa/autocomplete?q=Quercus+rob&rank=species&locale=en
 - `rank` – `kingdom`, `phylum`, `class`, `order`, `family`, `genus`, `species`, …
 - `preferred_common_name` – vernacular name (locale-dependent)
 
+**This is the only way to get it.** The suggestion endpoints do not carry a
+lineage at all — `score_image` and `score_observation` answer with `id`, `name`,
+`rank` and `preferred_common_name` per candidate, and `common_ancestor` is one
+taxon with the same four fields. So "show me the taxonomy of this guess" is
+always a second request, and `/v1/taxa?id=…` cannot serve it: the list endpoints
+answer with `ancestor_ids` and **no** `ancestors`, including `/v2/taxa` with
+`ancestors` asked for in `fields`. See "The list endpoint does not return
+ancestors" below for how the plugin assembles one from the other in bulk.
+
+In the panel that second request is usually free, because the panel has already
+made it. `PanelCore.withFallbacks` fetches the top candidate's lineage on every
+Get Suggestions to build the coarser rows, and `InatAPI:getTaxon` is memoised on
+the client — so the taxonomy of the row most people click comes out of the
+cache. A row further down the list costs one request, once.
+
+`rank` is a lowercase string out of a list some seventy long: every rank a
+working taxonomist uses, plus the infra- and super- forms of most of them.
+Anything displaying it should title-case an unrecognised rank rather than drop
+the rung — a lineage with a hole in it reads as a taxonomy the client got wrong.
+
 ---
 
 ### Identifications

@@ -274,6 +274,172 @@ function PanelCore.confidenceWarning(row)
 end
 
 --------------------------------------------------------------------------------
+-- The taxonomic tree
+--------------------------------------------------------------------------------
+
+--- The ranks worth putting a label on, and what to call them.
+--
+-- iNaturalist's `rank` is a lowercase string out of a list some seventy long:
+-- every rank a working taxonomist uses, plus the infra- and super- forms of
+-- most of them. Naming all of them here would be a dictionary nobody reads, so
+-- this covers the ranks that actually appear on a lineage the plugin shows and
+-- `PanelCore.rankLabel` title-cases anything it does not recognise rather than
+-- dropping the rung.
+--
+-- Dropping it would be the real bug: a lineage with a hole in it reads as a
+-- taxonomy the plugin got wrong, not as one rank nobody thought to list.
+PanelCore.RANK_LABELS = {
+  kingdom      = "Kingdom",
+  phylum       = "Phylum",
+  subphylum    = "Subphylum",
+  superclass   = "Superclass",
+  class        = "Class",
+  subclass     = "Subclass",
+  infraclass   = "Infraclass",
+  superorder   = "Superorder",
+  order        = "Order",
+  suborder     = "Suborder",
+  infraorder   = "Infraorder",
+  superfamily  = "Superfamily",
+  family       = "Family",
+  subfamily    = "Subfamily",
+  tribe        = "Tribe",
+  subtribe     = "Subtribe",
+  genus        = "Genus",
+  subgenus     = "Subgenus",
+  section      = "Section",
+  species      = "Species",
+  subspecies   = "Subspecies",
+  variety      = "Variety",
+  form         = "Form",
+  hybrid       = "Hybrid",
+}
+
+--- What to call a rank in the interface.
+--
+-- An unlabelled rung is worse than an oddly-labelled one, so an unknown rank
+-- gets its own name title-cased rather than nothing.
+function PanelCore.rankLabel(rank)
+  if type(rank) ~= "string" or rank == "" then return "Rank" end
+
+  local known = PanelCore.RANK_LABELS[rank]
+  if known then return known end
+
+  return (rank:gsub("^%l", string.upper))
+end
+
+--- The separator between rungs on the one-line form.
+-- A single glyph rather than " > ", which reads as a shell prompt and takes
+-- three times the width in a field where width is the whole constraint.
+PanelCore.LINEAGE_SEPARATOR = " \226\128\186 "  -- a single right-pointing guillemet
+
+--- One taxon's lineage as rows, kingdom first, the taxon itself last.
+--
+-- @param taxon  A taxon carrying its `ancestors`, as `/v1/taxa/{id}` returns.
+-- @return A list of { rank, label, name, common_name, id, text }, where `text`
+--         is the one line this rung copies as.
+--
+-- Nameless rungs are dropped. `ancestors` occasionally carries an entry with an
+-- id and no name -- a taxon the API knows of and had nothing to say about --
+-- and a row reading "Family:" with an empty value is a rung the user will think
+-- they are supposed to be able to read.
+function PanelCore.taxonomyRows(taxon)
+  local rows = {}
+
+  for _, link in ipairs(PanelCore.chainOf(taxon)) do
+    local name = link.name
+    if type(name) == "string" and name ~= "" then
+      local common = link.preferred_common_name or link.common_name
+      if common == "" then common = nil end
+
+      local text = name
+      if common then text = text .. " (" .. common .. ")" end
+
+      rows[#rows + 1] = {
+        id          = link.id,
+        rank        = link.rank,
+        label       = PanelCore.rankLabel(link.rank),
+        name        = name,
+        common_name = common,
+        text        = text,
+      }
+    end
+  end
+
+  return rows
+end
+
+--- The lineage as one line: `Animalia › Arthropoda › … › Ischnura erratica`.
+--
+-- Scientific names only. The common names are what make the dialog readable and
+-- what make this unreadable -- the row has one line of a fixed width and seven
+-- ranks to spend it on, so the half of each rung that is the same in every
+-- language is the half that stays.
+function PanelCore.taxonomyBreadcrumb(rows)
+  local names = {}
+  for _, row in ipairs(rows or {}) do names[#names + 1] = row.name end
+
+  return table.concat(names, PanelCore.LINEAGE_SEPARATOR)
+end
+
+--- The whole lineage as the block of text the Copy button puts on the clipboard.
+--
+-- Tab-separated rather than `Kingdom: Animalia`, because the overwhelmingly
+-- likely destination is a spreadsheet or a notes field with a table in it, and
+-- a tab lands in two columns where a colon lands in one. Anything that cannot
+-- read tabs still shows the two parts separated, which a colon would not
+-- improve on.
+function PanelCore.taxonomyText(rows)
+  local lines = {}
+  for _, row in ipairs(rows or {}) do
+    lines[#lines + 1] = row.label .. "\t" .. row.text
+  end
+
+  return table.concat(lines, "\n")
+end
+
+--- Fill in a suggestion row's lineage and describe it.
+--
+-- MUST be called from inside a task: it may fetch.
+--
+-- Usually free. `PanelCore.withFallbacks` has already fetched the top
+-- candidate's lineage to build the coarser rows, and `InatAPI:getTaxon`
+-- memoises, so the taxon asked about here is normally already in the client's
+-- cache. Picking a candidate further down the list costs one request, once.
+--
+-- @param row  A suggestion row, as `suggestionSlots` draws them.
+-- @return rows, error message. The error is for the status line; there is no
+--         partial answer worth showing, because a lineage missing its middle is
+--         not a lineage.
+function PanelCore.taxonomyFor(api, row)
+  if not row or not row.taxon_id then
+    return nil, "Choose a suggestion first."
+  end
+
+  local taxon = SyncCore.withAncestors(api, {
+    id                    = row.taxon_id,
+    name                  = row.name,
+    rank                  = row.rank,
+    preferred_common_name = row.common_name,
+  })
+
+  -- `withAncestors` hands back what it was given when the fetch fails, which is
+  -- a taxon with a name and no lineage. That is exactly the shape that silently
+  -- became a one-rung taxonomy, so it is checked for rather than formatted.
+  if not SyncCore.hasLineage(taxon) then
+    return nil, "Could not load the taxonomy for " ..
+      (row.name or "that suggestion") .. "."
+  end
+
+  local rows = PanelCore.taxonomyRows(taxon)
+  if #rows == 0 then
+    return nil, "iNaturalist returned no taxonomy for that suggestion."
+  end
+
+  return rows, nil
+end
+
+--------------------------------------------------------------------------------
 -- How much of the selection is going up
 --------------------------------------------------------------------------------
 

@@ -322,6 +322,19 @@ function ObservationPanel.clearChosenName(props)
   props.suggestionScientificName = nil
 end
 
+--- Forget the lineage shown for the chosen suggestion.
+--
+-- Separate from clearChosenName because the two are cleared at different
+-- moments: the names survive for as long as the field they filled, and the
+-- lineage belongs to one chosen row and must go the instant a different row is
+-- chosen -- otherwise the breadcrumb describes the previous answer while the
+-- list marks the new one.
+function ObservationPanel.clearTaxonomy(props)
+  props.taxonomy     = {}
+  props.taxonomyLine = ""
+  props.hasTaxonomy  = false
+end
+
 --- Empty the suggestion list and everything derived from it.
 --
 -- One function because the rows, the chosen row, and what the buttons below do
@@ -336,6 +349,7 @@ function ObservationPanel.clearSuggestions(props)
   props.hasSuggestion      = false
 
   ObservationPanel.clearChosenName(props)
+  ObservationPanel.clearTaxonomy(props)
   ObservationPanel.applySuggestionSlots(props, {}, nil)
 end
 
@@ -600,6 +614,60 @@ function ObservationPanel.contents(f, props, actions)
       height_in_lines = 1,
     },
 
+    -- The taxonomy of whichever suggestion is chosen, and the two ways to take
+    -- it with you. One row for all three, which is the whole reason it is laid
+    -- out this way: the panel is already as tall as a floating window over a
+    -- filmstrip should be, and the feature it is growing for is one people will
+    -- want occasionally.
+    --
+    -- The line itself is the cheap half -- a kingdom-to-species breadcrumb says
+    -- at a glance whether the suggestion is in the right phylum, which is the
+    -- question a scientific name alone does not answer for anyone who does not
+    -- already know the name. It is truncated, and that is accepted rather than
+    -- solved: the full text is one button away, and widening the panel to fit
+    -- the worst lineage would cost every user width forever to save one of them
+    -- a click.
+    --
+    -- Not selectable, so not copyable, which is what the buttons are for.
+    -- `selectable = true` is honoured and takes the row's `mouse_down` with it
+    -- (docs/lightroom-sdk-notes.md); there is no click to lose on this row, but
+    -- dragging across truncated text copies the truncation, not the name.
+    --
+    -- The explicit width is not decoration. A `static_text` built with an empty
+    -- title and no width collapses to nothing, and `fill_horizontal` cannot
+    -- save it -- it shares out space the row has spare, and a row of one
+    -- zero-width control and two buttons has none. 340 plus the two buttons is
+    -- about what the suggestion rows above already ask for, so this row does
+    -- not decide the panel's width.
+    f:row {
+      spacing = f:label_spacing(),
+
+      f:static_text {
+        title           = LrView.bind("taxonomyLine"),
+        tooltip         = LrView.bind("taxonomyLine"),
+        width           = 340,
+        truncation      = "tail",
+        fill_horizontal = 1,
+      },
+
+      -- Copy without reading: the clipboard gets every rank, tab-separated,
+      -- which is the form that lands in a spreadsheet as two columns. This is
+      -- the answer to "I do not want to look at it, I want it in my notes".
+      f:push_button {
+        title   = "Copy Taxonomy",
+        enabled = LrView.bind("hasTaxonomy"),
+        action  = actions.copyTaxonomy,
+      },
+
+      -- Read it, and copy one rank at a time. A dialog because the panel
+      -- cannot hide rows it is not using -- see TaxonomyDialog.lua.
+      f:push_button {
+        title   = "Taxonomy…",
+        enabled = LrView.bind("hasTaxonomy"),
+        action  = actions.showTaxonomy,
+      },
+    },
+
     -- One button, two jobs, because they are the same intent at different
     -- points in a photo's life: tell iNaturalist what this is. Which one it is
     -- depends only on whether the photo is linked yet, so making the user
@@ -710,6 +778,7 @@ function ObservationPanel.loadSuggestions(props)
   props.suggestionScore    = nil
   props.hasSuggestion      = false
   ObservationPanel.clearChosenName(props)
+  ObservationPanel.clearTaxonomy(props)
 
   if #rows == 0 then
     props.suggestionStatus = "iNaturalist had no suggestions for this photo."
@@ -751,6 +820,7 @@ function ObservationPanel.chooseSuggestion(props, selection)
     props.suggestionScore   = nil
     props.hasSuggestion     = false
     ObservationPanel.clearChosenName(props)
+    ObservationPanel.clearTaxonomy(props)
     ObservationPanel.applySuggestionSlots(props, rows, nil)
     return nil
   end
@@ -777,7 +847,118 @@ function ObservationPanel.chooseSuggestion(props, selection)
   -- rows are drawn by us and have no selection highlight of their own.
   ObservationPanel.applySuggestionSlots(props, rows, index)
 
+  -- The lineage shown belongs to whichever row was chosen last, so the old one
+  -- goes now rather than when the new one arrives. Between the two the
+  -- breadcrumb is blank, which is honest; leaving the previous lineage up while
+  -- the new row is marked would be a panel describing two different taxa.
+  ObservationPanel.clearTaxonomy(props)
+
   return row
+end
+
+--- Load the chosen suggestion's full lineage and show it.
+--
+-- MUST be called from inside a task: it may fetch.
+--
+-- Usually free, which is what makes it worth doing on every click rather than
+-- behind a button. Get Suggestions has already fetched the top candidate's
+-- lineage to build the coarser rows at the head of the list, and
+-- `InatAPI:getTaxon` memoises, so the common case is a cache read. A row
+-- further down costs one request, once.
+--
+-- The guard is the point of the rest of it. Clicking down a list faster than
+-- the network answers leaves several of these in flight at once, and without a
+-- check at the end the slowest reply wins -- the panel would settle on the
+-- lineage of a row the user has already moved off. So the chosen taxon is read
+-- again after the fetch and the answer is dropped unless it is still the one
+-- being asked about.
+--
+-- Failure is silent in the breadcrumb and spoken in the status line. A row with
+-- no lineage is a row whose Taxonomy buttons stay off, which is the honest
+-- state; putting an error where the taxonomy goes would read as the taxonomy.
+function ObservationPanel.loadTaxonomy(props)
+  local rows  = props.suggestions or {}
+  local index = PanelCore.selectedIndex(props.selectedSuggestion)
+  local row   = index and rows[index]
+
+  if not row or not row.taxon_id then
+    ObservationPanel.clearTaxonomy(props)
+    return nil
+  end
+
+  local wanted = row.taxon_id
+
+  local api = UploadCore.requireAPI()
+  if not api then
+    -- Nothing said. Choosing a row is not asking to sign in, and the panel's
+    -- own Get Suggestions has already reported this properly for anyone who
+    -- did ask -- there is no way to have a suggestion list to click without
+    -- having been through it.
+    return nil
+  end
+
+  local taxonomy, err = PanelCore.taxonomyFor(api, row)
+
+  if props.suggestionTaxonId ~= wanted then return nil end
+
+  if not taxonomy then
+    ObservationPanel.clearTaxonomy(props)
+    props.suggestionStatus = err or "Could not load the taxonomy."
+    return nil
+  end
+
+  props.taxonomy     = taxonomy
+  props.taxonomyLine = PanelCore.taxonomyBreadcrumb(taxonomy)
+  props.hasTaxonomy  = true
+
+  return taxonomy
+end
+
+--- Put the chosen suggestion's whole lineage on the clipboard.
+--
+-- MUST be called from inside a task: the copy shells out.
+--
+-- Every rank in one go, tab-separated, because the request this answers is
+-- "put it somewhere else" rather than "let me look at it" -- and the thing it
+-- is pasted into is usually a spreadsheet or a table, where a tab is two
+-- columns and a colon is one.
+function ObservationPanel.copyTaxonomy(props)
+  local taxonomy = props.taxonomy or {}
+
+  if #taxonomy == 0 then
+    props.suggestionStatus = "Choose a suggestion first."
+    return false
+  end
+
+  local Clipboard = require "Clipboard"
+
+  if not Clipboard.copy(PanelCore.taxonomyText(taxonomy)) then
+    props.suggestionStatus = "Could not copy the taxonomy."
+    return false
+  end
+
+  props.suggestionStatus =
+    "Copied " .. #taxonomy .. " ranks to the clipboard."
+  return true
+end
+
+--- Open the taxonomy dialog for the chosen suggestion.
+--
+-- MUST be called from inside a task with a live context: the dialog's buttons
+-- copy, and copying shells out.
+function ObservationPanel.showTaxonomy(context, props)
+  local taxonomy = props.taxonomy or {}
+
+  if #taxonomy == 0 then
+    props.suggestionStatus = "Choose a suggestion first."
+    return false
+  end
+
+  -- The finest rung names the dialog, because that is the taxon the user
+  -- clicked; the rest of the window is what it is a member of.
+  local leaf = taxonomy[#taxonomy]
+
+  return require("TaxonomyDialog").show(context, taxonomy, leaf and leaf.name)
 end
 
 --- Open a suggestion's taxon page on iNaturalist.
@@ -1170,9 +1351,15 @@ function ObservationPanel.show()
         end,
 
         -- Not on a task: neither picking a row nor opening a browser blocks,
-        -- and there is nothing to refresh from the catalog afterwards.
+        -- and there is nothing to refresh from the catalog afterwards. The
+        -- lineage that follows it does need one, and it is started separately
+        -- so that the row is marked and the guess filled immediately rather
+        -- than at network speed.
         chooseSuggestion = function(index)
           ObservationPanel.chooseSuggestion(props, index)
+          LrTasks.startAsyncTask(function()
+            ObservationPanel.loadTaxonomy(props)
+          end)
         end,
 
         viewSuggestion = function(index)
@@ -1219,6 +1406,25 @@ function ObservationPanel.show()
           LrTasks.startAsyncTask(function()
             ObservationPanel.copyObservationId(props)
           end)
+        end,
+
+        -- Same reason: the taxonomy goes to the clipboard through a shell.
+        copyTaxonomy = function()
+          LrTasks.startAsyncTask(function()
+            ObservationPanel.copyTaxonomy(props)
+          end)
+        end,
+
+        -- Its own context, not the panel's. The dialog's property table is tied
+        -- to whatever context it is given, and the panel's lives as long as the
+        -- window -- so handing this one the panel's would leave a property
+        -- table per dialog opened, never collected, for as long as the panel is
+        -- up.
+        showTaxonomy = function()
+          LrFunctionContext.postAsyncTaskWithContext("inat_taxonomy",
+            function(taxonomyContext)
+              ObservationPanel.showTaxonomy(taxonomyContext, props)
+            end)
         end,
 
         -- The observation ID's own click, not a button's. Guarded because the

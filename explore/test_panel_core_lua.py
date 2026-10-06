@@ -1676,3 +1676,198 @@ def test_a_failed_taxon_fetch_writes_nothing(plugin, core):
     assert not ok and err
     assert photo["_props"]["inat_taxon_name"] is None
     assert list(plugin.keywords) == []
+
+
+# ---------------------------------------------------------------------------
+# The taxonomic tree
+#
+# The vision endpoints return a taxon and nothing above it -- id, name, rank
+# and a common name. The lineage is a second request, /v1/taxa/{id}, and these
+# are the functions that turn its `ancestors` array into something a person can
+# read or paste.
+# ---------------------------------------------------------------------------
+
+
+def taxonomy_rows(core, taxon):
+    rows = core["taxonomyRows"](taxon)
+    return [rows[i] for i in range(1, len(rows) + 1)]
+
+
+def test_a_lineage_reads_kingdom_first_and_the_taxon_last(plugin, core):
+    rows = taxonomy_rows(core, top_hit(plugin))
+
+    assert [r["name"] for r in rows] == [
+        "Animalia", "Insecta", "Odonata", "Zygoptera", "Coenagrionidae",
+        "Ischnura", "Ischnura erratica",
+    ]
+
+
+def test_every_rung_is_labelled(plugin, core):
+    rows = taxonomy_rows(core, top_hit(plugin))
+
+    assert [r["label"] for r in rows] == [
+        "Kingdom", "Class", "Order", "Suborder", "Family", "Genus", "Species",
+    ]
+
+
+def test_a_rung_carries_its_common_name_when_there_is_one(plugin, core):
+    rows = taxonomy_rows(core, top_hit(plugin))
+    genus = [r for r in rows if r["rank"] == "genus"][0]
+
+    assert genus["text"] == "Ischnura (Forktails)"
+
+
+def test_a_rung_with_no_common_name_is_the_scientific_one_alone(plugin, core):
+    """Most ranks above genus have none, and empty parentheses read as a name
+    the plugin failed to fetch."""
+    rows = taxonomy_rows(core, top_hit(plugin))
+    kingdom = rows[0]
+
+    assert kingdom["text"] == "Animalia"
+
+
+def test_an_empty_common_name_counts_as_absent(plugin, core):
+    taxon = deep(plugin, {
+        "id": 1, "name": "Animalia", "rank": "kingdom",
+        "preferred_common_name": "", "ancestors": [],
+    })
+
+    assert taxonomy_rows(core, taxon)[0]["text"] == "Animalia"
+
+
+def test_an_unknown_rank_is_labelled_rather_than_dropped(plugin, core):
+    """iNaturalist has some seventy ranks. A lineage with a hole in it reads as
+    a taxonomy the plugin got wrong, not as one rank nobody listed."""
+    taxon = deep(plugin, {
+        "id": 2, "name": "Epifamilia", "rank": "epifamily", "ancestors": [],
+    })
+
+    assert taxonomy_rows(core, taxon)[0]["label"] == "Epifamily"
+
+
+def test_a_nameless_rung_is_dropped(plugin, core):
+    """A row reading "Family:" with nothing after it is a rung the reader will
+    think they are supposed to be able to read."""
+    taxon = deep(plugin, {
+        "id": 103486, "name": "Ischnura erratica", "rank": "species",
+        "ancestors": [
+            {"id": 1, "name": "Animalia", "rank": "kingdom"},
+            {"id": 47209, "rank": "family"},
+        ],
+    })
+
+    assert [r["name"] for r in taxonomy_rows(core, taxon)] == \
+        ["Animalia", "Ischnura erratica"]
+
+
+def test_a_taxon_with_no_lineage_is_one_rung(plugin, core):
+    taxon = deep(plugin, {"id": 1, "name": "Animalia", "rank": "kingdom"})
+
+    assert [r["name"] for r in taxonomy_rows(core, taxon)] == ["Animalia"]
+
+
+def test_nothing_produces_no_rows(plugin, core):
+    assert taxonomy_rows(core, None) == []
+
+
+# --- the one-line form -----------------------------------------------------
+
+
+def test_the_breadcrumb_is_the_scientific_names_in_order(plugin, core):
+    """Scientific names only: the row has one line of fixed width and seven
+    ranks to spend it on."""
+    line = core["taxonomyBreadcrumb"](core["taxonomyRows"](top_hit(plugin)))
+
+    assert line.startswith("Animalia")
+    assert line.endswith("Ischnura erratica")
+    assert "Forktails" not in line
+    assert line.count(core["LINEAGE_SEPARATOR"]) == 6
+
+
+def test_an_empty_lineage_makes_an_empty_breadcrumb(plugin, core):
+    assert core["taxonomyBreadcrumb"](None) == ""
+
+
+# --- what the Copy buttons put on the clipboard ----------------------------
+
+
+def test_the_clipboard_text_is_one_tab_separated_line_per_rank(plugin, core):
+    text = core["taxonomyText"](core["taxonomyRows"](top_hit(plugin)))
+    lines = text.split("\n")
+
+    assert len(lines) == 7
+    assert lines[0] == "Kingdom\tAnimalia"
+    assert lines[5] == "Genus\tIschnura (Forktails)"
+    assert lines[6] == "Species\tIschnura erratica"
+
+
+def test_the_clipboard_text_survives_the_clipboard(plugin, core):
+    """The two halves have to agree: a tab-separated block is only useful if
+    Clipboard carries its line breaks."""
+    clipboard = plugin.require("Clipboard")
+    plugin.set_platform(windows=True)
+
+    text = core["taxonomyText"](core["taxonomyRows"](top_hit(plugin)))
+    command = plugin.call(clipboard.command, text)[0]
+
+    assert command is not None
+    assert "\n" not in command
+    assert "'Kingdom\tAnimalia'" in command
+    assert "'Species\tIschnura erratica'" in command
+
+
+def test_an_empty_lineage_copies_as_nothing(plugin, core):
+    assert core["taxonomyText"](None) == ""
+
+
+# --- fetching it -----------------------------------------------------------
+
+
+def suggestion_row(plugin, taxon_id=103486):
+    return deep(plugin, {
+        "taxon_id": taxon_id, "name": "Ischnura erratica", "rank": "species",
+        "common_name": "Swift Forktail",
+    })
+
+
+def test_a_chosen_suggestion_gets_its_lineage(plugin, core):
+    api, calls = fake_api(plugin, taxon=top_hit(plugin))
+
+    rows, err = core["taxonomyFor"](api, suggestion_row(plugin))
+
+    assert err is None
+    assert len(rows) == 7
+    assert call_named(calls, "getTaxon") == [103486]
+
+
+def test_a_suggestion_with_no_taxon_id_is_refused_without_a_request(plugin, core):
+    """A coarser row always has one, but a hand-typed guess does not, and
+    /taxa/nil is a 404 nobody needed to pay for."""
+    api, calls = fake_api(plugin, taxon=top_hit(plugin))
+
+    rows, err = core["taxonomyFor"](api, deep(plugin, {"name": "something"}))
+
+    assert rows is None and err
+    assert call_named(calls, "getTaxon") == []
+
+
+def test_nothing_chosen_is_refused(plugin, core):
+    api, _ = fake_api(plugin, taxon=top_hit(plugin))
+
+    rows, err = core["taxonomyFor"](api, None)
+
+    assert rows is None and err
+
+
+def test_a_lineage_that_will_not_load_is_an_error_not_one_rung(plugin, core):
+    """withAncestors hands back what it was given when the fetch fails, which
+    is a taxon with a name and no lineage -- exactly the shape that silently
+    became a one-rung taxonomy."""
+    api, _ = fake_api(plugin, taxon=None)
+
+    rows, err = core["taxonomyFor"](api, suggestion_row(plugin))
+
+    assert rows is None
+    assert "Ischnura erratica" in err
+
+

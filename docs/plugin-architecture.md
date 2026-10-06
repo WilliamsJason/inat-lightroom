@@ -25,11 +25,12 @@ pinned.lrplugin/
 ├── UploadCore.lua             # Creating and updating observations
 ├── SyncCore.lua               # Sync logic, callable from any entry point
 ├── LinkObservation.lua        # Adopting an observation that already exists
+├── TaxonomyDialog.lua         # The chosen suggestion's full lineage, one rank per row
 ├── SettingsMenu.lua           # Menu script: opens the settings window
 ├── SettingsDialog.lua         # The settings window
 ├── Settings.lua               # Reading, writing and validating settings
 ├── WindowFix.lua              # Fixes the panel's z-order (Windows only)
-├── Clipboard.lua              # Puts short text on the system clipboard
+├── Clipboard.lua              # Puts text on the system clipboard, one or many lines
 ├── fix_window_z_order.ps1     # The Win32 helper WindowFix shells out to
 ├── PluginInfoProvider.lua     # The plugin's section in the Plug-in Manager
 ├── PluginFiles.lua            # What a complete installation contains, and what to say when it is not
@@ -253,7 +254,9 @@ species guess** depending on whether the selection is already linked, and
 **Sync**, **Set on Map**, **Link to Observation…** and **Unlink**. The
 observation ID has a **Copy** button of its own, and is itself clickable: it
 opens the observation in a browser, which is what the **View on iNaturalist**
-button used to do beside it.
+button used to do beside it. Under the suggestion list sits the chosen
+suggestion's taxonomy: a one-line breadcrumb, a **Copy Taxonomy** button and a
+**Taxonomy…** button that opens the full lineage one rank at a time.
 
 Everything below the heading describes the *first* selected photo and the
 heading says so. Uploading is the exception: it takes the whole selection into a
@@ -477,6 +480,62 @@ control that is both read-only and selectable, so the observation ID the panel
 shows could otherwise only be retyped — and a mistyped nine-digit ID attaches a
 photo to a stranger's observation. It shells out the same way `WindowFix.lua`
 does: `Set-Clipboard` on Windows, `pbcopy` on macOS.
+
+It takes more than one line now, and the rule that replaced the old blanket
+refusal is worth stating: a newline never reaches the command line. Several
+lines become several *arguments* — `Set-Clipboard -Value @('a','b')`,
+`printf '%s\n' 'a' 'b' | pbcopy` — and the helper on each platform is what joins
+them. A raw newline in a command is where quoting stops being a formatting
+question and becomes a second command. One trailing newline is dropped, so a
+block built by appending `\n` to each line does not copy with a blank last one.
+
+### Showing the taxonomy without growing the panel
+
+The vision endpoints answer with a taxon and nothing above it — `id`, `name`,
+`rank`, `preferred_common_name` — so the lineage is a second request,
+`GET /v1/taxa/{id}`, and `/v1/taxa?id=…` will not do (see
+`docs/inat-api-notes.md`).
+
+**It is usually free.** `PanelCore.withFallbacks` has already fetched the top
+candidate's lineage to build the coarser rows at the head of every suggestion
+list, and `InatAPI:getTaxon` memoises, so the lineage of the row most people
+click is already in the client's cache. A row further down costs one request,
+once. That is what makes it affordable to load on the click rather than behind a
+button nobody would press.
+
+**A collapsible taxonomy in the panel is not something the SDK can build.** A
+presented view tree cannot grow, shrink, or hide a row — a bound `visible` is
+accepted and ignored — so eight rows of lineage would stand at full height
+whether "collapsed" or not. Hence three things that each cost the panel almost
+nothing:
+
+- a one-line breadcrumb, `Animalia › Arthropoda › … › Ischnura erratica`,
+  truncated with a tooltip. Scientific names only: the row has one line of fixed
+  width and seven ranks to spend it on.
+- **Copy Taxonomy**, which puts every rank on the clipboard tab-separated —
+  `Kingdom\tAnimalia` — because the destination is usually a spreadsheet or a
+  table, where a tab is two columns and a colon is one.
+- **Taxonomy…**, which opens `TaxonomyDialog.lua`: one row per rank, each with
+  its own **Copy** button. A dialog is built fresh each time, so it is exactly
+  as tall as the lineage it was handed and costs the panel nothing. Per-row
+  buttons rather than selectable text, because `selectable = true` leaves the
+  user dragging across a label to get a name — and copies the truncation rather
+  than the name when the row is cut.
+
+All three share one row of the panel: the breadcrumb fills it and the two
+buttons sit at its end.
+
+The breadcrumb belongs to whichever row was chosen last and is cleared the
+instant a different one is chosen, so between the click and the answer it is
+blank rather than describing the previous taxon. The fetch that follows checks
+that the chosen taxon is still the one it was asked about before it writes
+anything: clicking down a list faster than the network answers leaves several
+fetches in flight, and without the check the slowest reply wins.
+
+A lineage that will not load leaves the buttons off and says so in the status
+line. It is never shown as a one-rung taxonomy — `SyncCore.withAncestors` hands
+back what it was given when the fetch fails, and that shape is checked for
+rather than formatted.
 
 ### Offering a rank the evidence supports
 

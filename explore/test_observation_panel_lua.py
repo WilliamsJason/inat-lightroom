@@ -1621,6 +1621,264 @@ def test_moving_to_another_photo_empties_the_rows(plugin, panel):
 
 
 # ---------------------------------------------------------------------------
+# The taxonomy of the chosen suggestion
+#
+# The vision endpoints answer with a taxon and nothing above it, so the lineage
+# is a second request. It is made on the click rather than behind a button
+# because Get Suggestions has already fetched the top candidate's lineage to
+# build the coarser rows and InatAPI:getTaxon memoises -- the common case costs
+# nothing.
+# ---------------------------------------------------------------------------
+
+
+LINEAGE = [
+    {"id": 1, "name": "Animalia", "rank": "kingdom"},
+    {"id": 47158, "name": "Insecta", "rank": "class"},
+    {"id": 52054, "name": "Ischnura", "rank": "genus",
+     "preferred_common_name": "Forktails"},
+]
+
+
+def stub_taxonomy(plugin, ancestors=None, fail=False):
+    """Answer the lineage fetch without a network or a sign-in."""
+    install = plugin.eval("""
+      function(taxon, fail)
+        local UploadCore = require "UploadCore"
+        UploadCore.requireAPI = function()
+          return {
+            getTaxon = function(_self, id)
+              if fail then return nil, "no" end
+              return taxon, nil
+            end,
+          }
+        end
+      end
+    """)
+    taxon = deep(plugin, {
+        "id": 103486, "name": "Ischnura erratica", "rank": "species",
+        "ancestors": ancestors if ancestors is not None else LINEAGE,
+    })
+    install(taxon, fail)
+
+
+def with_chosen_row(plugin, panel, taxon_id=103486):
+    props = plugin.runtime.table_from({})
+    plugin.call(panel.clearSuggestions, props)
+    props["suggestions"] = deep(plugin, [
+        {"taxon_id": taxon_id, "name": "Ischnura erratica", "rank": "species",
+         "common_name": "Swift Forktail", "combined_score": 91},
+    ])
+    plugin.call(panel.chooseSuggestion, props, 1)
+    return props
+
+
+def test_choosing_a_suggestion_shows_its_lineage(plugin, panel):
+    stub_taxonomy(plugin)
+    props = with_chosen_row(plugin, panel)
+
+    plugin.in_task(panel.loadTaxonomy, props)
+
+    assert props["hasTaxonomy"] is True
+    assert props["taxonomyLine"].startswith("Animalia")
+    assert props["taxonomyLine"].endswith("Ischnura erratica")
+
+
+def test_the_breadcrumb_is_blank_until_a_suggestion_is_chosen(plugin, panel):
+    """It is bound before the window is built, so it has to exist -- and a row
+    that reads as a taxonomy before one was asked for is a lie."""
+    props = plugin.runtime.table_from({})
+    plugin.call(panel.clearSuggestions, props)
+
+    assert props["taxonomyLine"] == ""
+    assert props["hasTaxonomy"] is False
+
+
+def test_choosing_another_suggestion_drops_the_old_lineage_at_once(
+    plugin, panel
+):
+    """Between the two clicks the breadcrumb is blank, which is honest. Leaving
+    the previous lineage up while the new row is marked would be a panel
+    describing two different taxa."""
+    stub_taxonomy(plugin)
+    props = with_chosen_row(plugin, panel)
+    plugin.in_task(panel.loadTaxonomy, props)
+    assert props["hasTaxonomy"] is True
+
+    plugin.call(panel.chooseSuggestion, props, 1)
+
+    assert props["taxonomyLine"] == ""
+    assert props["hasTaxonomy"] is False
+
+
+def test_a_slow_answer_for_a_row_already_moved_off_is_dropped(plugin, panel):
+    """Clicking down a list faster than the network answers leaves several
+    fetches in flight, and without this the slowest reply wins -- the panel
+    settles on the lineage of a row the user has left."""
+    stub_taxonomy(plugin)
+    props = with_chosen_row(plugin, panel)
+
+    # The fetch was started for this row; by the time it lands the chosen
+    # taxon is a different one.
+    props["suggestionTaxonId"] = 47219
+
+    plugin.in_task(panel.loadTaxonomy, props)
+
+    assert props["hasTaxonomy"] is False
+    assert props["taxonomyLine"] == ""
+
+
+def test_a_lineage_that_will_not_load_leaves_the_buttons_off(plugin, panel):
+    """An error where the taxonomy goes would read as the taxonomy."""
+    stub_taxonomy(plugin, fail=True)
+    props = with_chosen_row(plugin, panel)
+
+    plugin.in_task(panel.loadTaxonomy, props)
+
+    assert props["hasTaxonomy"] is False
+    assert props["taxonomyLine"] == ""
+    assert "taxonomy" in props["suggestionStatus"].lower()
+
+
+def test_a_row_with_no_taxon_asks_for_nothing(plugin, panel):
+    props = plugin.runtime.table_from({})
+    plugin.call(panel.clearSuggestions, props)
+    props["suggestions"] = deep(plugin, [{"name": "Unrankable"}])
+    plugin.call(panel.chooseSuggestion, props, 1)
+
+    plugin.in_task(panel.loadTaxonomy, props)
+
+    assert props["hasTaxonomy"] is False
+
+
+def test_choosing_a_row_starts_the_lineage_fetch(plugin, panel):
+    """The row is marked and the guess filled straight away; the fetch follows
+    on its own task, so a slow network does not delay the click."""
+    stub_taxonomy(plugin)
+    args = show(plugin, panel)
+    props = args["contents"]["bind_to_object"]
+    props["suggestions"] = deep(plugin, [
+        {"taxon_id": 103486, "name": "Ischnura erratica", "rank": "species"},
+    ])
+
+    plugin.call(panel.chooseSuggestion, props, 1)
+
+    assert props["speciesGuess"] == "Ischnura erratica"
+    assert props["hasTaxonomy"] is False, "the fetch has not run yet"
+
+    plugin.in_task(panel.loadTaxonomy, props)
+
+    assert props["hasTaxonomy"] is True
+
+
+# --- taking it with you ----------------------------------------------------
+
+
+def with_taxonomy(plugin, panel):
+    stub_taxonomy(plugin)
+    props = with_chosen_row(plugin, panel)
+    plugin.in_task(panel.loadTaxonomy, props)
+    return props
+
+
+def test_copying_the_taxonomy_puts_every_rank_on_the_clipboard(plugin, panel):
+    plugin.set_platform(windows=True)
+    props = with_taxonomy(plugin, panel)
+
+    assert plugin.in_task(panel.copyTaxonomy, props) is True
+
+    command = plugin.executed_commands[-1]
+    assert "Set-Clipboard" in command
+    assert "'Kingdom\tAnimalia'" in command
+    assert "'Species\tIschnura erratica'" in command
+
+
+def test_copying_the_taxonomy_says_so_in_the_status_line(plugin, panel):
+    """A modal to dismiss after every copy would defeat the point."""
+    plugin.set_platform(windows=True)
+    props = with_taxonomy(plugin, panel)
+
+    plugin.in_task(panel.copyTaxonomy, props)
+
+    assert "4 ranks" in props["suggestionStatus"]
+    assert plugin.modal_dialogs == []
+
+
+def test_copying_nothing_copies_nothing(plugin, panel):
+    props = plugin.runtime.table_from({})
+    plugin.call(panel.clearSuggestions, props)
+
+    assert plugin.in_task(panel.copyTaxonomy, props) is False
+    assert plugin.executed_commands == []
+
+
+def test_a_failed_copy_is_reported_not_raised(plugin, panel):
+    plugin.set_platform(windows=True)
+    props = with_taxonomy(plugin, panel)
+    plugin.set_execute_exit_code(1)
+
+    assert plugin.in_task(panel.copyTaxonomy, props) is False
+    assert "Could not copy" in props["suggestionStatus"]
+
+
+def test_the_taxonomy_dialog_opens_on_the_chosen_taxon(plugin, panel):
+    props = with_taxonomy(plugin, panel)
+
+    plugin.in_task(panel.showTaxonomy, None, props)
+
+    assert "Ischnura erratica" in plugin.modal_dialogs[-1]["title"]
+
+
+def test_the_taxonomy_dialog_will_not_open_on_nothing(plugin, panel):
+    props = plugin.runtime.table_from({})
+    plugin.call(panel.clearSuggestions, props)
+
+    assert plugin.in_task(panel.showTaxonomy, None, props) is False
+    assert plugin.modal_dialogs == []
+
+
+# --- the row it all sits on ------------------------------------------------
+
+
+def test_the_panel_offers_both_ways_to_take_the_taxonomy(plugin, panel):
+    args = show(plugin, panel)
+    titles = {b["title"] for b in of_type(args["contents"], "push_button")
+              if isinstance(b["title"], str)}
+
+    assert "Copy Taxonomy" in titles
+    # The ellipsis is multi-byte and Lua hands back raw bytes, so match the
+    # ASCII part of the label.
+    assert any(t.startswith("Taxonomy") and t != "Copy Taxonomy"
+               for t in titles)
+
+
+def test_the_taxonomy_buttons_are_off_until_there_is_one(plugin, panel):
+    args = show(plugin, panel)
+    buttons = [b for b in of_type(args["contents"], "push_button")
+               if isinstance(b["title"], str)
+               and b["title"].startswith(("Copy Taxonomy", "Taxonomy"))]
+
+    assert len(buttons) == 2
+    for button in buttons:
+        assert button["enabled"]["__bind"] == "hasTaxonomy"
+
+    assert args["contents"]["bind_to_object"]["hasTaxonomy"] is False
+
+
+def test_the_breadcrumb_declares_a_width_and_truncates(plugin, panel):
+    """A static_text built with an empty title and no width collapses to
+    nothing, and fill_horizontal cannot save it. Truncation is what says the
+    name was shortened -- without it the last word is dropped silently."""
+    args = show(plugin, panel)
+    line = [v for v in of_type(args["contents"], "static_text")
+            if hasattr(v["title"], "keys")
+            and v["title"]["__bind"] == "taxonomyLine"]
+
+    assert len(line) == 1
+    assert line[0]["width"] > 0
+    assert line[0]["truncation"] == "tail"
+
+
+# ---------------------------------------------------------------------------
 # Arguing before a weak species claim
 # ---------------------------------------------------------------------------
 

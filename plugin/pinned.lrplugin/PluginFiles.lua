@@ -109,6 +109,7 @@ PluginFiles.FILES = {
   "Sha256.lua",
   "SyncCore.lua",
   "TagsetInat.lua",
+  "TaxonomyDialog.lua",
   "ThumbCache.lua",
   "UpdateCore.lua",
   "UpdateInstall.lua",
