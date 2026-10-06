@@ -592,9 +592,9 @@ once the padding removed the need for it.
 This is also what rules out a collapsible section anywhere in the panel. The
 feature request that asked for one was the chosen suggestion's full taxonomy —
 seven or eight ranks — and a block that cannot be hidden is a block that is
-always there. The answer was to put the readable form in a dialog, which is
-built fresh each time it opens and is therefore exactly as tall as what it was
-handed, and to leave the panel one line and two buttons.
+always there. The answer was to put it in a dialog, which is built fresh each
+time it opens and is therefore exactly as tall as what it was handed, and to
+put the button that opens it in a row the panel already had.
 
 ## Several lines onto the clipboard, without a newline in the command
 

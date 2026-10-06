@@ -254,9 +254,8 @@ species guess** depending on whether the selection is already linked, and
 **Sync**, **Set on Map**, **Link to Observation…** and **Unlink**. The
 observation ID has a **Copy** button of its own, and is itself clickable: it
 opens the observation in a browser, which is what the **View on iNaturalist**
-button used to do beside it. Under the suggestion list sits the chosen
-suggestion's taxonomy: a one-line breadcrumb, a **Copy Taxonomy** button and a
-**Taxonomy…** button that opens the full lineage one rank at a time.
+button used to do beside it. Beside **Update photo tags** sits **Taxonomy…**,
+which opens the chosen suggestion's full lineage one rank at a time.
 
 Everything below the heading describes the *first* selected photo and the
 heading says so. Uploading is the exception: it takes the whole selection into a
@@ -506,35 +505,36 @@ button nobody would press.
 **A collapsible taxonomy in the panel is not something the SDK can build.** A
 presented view tree cannot grow, shrink, or hide a row — a bound `visible` is
 accepted and ignored — so eight rows of lineage would stand at full height
-whether "collapsed" or not. Hence three things that each cost the panel almost
-nothing:
+whether "collapsed" or not. Even the one-line form that was tried instead — a
+truncated `Animalia › Arthropoda › … › Ischnura erratica` with a **Copy
+Taxonomy** button beside it — cost the panel a row permanently for something
+wanted occasionally, and said less than the window it opened.
 
-- a one-line breadcrumb, `Animalia › Arthropoda › … › Ischnura erratica`,
-  truncated with a tooltip. Scientific names only: the row has one line of fixed
-  width and seven ranks to spend it on.
-- **Copy Taxonomy**, which puts every rank on the clipboard tab-separated —
-  `Kingdom\tAnimalia` — because the destination is usually a spreadsheet or a
-  table, where a tab is two columns and a colon is one.
-- **Taxonomy…**, which opens `TaxonomyDialog.lua`: one row per rank, each with
-  its own **Copy** button. A dialog is built fresh each time, so it is exactly
-  as tall as the lineage it was handed and costs the panel nothing. Per-row
-  buttons rather than selectable text, because `selectable = true` leaves the
-  user dragging across a label to get a name — and copies the truncation rather
-  than the name when the row is cut.
+So the whole feature is **Taxonomy…**, one button, which opens
+`TaxonomyDialog.lua`: one row per rank, each with its own **Copy** button, and
+**Copy All** for every rank at once, tab-separated — `Kingdom\tAnimalia` —
+because the destination is usually a spreadsheet or a table, where a tab is two
+columns and a colon is one. A dialog is built fresh each time, so it is exactly
+as tall as the lineage it was handed and costs the panel no height at all.
 
-All three share one row of the panel: the breadcrumb fills it and the two
-buttons sit at its end.
+Per-row buttons rather than selectable text, because `selectable = true` is
+honoured and takes the row's `mouse_down` with it, and leaves the user dragging
+across a label to get a name.
 
-The breadcrumb belongs to whichever row was chosen last and is cleared the
-instant a different one is chosen, so between the click and the answer it is
-blank rather than describing the previous taxon. The fetch that follows checks
-that the chosen taxon is still the one it was asked about before it writes
-anything: clicking down a list faster than the network answers leaves several
-fetches in flight, and without the check the slowest reply wins.
+The button sits in the row with **Update photo tags** rather than one of its
+own, which is why the panel did not grow: that is the other button working on
+the chosen name rather than on iNaturalist, and it comes on at the same moment.
 
-A lineage that will not load leaves the buttons off and says so in the status
-line. It is never shown as a one-rung taxonomy — `SyncCore.withAncestors` hands
-back what it was given when the fetch fails, and that shape is checked for
+The lineage belongs to whichever row was chosen last and is dropped the instant
+a different one is chosen, so the button never opens the previous answer. The
+fetch that follows checks that the chosen taxon is still the one it was asked
+about before it writes anything: clicking down a list faster than the network
+answers leaves several fetches in flight, and without the check the slowest
+reply wins.
+
+A lineage that will not load leaves the button off and says so in the status
+line. It is never offered as a one-rung taxonomy — `SyncCore.withAncestors`
+hands back what it was given when the fetch fails, and that shape is checked for
 rather than formatted.
 
 ### Offering a rank the evidence supports

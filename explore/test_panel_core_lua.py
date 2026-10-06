@@ -1770,24 +1770,6 @@ def test_nothing_produces_no_rows(plugin, core):
     assert taxonomy_rows(core, None) == []
 
 
-# --- the one-line form -----------------------------------------------------
-
-
-def test_the_breadcrumb_is_the_scientific_names_in_order(plugin, core):
-    """Scientific names only: the row has one line of fixed width and seven
-    ranks to spend it on."""
-    line = core["taxonomyBreadcrumb"](core["taxonomyRows"](top_hit(plugin)))
-
-    assert line.startswith("Animalia")
-    assert line.endswith("Ischnura erratica")
-    assert "Forktails" not in line
-    assert line.count(core["LINEAGE_SEPARATOR"]) == 6
-
-
-def test_an_empty_lineage_makes_an_empty_breadcrumb(plugin, core):
-    assert core["taxonomyBreadcrumb"](None) == ""
-
-
 # --- what the Copy buttons put on the clipboard ----------------------------
 
 

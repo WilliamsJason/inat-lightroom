@@ -171,28 +171,20 @@ The usual run of it:
 4. Click **Upload to iNaturalist** — or, if the selection is already linked to
    an observation, **Update species guess**.
 
-Choosing a suggestion also fills in its **taxonomy**, on the line under the
-list: *Animalia › Arthropoda › Insecta › … › Ischnura erratica*, kingdom down to
-the thing itself. It is there to answer the question a scientific name on its
-own does not — is this even in the right group? — at a glance and without
-leaving Lightroom. Long lineages are cut off with an ellipsis; the whole of it
-is one button away.
+Choosing a suggestion also loads its **taxonomy**, and **Taxonomy…** — beside
+**Update photo tags** — opens it: one row per rank, kingdom down to the thing
+itself, each with its own **Copy** button. It answers the question a scientific
+name on its own does not — is this even in the right group? — without leaving
+Lightroom, and it lets you take just the family, or just the genus, without
+editing anything afterwards. **Copy All** at the bottom puts every rank on the
+clipboard at once, one per line, with the rank name and the taxon separated by a
+tab: pasted into a spreadsheet that is two columns, pasted anywhere else it is a
+readable list.
 
-The line is not selectable, because Lightroom will not let a piece of text be
-both clickable and selectable. Copying is what the two buttons beside it are
-for:
+Copy buttons rather than text you can select, because Lightroom will not let a
+piece of text be both clickable and selectable.
 
-- **Copy Taxonomy** — puts every rank on the clipboard at once, one per line,
-  with the rank name and the taxon separated by a tab. Pasted into a spreadsheet
-  that is two columns; pasted anywhere else it is a readable list. This is the
-  one to use when you want the taxonomy in your notes and do not need to look at
-  it.
-- **Taxonomy…** — opens a window with one row per rank, each with its own
-  **Copy** button, so you can take just the family, or just the genus, without
-  editing anything afterwards. **Copy All** at the bottom does the same as Copy
-  Taxonomy.
-
-Both are greyed out until a suggestion is chosen. The lineage comes from
+The button is greyed out until a suggestion is chosen. The lineage comes from
 iNaturalist rather than from the photo, and for the top suggestion it has
 already been fetched by the time you click, so it normally appears instantly.
 

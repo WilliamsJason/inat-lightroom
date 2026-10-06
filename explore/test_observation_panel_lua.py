@@ -1672,33 +1672,34 @@ def with_chosen_row(plugin, panel, taxon_id=103486):
     return props
 
 
-def test_choosing_a_suggestion_shows_its_lineage(plugin, panel):
+def test_choosing_a_suggestion_loads_its_lineage(plugin, panel):
     stub_taxonomy(plugin)
     props = with_chosen_row(plugin, panel)
 
     plugin.in_task(panel.loadTaxonomy, props)
 
     assert props["hasTaxonomy"] is True
-    assert props["taxonomyLine"].startswith("Animalia")
-    assert props["taxonomyLine"].endswith("Ischnura erratica")
+    names = [r["name"] for r in props["taxonomy"].values()]
+    assert names[0] == "Animalia"
+    assert names[-1] == "Ischnura erratica"
 
 
-def test_the_breadcrumb_is_blank_until_a_suggestion_is_chosen(plugin, panel):
-    """It is bound before the window is built, so it has to exist -- and a row
-    that reads as a taxonomy before one was asked for is a lie."""
+def test_there_is_no_lineage_until_a_suggestion_is_chosen(plugin, panel):
+    """`hasTaxonomy` is bound before the window is built, so it has to exist --
+    and a Taxonomy button live before a suggestion was chosen would open a
+    window with nothing in it."""
     props = plugin.runtime.table_from({})
     plugin.call(panel.clearSuggestions, props)
 
-    assert props["taxonomyLine"] == ""
     assert props["hasTaxonomy"] is False
 
 
 def test_choosing_another_suggestion_drops_the_old_lineage_at_once(
     plugin, panel
 ):
-    """Between the two clicks the breadcrumb is blank, which is honest. Leaving
-    the previous lineage up while the new row is marked would be a panel
-    describing two different taxa."""
+    """Between the two clicks there is nothing to open, which is honest.
+    Leaving the previous lineage in place while the new row is marked would be
+    a panel describing two different taxa."""
     stub_taxonomy(plugin)
     props = with_chosen_row(plugin, panel)
     plugin.in_task(panel.loadTaxonomy, props)
@@ -1706,7 +1707,6 @@ def test_choosing_another_suggestion_drops_the_old_lineage_at_once(
 
     plugin.call(panel.chooseSuggestion, props, 1)
 
-    assert props["taxonomyLine"] == ""
     assert props["hasTaxonomy"] is False
 
 
@@ -1724,18 +1724,17 @@ def test_a_slow_answer_for_a_row_already_moved_off_is_dropped(plugin, panel):
     plugin.in_task(panel.loadTaxonomy, props)
 
     assert props["hasTaxonomy"] is False
-    assert props["taxonomyLine"] == ""
 
 
-def test_a_lineage_that_will_not_load_leaves_the_buttons_off(plugin, panel):
-    """An error where the taxonomy goes would read as the taxonomy."""
+def test_a_lineage_that_will_not_load_leaves_the_button_off(plugin, panel):
+    """A Taxonomy button that opens an empty window is worse than one that is
+    off and a status line that says why."""
     stub_taxonomy(plugin, fail=True)
     props = with_chosen_row(plugin, panel)
 
     plugin.in_task(panel.loadTaxonomy, props)
 
     assert props["hasTaxonomy"] is False
-    assert props["taxonomyLine"] == ""
     assert "taxonomy" in props["suggestionStatus"].lower()
 
 
@@ -1770,7 +1769,7 @@ def test_choosing_a_row_starts_the_lineage_fetch(plugin, panel):
     assert props["hasTaxonomy"] is True
 
 
-# --- taking it with you ----------------------------------------------------
+# --- reading it ------------------------------------------------------------
 
 
 def with_taxonomy(plugin, panel):
@@ -1778,46 +1777,6 @@ def with_taxonomy(plugin, panel):
     props = with_chosen_row(plugin, panel)
     plugin.in_task(panel.loadTaxonomy, props)
     return props
-
-
-def test_copying_the_taxonomy_puts_every_rank_on_the_clipboard(plugin, panel):
-    plugin.set_platform(windows=True)
-    props = with_taxonomy(plugin, panel)
-
-    assert plugin.in_task(panel.copyTaxonomy, props) is True
-
-    command = plugin.executed_commands[-1]
-    assert "Set-Clipboard" in command
-    assert "'Kingdom\tAnimalia'" in command
-    assert "'Species\tIschnura erratica'" in command
-
-
-def test_copying_the_taxonomy_says_so_in_the_status_line(plugin, panel):
-    """A modal to dismiss after every copy would defeat the point."""
-    plugin.set_platform(windows=True)
-    props = with_taxonomy(plugin, panel)
-
-    plugin.in_task(panel.copyTaxonomy, props)
-
-    assert "4 ranks" in props["suggestionStatus"]
-    assert plugin.modal_dialogs == []
-
-
-def test_copying_nothing_copies_nothing(plugin, panel):
-    props = plugin.runtime.table_from({})
-    plugin.call(panel.clearSuggestions, props)
-
-    assert plugin.in_task(panel.copyTaxonomy, props) is False
-    assert plugin.executed_commands == []
-
-
-def test_a_failed_copy_is_reported_not_raised(plugin, panel):
-    plugin.set_platform(windows=True)
-    props = with_taxonomy(plugin, panel)
-    plugin.set_execute_exit_code(1)
-
-    assert plugin.in_task(panel.copyTaxonomy, props) is False
-    assert "Could not copy" in props["suggestionStatus"]
 
 
 def test_the_taxonomy_dialog_opens_on_the_chosen_taxon(plugin, panel):
@@ -1836,46 +1795,55 @@ def test_the_taxonomy_dialog_will_not_open_on_nothing(plugin, panel):
     assert plugin.modal_dialogs == []
 
 
-# --- the row it all sits on ------------------------------------------------
+# --- the button, and where it sits -----------------------------------------
 
 
-def test_the_panel_offers_both_ways_to_take_the_taxonomy(plugin, panel):
+def taxonomy_buttons(args):
+    return [b for b in of_type(args["contents"], "push_button")
+            if isinstance(b["title"], str)
+            # The ellipsis is multi-byte and Lua hands back raw bytes, so
+            # match the ASCII part of the label.
+            and b["title"].startswith("Taxonomy")]
+
+
+def test_the_panel_offers_one_taxonomy_button(plugin, panel):
+    """One button, not a row of its own: the panel cannot afford height for
+    something wanted occasionally, and a dialog costs it none."""
+    assert len(taxonomy_buttons(show(plugin, panel))) == 1
+
+
+def test_the_taxonomy_button_is_off_until_there_is_one(plugin, panel):
+    args = show(plugin, panel)
+    button = taxonomy_buttons(args)[0]
+
+    assert button["enabled"]["__bind"] == "hasTaxonomy"
+    assert args["contents"]["bind_to_object"]["hasTaxonomy"] is False
+
+
+def test_the_taxonomy_button_sits_beside_update_photo_tags(plugin, panel):
+    """Beside the other button that works on the chosen name, so the panel does
+    not grow a row for it."""
+    args = show(plugin, panel)
+    rows = [v for v in of_type(args["contents"], "row")
+            if any(isinstance(b["title"], str)
+                   and b["title"] == "Update photo tags"
+                   for b in of_type(v, "push_button"))]
+
+    assert len(rows) == 1
+    assert len(taxonomy_buttons({"contents": rows[0]})) == 1
+
+
+def test_the_panel_has_no_taxonomy_line_of_its_own(plugin, panel):
+    """The breadcrumb and Copy Taxonomy were tried and dropped: the dialog
+    answers both, and neither earned the width."""
     args = show(plugin, panel)
     titles = {b["title"] for b in of_type(args["contents"], "push_button")
               if isinstance(b["title"], str)}
 
-    assert "Copy Taxonomy" in titles
-    # The ellipsis is multi-byte and Lua hands back raw bytes, so match the
-    # ASCII part of the label.
-    assert any(t.startswith("Taxonomy") and t != "Copy Taxonomy"
-               for t in titles)
-
-
-def test_the_taxonomy_buttons_are_off_until_there_is_one(plugin, panel):
-    args = show(plugin, panel)
-    buttons = [b for b in of_type(args["contents"], "push_button")
-               if isinstance(b["title"], str)
-               and b["title"].startswith(("Copy Taxonomy", "Taxonomy"))]
-
-    assert len(buttons) == 2
-    for button in buttons:
-        assert button["enabled"]["__bind"] == "hasTaxonomy"
-
-    assert args["contents"]["bind_to_object"]["hasTaxonomy"] is False
-
-
-def test_the_breadcrumb_declares_a_width_and_truncates(plugin, panel):
-    """A static_text built with an empty title and no width collapses to
-    nothing, and fill_horizontal cannot save it. Truncation is what says the
-    name was shortened -- without it the last word is dropped silently."""
-    args = show(plugin, panel)
-    line = [v for v in of_type(args["contents"], "static_text")
-            if hasattr(v["title"], "keys")
-            and v["title"]["__bind"] == "taxonomyLine"]
-
-    assert len(line) == 1
-    assert line[0]["width"] > 0
-    assert line[0]["truncation"] == "tail"
+    assert "Copy Taxonomy" not in titles
+    assert not [v for v in of_type(args["contents"], "static_text")
+                if hasattr(v["title"], "keys")
+                and v["title"]["__bind"] == "taxonomyLine"]
 
 
 # ---------------------------------------------------------------------------

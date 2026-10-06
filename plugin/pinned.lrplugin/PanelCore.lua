@@ -328,11 +328,6 @@ function PanelCore.rankLabel(rank)
   return (rank:gsub("^%l", string.upper))
 end
 
---- The separator between rungs on the one-line form.
--- A single glyph rather than " > ", which reads as a shell prompt and takes
--- three times the width in a field where width is the whole constraint.
-PanelCore.LINEAGE_SEPARATOR = " \226\128\186 "  -- a single right-pointing guillemet
-
 --- One taxon's lineage as rows, kingdom first, the taxon itself last.
 --
 -- @param taxon  A taxon carrying its `ancestors`, as `/v1/taxa/{id}` returns.
@@ -369,20 +364,7 @@ function PanelCore.taxonomyRows(taxon)
   return rows
 end
 
---- The lineage as one line: `Animalia › Arthropoda › … › Ischnura erratica`.
---
--- Scientific names only. The common names are what make the dialog readable and
--- what make this unreadable -- the row has one line of a fixed width and seven
--- ranks to spend it on, so the half of each rung that is the same in every
--- language is the half that stays.
-function PanelCore.taxonomyBreadcrumb(rows)
-  local names = {}
-  for _, row in ipairs(rows or {}) do names[#names + 1] = row.name end
-
-  return table.concat(names, PanelCore.LINEAGE_SEPARATOR)
-end
-
---- The whole lineage as the block of text the Copy button puts on the clipboard.
+--- The whole lineage as the block of text the Copy All button puts on the clipboard.
 --
 -- Tab-separated rather than `Kingdom: Animalia`, because the overwhelmingly
 -- likely destination is a spreadsheet or a notes field with a table in it, and
