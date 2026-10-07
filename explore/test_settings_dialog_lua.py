@@ -175,6 +175,24 @@ def test_a_setting_turned_off_is_stored_without_a_save(plugin, dialog, settings)
     assert settings["get"]("inat_sync_after_upload") is False
 
 
+def test_the_taxonomy_window_count_is_a_setting(plugin, dialog, settings):
+    """One window that keeps up is right for clicking down a list; one per
+    press is right for holding two lineages side by side. Both are worth
+    having, so it is a preference rather than a decision."""
+    bound = tab_bindings(plugin, dialog, 1)
+
+    assert "taxonomy_multiple_windows" in bound
+
+    props = watching(plugin, dialog)
+    props["taxonomy_multiple_windows"] = True
+
+    assert settings["get"]("taxonomy_multiple_windows") is True
+
+
+def test_one_taxonomy_window_is_what_an_untouched_install_gets(settings):
+    assert settings["get"]("taxonomy_multiple_windows") is False
+
+
 def test_a_typed_keyword_root_is_tidied_on_the_way_in(plugin, dialog, settings):
     """Saved as it is typed still means saved the way Save would have."""
     props = watching(plugin, dialog)

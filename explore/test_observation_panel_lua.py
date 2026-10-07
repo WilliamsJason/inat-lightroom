@@ -1859,12 +1859,23 @@ def with_taxonomy(plugin, panel):
     return props
 
 
+def heading(plugin):
+    """What the taxonomy window names the taxon.
+
+    The single window's title bar is fixed -- it is what the Win32 helpers find
+    it by, and it outlives any one taxon -- so the taxon is in a bound heading
+    inside the window instead.
+    """
+    opened = plugin.floating_dialogs[-1]
+    return opened["contents"]["bind_to_object"]["heading"]
+
+
 def test_the_taxonomy_window_opens_on_the_chosen_taxon(plugin, panel):
     props = with_taxonomy(plugin, panel)
 
     plugin.in_task(panel.showTaxonomy, None, props)
 
-    assert "Ischnura erratica" in plugin.floating_dialogs[-1]["title"]
+    assert heading(plugin) == "Ischnura erratica"
 
 
 def test_the_taxonomy_window_will_not_open_on_nothing(plugin, panel):
@@ -1886,7 +1897,7 @@ def test_a_typed_name_is_looked_up_rather_than_refused(plugin, panel):
     props["speciesGuess"] = "Argiini"
 
     assert plugin.in_task(panel.showTaxonomy, None, props) is True
-    assert "Argiini" in plugin.floating_dialogs[-1]["title"]
+    assert heading(plugin) == "Argiini"
     assert list(reached["lookups"].values()) == ["Argiini"]
 
 
@@ -1902,7 +1913,6 @@ def test_a_typed_name_is_only_looked_up_once(plugin, panel):
     plugin.in_task(panel.showTaxonomy, None, props)
     plugin.in_task(panel.showTaxonomy, None, props)
 
-    assert len(plugin.floating_dialogs) == 2
     assert len(list(reached["lookups"].values())) == 1
 
 

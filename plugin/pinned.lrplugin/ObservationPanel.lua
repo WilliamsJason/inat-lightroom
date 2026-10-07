@@ -1014,7 +1014,8 @@ function ObservationPanel.showTaxonomy(context, props)
   -- window, so asking twice about one species raises the window already open.
   local leaf = taxonomy[#taxonomy]
 
-  return require("TaxonomyDialog").show(context, taxonomy, leaf and leaf.name)
+  return require("TaxonomyDialog").present(context, taxonomy,
+    leaf and leaf.name)
 end
 
 --- Open a suggestion's taxon page on iNaturalist.
@@ -1431,6 +1432,19 @@ function ObservationPanel.show()
       -- first photo's stored guess does.
       props:addObserver("speciesGuess", function()
         ObservationPanel.guessEdited(props)
+      end)
+
+      -- What makes a taxonomy window left open follow the panel. The lineage
+      -- is the one thing that changes when the guess becomes a different taxon
+      -- -- a clicked suggestion loads it, a typed name resolves into it -- so
+      -- watching it rather than the field means the window only ever redraws
+      -- for a name iNaturalist actually knows.
+      --
+      -- Unconditional: TaxonomyDialog decides whether there is a window to
+      -- fill, and does nothing when there is not. Doing that test here would
+      -- put the panel in the business of knowing which windows are open.
+      props:addObserver("taxonomy", function()
+        require("TaxonomyDialog").refresh(props.taxonomy)
       end)
 
       -- On its own task because it is a network call and the panel should be on

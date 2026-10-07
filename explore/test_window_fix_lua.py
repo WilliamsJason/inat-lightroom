@@ -216,3 +216,45 @@ def test_a_title_containing_a_quote_is_refused_by_close_too(plugin, fix):
     plugin.set_platform(windows=True)
     assert plugin.call(fix.close, 'Pinned - "Taxonomy"')[0] is False
     assert plugin.executed_commands == []
+
+
+# ---------------------------------------------------------------------------
+# Bringing one window forward by name
+# ---------------------------------------------------------------------------
+
+
+def test_the_raise_helper_is_shipped_with_the_plugin(fix):
+    name = fix.RAISE_SCRIPT_NAME
+    assert (PLUGIN_DIR / name).is_file()
+
+
+def test_raising_runs_the_raise_helper(plugin, fix):
+    """The SDK can raise a window it recognises, by presenting it again -- but
+    that call holds the calling task until the window closes, so a button
+    pressed five times would park five of them."""
+    plugin.set_platform(windows=True)
+    assert plugin.call(fix["raise"], "Pinned - Taxonomy")[0] is True
+    assert fix.RAISE_SCRIPT_NAME in plugin.executed_commands[-1]
+    assert '-Title "Pinned - Taxonomy"' in plugin.executed_commands[-1]
+
+
+def test_raising_does_nothing_off_windows(plugin, fix):
+    plugin.set_platform(windows=False)
+    assert plugin.call(fix["raise"], "Pinned - Taxonomy")[0] is False
+    assert plugin.executed_commands == []
+
+
+def test_a_window_that_cannot_be_raised_is_only_logged(plugin, fix):
+    """Nothing the user asked for fails here: they pressed a button that also
+    redrew the window. A dialog saying it could not be brought forward would
+    be worse than the window staying where it is."""
+    plugin.set_platform(windows=True)
+    plugin.set_execute_exit_code(1)
+    assert plugin.call(fix["raise"], "Pinned - Taxonomy")[0] is False
+    assert any("raise helper exited 1" in line for line in plugin.log_lines)
+
+
+def test_a_title_containing_a_quote_is_refused_by_raise_too(plugin, fix):
+    plugin.set_platform(windows=True)
+    assert plugin.call(fix["raise"], 'Pinned - "Taxonomy"')[0] is False
+    assert plugin.executed_commands == []

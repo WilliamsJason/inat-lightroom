@@ -25,7 +25,7 @@ pinned.lrplugin/
 ├── UploadCore.lua             # Creating and updating observations
 ├── SyncCore.lua               # Sync logic, callable from any entry point
 ├── LinkObservation.lua        # Adopting an observation that already exists
-├── TaxonomyDialog.lua         # A guess's full lineage, one rank per row, in its own window
+├── TaxonomyDialog.lua         # A guess's full lineage, one rank per row, in a window of its own
 ├── NameStyle.lua              # Which way round a taxon's two names go, per the account
 ├── SettingsMenu.lua           # Menu script: opens the settings window
 ├── SettingsDialog.lua         # The settings window
@@ -416,10 +416,10 @@ observation than the one that now exists.
 ### The settings window
 
 `SettingsDialog.lua` is a modal `f:tab_view` with three tabs: **Account**
-(credentials), **Observations** (keyword root, **Sync All Linked Photos**,
-**Find Unlinked Observations…**) and **Upload** (geoprivacy, GPS, project,
-sync-after-upload, which export preset to render with, metadata inclusion,
-location and person stripping).
+(credentials), **Observations** (keyword root, the Taxonomy window's one-or-many
+behaviour, **Sync All Linked Photos**, **Find Unlinked Observations…**) and
+**Upload** (geoprivacy, GPS, project, sync-after-upload, which export preset to
+render with, metadata inclusion, location and person stripping).
 
 The split is by when a question is answered, not by which API field it lands
 in: what an observation *says* is decided at upload time alongside what the
@@ -572,6 +572,54 @@ reply wins.
 A lineage that will not load is never offered as a one-rung taxonomy —
 `SyncCore.withAncestors` hands back what it was given when the fetch fails, and
 that shape is checked for rather than formatted. The status line says so.
+
+### One window that keeps up, or one per press
+
+The window-per-press above is what the feature was built as, and for comparing
+two names it is the right thing. But it is not how the panel is used most of
+the time: clicking down a list of suggestions to see what each one *is* means a
+press of the button and a window to close for every row.
+
+So that is now the preference `taxonomy_multiple_windows`, off by default, and
+the default path (`TaxonomyDialog.showSingle`) keeps one window and redraws it.
+`present` is the fork; everything above describes what the preference turns
+back on.
+
+The one window cannot be rebuilt per taxon, because a presented view tree is
+fixed — the same constraint that killed the in-panel taxonomy. It is therefore
+built once as a **ladder of `TaxonomyDialog.SLOTS` bound rows** and refilled:
+`fill` writes `rowLabelN` / `rowTextN` / `rowCopyN` / `rowUsedN` for each rung
+and blanks the rest, so a shorter lineage does not leave the tail of the last
+one reading as part of it. A lineage deeper than the ladder is trimmed from the
+kingdom end (`visibleRows`), because trimming the other end would drop the
+species and leave the window describing something nobody chose. The cost is
+blank space below a short lineage; the alternative — closing and reopening the
+window — flickers, loses the position the user chose, and takes focus.
+
+The taxon's name moved *into* the window, as a bound heading, because the title
+bar cannot carry it: the title is fixed when the window is built, it outlives
+any one taxon, and `WindowFix` finds windows by exact title. Being constant is
+also what makes `save_frame` safe here — the objection above was that every
+window would share one rectangle, and there is only ever one of these.
+
+The refresh follows `props.taxonomy`, not `speciesGuess`, so typing never
+triggers a lookup; the window updates when a suggestion is chosen, when a typed
+name is resolved, and on a press of the button. An empty lineage is ignored
+rather than drawn, which is what leaves the last good taxonomy up while a guess
+is unresolved and between one suggestion and the next — `clearTaxonomy` empties
+that property on every change. And a refresh never raises the window: it is
+something the user did not ask for, and stealing focus from the panel they are
+clicking in would be unwelcome.
+
+A press of the button *does* raise it, through `WindowFix.raise` and
+`raise_window.ps1` rather than `presentFloatingDialog`. The SDK call does raise
+a window it recognises by `id`, but it also blocks the calling task until that
+window closes, so every press would park a task and a function context for as
+long as the window stays up.
+
+The panel registers its observer once, for its lifetime, because the SDK's
+property tables have no `removeObserver`. `TaxonomyDialog` therefore owns the
+question of whether a window is open; `refresh` is a no-op when none is.
 
 ### A typed guess is worth as much as a clicked one
 

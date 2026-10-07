@@ -37,6 +37,12 @@
   plugin-wide, so the taxonomy window's Close button would take the panel with
   it. A window's close box sends WM_CLOSE and nothing stops us sending the same
   message. Same platform caveat, same no-op on macOS.
+
+  Raising is the third of them. The SDK will raise a floating window whose id
+  it already knows, but only as part of presenting one, which blocks the
+  calling task until that window closes -- so pressing Taxonomy… a second time
+  to bring the one open window forward would park a task and a function context
+  for as long as the window was up. Same approach, same caveat again.
 --]]
 
 local LrPathUtils = import "LrPathUtils"
@@ -55,6 +61,15 @@ WindowFix.SCRIPT_NAME = "fix_window_z_order.ps1"
 -- plugin-wide, so a Close button built on it would take the observation panel
 -- down with whatever window the user actually meant.
 WindowFix.CLOSE_SCRIPT_NAME = "close_window.ps1"
+
+--- The helper that brings one window to the front by title.
+--
+-- Third script, same approach, because the SDK has no raise either.
+-- `presentFloatingDialog` does raise a window whose id it already knows, but
+-- it also blocks the calling task for as long as that window is up, so using
+-- it to raise would leave a task and a function context parked per press of
+-- the button. Posting the window to the front from outside costs neither.
+WindowFix.RAISE_SCRIPT_NAME = "raise_window.ps1"
 
 --- Where a helper script lives, given the plugin directory (_PLUGIN.path).
 function WindowFix.scriptPath(pluginPath, name)
@@ -156,6 +171,39 @@ function WindowFix.close(title)
   end
   if result ~= 0 then
     logger:warn("WindowFix: close helper exited " .. tostring(result) ..
+      "; no window titled '" .. title .. "' was found")
+    return false
+  end
+
+  return true
+end
+
+--- Bring the window with the given title to the front.
+--
+-- Must be called from a task: LrTasks.execute blocks.
+--
+-- Returns whether the request got out, and like close() a failure is logged
+-- and swallowed: the window is still on screen and still correct, it just did
+-- not come forward. Windows only, for the same reason the other two are.
+function WindowFix.raise(title)
+  if not WindowFix.applicable() then return false end
+
+  if title:find('"', 1, true) then
+    logger:warn("WindowFix: refusing to raise, title contains a quote")
+    return false
+  end
+
+  local script = WindowFix.scriptPath(_PLUGIN.path, WindowFix.RAISE_SCRIPT_NAME)
+  local ok, result = LrTasks.pcall(function()
+    return LrTasks.execute(WindowFix.command(script, title))
+  end)
+
+  if not ok then
+    logger:warn("WindowFix: could not run the raise helper: " .. tostring(result))
+    return false
+  end
+  if result ~= 0 then
+    logger:warn("WindowFix: raise helper exited " .. tostring(result) ..
       "; no window titled '" .. title .. "' was found")
     return false
   end

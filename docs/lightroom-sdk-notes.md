@@ -642,6 +642,29 @@ subject — `com.williamsjason.pinned.taxonomy.<taxon id>` — is how asking twi
 about one taxon should raise the window already open instead of duplicating it.
 Not verified outside Lightroom.
 
+Raising a window the plug-in already has open is therefore tempting to do by
+calling `presentFloatingDialog` again with the same `id` — but `blockTask`
+means each such call parks a task and a function context until the window
+closes, so a button pressed repeatedly accumulates them. `raise_window.ps1`
+does it from outside instead, finding the window exactly as `close_window.ps1`
+does and calling `SetForegroundWindow` (after `ShowWindow(SW_RESTORE)` if it is
+minimised), falling back to `BringWindowToTop`. Exit 0 found, 1 not found.
+Windows-only, like the rest of them.
+
+**A window that outlives its subject has to be built for the deepest subject it
+will ever show.** A presented view tree cannot gain or lose a row, and a bound
+`visible` does not hide one (above), so the only way to redraw a floating
+window with new content is a fixed ladder of rows whose every property —
+label, text, button title, button `enabled` — is bound, and which are blanked
+rather than removed when the content is shorter. The taxonomy window does this
+with `TaxonomyDialog.SLOTS` rungs. The alternative, closing and reopening,
+flickers, loses `save_frame`'s remembered position, and takes focus.
+
+A consequence: the window's **title must be constant**, because it is what the
+Win32 helpers find the window by and it is fixed when the window is built.
+Whatever names the window's current subject belongs inside it, as a bound
+heading.
+
 Every one of these windows needs the same `WindowFix.apply(title)` treatment the
 panel does, and it has to be started *before* presenting: the helper polls for
 the window by title, and the call that creates the window does not return until

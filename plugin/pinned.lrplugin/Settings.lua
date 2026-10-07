@@ -95,6 +95,22 @@ Settings.DEFAULTS = {
   -- "iNaturalist > Animalia > …" says where the identification came from and
   -- this plugin's own name would mean nothing.
   sync_keyword_root = "iNaturalist",
+
+  -- Whether Taxonomy… opens a window per taxon.
+  --
+  -- Off, so the button opens one window and keeps it. That is the answer for
+  -- the way the panel is actually used -- click down the suggestions and read
+  -- the lineage of each -- because the alternative is a press of the button
+  -- and a window to close for every row.
+  --
+  -- On is the older behaviour and is kept because it is genuinely better for
+  -- the other thing people do with this: two lineages side by side is how you
+  -- decide between two suggestions, and that needs two windows.
+  --
+  -- The two windows are built differently, not just counted differently --
+  -- see TaxonomyDialog.lua -- so this is not a setting that can be read once
+  -- and applied to an open window. It takes effect on the next press.
+  taxonomy_multiple_windows = false,
 }
 
 --- The stored value for one preference, or its default.
