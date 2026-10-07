@@ -26,9 +26,14 @@ MUTATIONS = [
         'LR_export_destinationPathPrefix = "/home/tester/Pictures",',
     ),
     (
-        "goes back to the tempFolder type the host rejected",
-        'LR_export_destinationType       = "specificFolder",',
-        'LR_export_destinationType       = "tempFolder",',
+        "the overrides go back to the tempFolder type the host rejected",
+        '\n  LR_export_destinationType       = "specificFolder",',
+        '\n  LR_export_destinationType       = "tempFolder",',
+    ),
+    (
+        "the preset-less settings go back to the tempFolder type the host rejected",
+        '\n    LR_export_destinationType       = "specificFolder",',
+        '\n    LR_export_destinationType       = "tempFolder",',
     ),
     (
         "renders into a subfolder the caller does not know about",
@@ -36,14 +41,24 @@ MUTATIONS = [
         "LR_export_destinationPathSuffix = \"\",\n    LR_export_useSubfolder          = true,\n\n    -- Nothing may open",
     ),
     (
-        "re-imports every uploaded photo back into the catalog",
-        "LR_reimportExportedPhoto        = false",
-        "LR_reimportExportedPhoto        = true",
+        "the overrides re-import every uploaded photo back into the catalog",
+        "\n  LR_reimportExportedPhoto        = false",
+        "\n  LR_reimportExportedPhoto        = true",
     ),
     (
-        "opens a file browser on the temp folder mid-upload",
-        'LR_export_postProcessing        = "doNothing"',
-        'LR_export_postProcessing        = "revealInFinder"',
+        "the preset-less settings re-import every uploaded photo back into the catalog",
+        "\n    LR_reimportExportedPhoto        = false",
+        "\n    LR_reimportExportedPhoto        = true",
+    ),
+    (
+        "the overrides open a file browser on the temp folder mid-upload",
+        '\n  LR_export_postProcessing        = "doNothing"',
+        '\n  LR_export_postProcessing        = "revealInFinder"',
+    ),
+    (
+        "the preset-less settings open a file browser on the temp folder mid-upload",
+        '\n    LR_export_postProcessing        = "doNothing"',
+        '\n    LR_export_postProcessing        = "revealInFinder"',
     ),
     (
         "stops the render with a dialog when two photos share a name",

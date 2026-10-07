@@ -421,9 +421,9 @@ MUTATIONS = [
     ),
     (
         "ObservationPanel",
-        "the confirmation is asked and then ignored",
-        '    if answer ~= "ok" then',
-        '    if false then',
+        "the merge confirmation is asked and then ignored",
+        '      "Upload " .. #photos .. " photos as one observation?", merging,\n      "Upload", "Cancel")\n    if answer ~= "ok" then',
+        '      "Upload " .. #photos .. " photos as one observation?", merging,\n      "Upload", "Cancel")\n    if false then',
     ),
     (
         "ObservationPanel",
@@ -489,8 +489,8 @@ MUTATIONS = [
     (
         "UploadCore",
         "the accuracy is sent without any coordinates to describe",
-        "positional_accuracy",
-        "PositionalAccuracy",
+        "    local accuracy = pluginField(photo, \"inat_positional_accuracy\")\n    if accuracy and tonumber(accuracy) then\n      params.positional_accuracy = tonumber(accuracy)\n    end\n  end",
+        "  end\n\n  local accuracy = pluginField(photo, \"inat_positional_accuracy\")\n  if accuracy and tonumber(accuracy) then\n    params.positional_accuracy = tonumber(accuracy)\n  end",
     ),
 
     # --- bringing the location home ------------------------------------------

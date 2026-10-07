@@ -55,8 +55,8 @@ MUTATIONS = [
     (
         "SettingsDialog",
         "the OAuth password-grant form comes back into the Account tab",
-        "      f:static_text { title = \"Option 2: Sign in with iNaturalist\", font = \"<system/bold>\" },",
-        "      f:static_text { title = \"Option 2\", font = \"<system/bold>\" },\n      f:password_field { value = LrView.bind(\"app_secret\"), width = 380 },",
+        "      f:static_text { title = \"Option 2: Paste an API token\", font = \"<system/bold>\" },",
+        "      f:static_text { title = \"Option 2: Paste an API token\", font = \"<system/bold>\" },\n      f:password_field { value = LrView.bind(\"app_secret\"), width = 380 },",
     ),
     (
         "SettingsDialog",

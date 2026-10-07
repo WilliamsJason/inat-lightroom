@@ -115,8 +115,8 @@ MUTATIONS = [
     (
         "UpdateInstall",
         "the staging folder is left in place after a successful swap",
-        "  UpdateInstall.discard(pluginPath, fs)\n  logger:info(\"Updater: applied \"",
-        "  logger:info(\"Updater: applied \"",
+        "  UpdateInstall.discard(pluginPath, fs)\n  -- \"verified present\", not just a number.",
+        "  -- \"verified present\", not just a number.",
     ),
     (
         "UpdateInstall",

@@ -212,6 +212,19 @@ A survivor is not automatically a missing test. Twice it has been a bad
 mutation: a change that looked meaningful but altered no reachable behaviour.
 Check which it is before writing anything.
 
+Mutations are matched against the source by literal text, so refactoring the
+code out from under one leaves it matching nothing. That is why the scripts
+report **stale** anchors separately rather than quietly skipping them — a stale
+anchor is a mutation that is no longer asking anything, and a clean run with
+five of them in it is five claims you no longer have. Re-anchor rather than
+delete: the bug it describes is still a bug.
+
+The match is `replace(old, new, 1)`, so an anchor that appears more than once
+silently means the *first* one. Where two code paths share a line — the preset
+overrides and the preset-less settings in `RenderPhoto.lua`, say — give each
+its own mutation and pin them apart, or the second path is never mutated and
+nothing says so.
+
 Restoration happens in a `finally`, but if one of these is interrupted, check
 `git status` before doing anything else.
 
