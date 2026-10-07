@@ -1374,27 +1374,48 @@ has an `X.lua` next to it, and the release workflow now diffs the unpacked
 archive against `plugin/pinned.lrplugin` file by file rather than spot-checking
 four names.
 
-### The cause is still unknown, and three releases have guessed at it
+### The cause is still unknown, but a restart is what works
 
-0.3.3 shipped an explanation that does not survive testing: that Lightroom
-fixes the set of toolkit scripts when it loads a plugin, so a file an update
-*added* could not be required until the next launch. A probe writes a `.lua`
-file during `LrInitPlugin` and requires it successfully in the same session,
-and a plain **Reload Plug-in** picks up new files, new menu items and renames.
-That mechanism is gone.
+0.3.3 shipped an explanation: that Lightroom fixes the set of toolkit scripts
+when it loads a plugin, so a file an update *added* could not be required until
+the next launch. 0.3.4 removed it, because a probe writes a `.lua` file during
+`LrInitPlugin` and requires it successfully in the same session, and a plain
+**Reload Plug-in** picks up new files, new menu items and renames.
 
-What replaced it — that the file was simply never copied — does not survive
-either. The wording was finally produced deliberately, seven ways, and a
+The field then disagreed with the probe a third time. 0.3.4 added
+`NameStyle.lua`; a user whose update applied at startup clicked a menu item and
+got `Could not load toolkit script: NameStyle`. They quit Lightroom, started it
+again, and everything worked — **nothing re-downloaded, no repair run**. So the
+file was on disk and that session would not load it, which neither "the file
+was never copied" nor the probe accounts for:
+
+| Release | File it added | Error |
+| --- | --- | --- |
+| 0.3.0 | `ExportPresets.lua` | `Could not load toolkit script: ExportPresets` |
+| 0.3.2 | `PluginFiles.lua` | `Could not load toolkit script: PluginFiles` |
+| 0.3.4 | `NameStyle.lua` | `Could not load toolkit script: NameStyle` |
+
+Also unexplained: the wording was produced deliberately, seven ways, and a
 missing file gives a different message than the report; so does an empty one,
 an unreadable one, and a directory wearing a `.lua` name. The SDK notes carry
 the table. The reported string is in the same `substrate.dll` those tests ran
 against, so it is not a version difference, but which caller reaches it is not
 known.
 
-**So this section no longer claims a cause.** Three have been offered — a
-stale session, a dropped copy, an unreadable file — and each was written up as
-settled before it had been reproduced. The honest state is that one user's
-error message has never been produced on a machine we control.
+**So this section still claims no cause** — what it claims is a cure. A session
+that applied an update at startup records the tag in a preference, and three
+places use it: `UpdateCore.announceRestartNeeded` says so once, after the usual
+startup delay; `PluginFiles.report` answers an otherwise unexplainable module
+failure with the restart instead of an internal error; and the Plug-in Manager
+status line says the same. A genuinely missing file leads over all of it, since
+a restart will not bring one back. The notice is cheap, it is harmless in the
+sessions where nothing is wrong, and it is the only thing that has ever helped.
+
+What is still owed is a probe that reproduces it. The one we have writes a
+single file into a folder Lightroom already opened; the real path applies a
+whole release, on machines we do not control, one of them a Mac. Until
+something closes that gap, nothing here should be written up as settled — which
+is the actual lesson of these four releases.
 
 Two defects were found along the way and are worth fixing on their own merits,
 independently of whether either caused the report:

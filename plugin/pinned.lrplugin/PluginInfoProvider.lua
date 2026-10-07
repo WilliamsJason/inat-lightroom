@@ -76,10 +76,10 @@ end
 -- someone can act on without understanding it; an internal error naming a
 -- module is not, and this is the only place that names the cause.
 --
--- There used to be a fourth branch, for a session that applied an update at
--- startup: it said parts of the new version would not load until a restart.
--- That mechanism was disproved -- see PluginInit.lua -- and the branch has
--- been removed rather than left saying something confident and untrue.
+-- There is a fourth branch, for a session that applied an update at startup.
+-- It is last because it is the mildest: nothing is missing, nothing needs
+-- downloading, and quitting Lightroom clears it. See PluginFiles.lua for the
+-- three reports it exists for and for what is still unknown about them.
 function PluginInfoProvider.initialise(props, pluginPath)
   props.installedVersion = Updater.versionString(Updater.currentVersion())
   props.result           = nil
@@ -96,6 +96,9 @@ function PluginInfoProvider.initialise(props, pluginPath)
   local pending = UpdateInstall.pending(pluginPath)
   props.staged = pending ~= nil
 
+  local stale = PluginFiles and PluginFiles.appliedAtStartup
+    and PluginFiles.appliedAtStartup() or nil
+
   if props.damaged and not pending then
     props.status = "This installation is damaged: " .. #absent ..
       (#absent == 1 and " file is" or " files are") ..
@@ -109,6 +112,10 @@ function PluginInfoProvider.initialise(props, pluginPath)
   elseif pending then
     props.status = "Version " .. tostring(pending) .. " is staged. Quit and "
       .. "restart Lightroom to finish installing it."
+  elseif stale then
+    props.status = "Pinned installed " .. tostring(stale) .. " while "
+      .. "Lightroom was starting. Quit and start Lightroom again to finish "
+      .. "the installation."
   else
     props.status = "Not checked yet."
   end

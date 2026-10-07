@@ -217,6 +217,39 @@ def test_the_damage_is_said_before_anything_else(plugin, provider):
     assert "restart" in p["status"].lower()
 
 
+def test_a_half_loaded_session_is_explained_rather_than_repaired(
+        plugin, provider):
+    """An update that landed at startup leaves a folder that is completely
+    correct and a session that could not load part of it. Everything else this
+    section says points at Repair Installation, which here would download a
+    release the user already has and change nothing -- so this case has to be
+    told apart and answered with the only thing that has worked."""
+    plugin.require("PluginFiles")["setAppliedAtStartup"]("v0.3.4")
+
+    p = props(plugin)
+    provider["initialise"](p, PLUGIN_PATH)
+
+    assert p["damaged"] is False
+    assert "v0.3.4" in p["status"]
+    assert "Quit and start Lightroom again" in p["status"]
+    assert "Repair Installation" not in p["status"], (
+        "a repair would download a release the user already has correctly"
+    )
+
+
+def test_real_damage_still_leads_over_a_half_loaded_session(plugin, provider):
+    """Both are true after an update that applied at startup and lost a file
+    on the way. A restart will not bring the missing file back, so the one
+    that needs a button has to be the one that is said."""
+    plugin.require("PluginFiles")["setAppliedAtStartup"]("v0.3.4")
+    plugin.remove_plugin_file("ExportPresets.lua")
+
+    p = props(plugin)
+    provider["initialise"](p, PLUGIN_PATH)
+
+    assert p["status"].startswith("This installation is damaged")
+
+
 def test_a_file_that_is_present_but_unusable_is_still_damage(plugin, provider):
     """The weakness in the original check. A zero-byte file is on disk, and
     LrFileUtils.exists calls it a file, so a folder full of them would have

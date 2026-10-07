@@ -424,17 +424,43 @@ def test_describing_the_environment_cannot_stop_the_plugin_starting():
     assert "pcall(logEnvironment)" in body
 
 
-def test_no_restart_notice_survives():
-    """Three releases told users to restart on the strength of a mechanism
-    that a probe disproved -- a file added during LrInitPlugin is requireable
-    in the same session. Leaving the notice in would keep offering a confident
-    answer to a failure nobody has explained."""
+def test_the_restart_notice_names_the_version_and_the_cure(pair):
+    """Two facts and nothing else to do. Naming the version is what makes it
+    an update notice rather than an error, and the restart is the only action
+    -- the folder on disk is already correct."""
+    _plugin, core, _fake = pair
+
+    text = core.restartNeededText("v0.3.4")
+
+    assert "v0.3.4" in text
+    assert "Quit and start Lightroom again" in text
+
+
+def test_the_restart_notice_does_not_interrupt_lightroom_starting(pair):
+    """Same reasoning as the startup check: a modal raised from LrInitPlugin
+    lands before Lightroom has drawn a window, and LrInitPlugin has to return
+    promptly either way."""
+    plugin, core, _fake = pair
+
+    plugin.call(core.announceRestartNeeded, "v0.3.4")
+
+    assert plugin.dialogs == [], "nothing may be shown during LrInitPlugin"
+
+    plugin.run_pending_tasks()
+
+    assert len(plugin.dialogs) == 1, "but it does have to be shown"
+    assert plugin.sleeps, "and only once Lightroom is up"
+
+
+def test_a_startup_apply_announces_itself(pair):
+    """Three users found this out by clicking a menu item and getting an
+    internal error naming a module. Saying it when it happens is the whole
+    point of the notice."""
     core_lua = (PLUGIN_DIR / "UpdateCore.lua").read_text(encoding="utf-8")
     init = (PLUGIN_DIR / "PluginInit.lua").read_text(encoding="utf-8")
 
-    assert "restartNeededText" not in core_lua
-    assert "announceRestartNeeded" not in core_lua
-    assert "announceRestartNeeded" not in init
+    assert "restartNeededText" in core_lua
+    assert "announceRestartNeeded" in init
 
 
 # ---------------------------------------------------------------------------
