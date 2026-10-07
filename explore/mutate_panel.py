@@ -22,11 +22,13 @@ TARGETS = {
     "UploadCore": PLUGIN / "UploadCore.lua",
     "SyncCore": PLUGIN / "SyncCore.lua",
     "InatAPI": PLUGIN / "InatAPI.lua",
+    "NameStyle": PLUGIN / "NameStyle.lua",
 }
 
 TESTS = ["test_panel_core_lua.py", "test_observation_panel_lua.py",
          "test_plugin_surface_lua.py", "test_upload_core_lua.py",
-         "test_sync_observation_lua.py", "test_inat_api_lua.py"]
+         "test_sync_observation_lua.py", "test_inat_api_lua.py",
+         "test_name_style_lua.py"]
 
 MUTATIONS = [
     # --- the identification trap, the whole reason for this rewrite ----------
@@ -111,10 +113,10 @@ MUTATIONS = [
         "  local score = tonumber(row.combined_score) or 0\n  if score then",
     ),
     (
-        "PanelCore",
+        "NameStyle",
         "the scientific name is dropped from the list",
-        "    return common .. \" (\" .. scientific .. \")\"",
-        "    return common",
+        "    return com .. \" (\" .. sci .. \")\"",
+        "    return com",
     ),
 
     # --- uploading -----------------------------------------------------------
@@ -216,8 +218,8 @@ MUTATIONS = [
         "ObservationPanel",
         "choosing a suggestion fills in the bare name, which cannot be copied "
         "into a caption",
-        "  props.speciesGuess             = PanelCore.suggestionName(row)",
-        "  props.speciesGuess             = row.name or row.common_name or \"\"",
+        "  props.suggestionOfferedName    = PanelCore.suggestionName(row)",
+        "  props.suggestionOfferedName    = row.name or row.common_name or \"\"",
     ),
     (
         "ObservationPanel",
@@ -234,8 +236,8 @@ MUTATIONS = [
     (
         "ObservationPanel",
         "a scientific name outlives the suggestions it came from",
-        "  ObservationPanel.clearChosenName(props)\n  ObservationPanel.applySuggestionSlots(props, {}, nil)",
-        "  ObservationPanel.applySuggestionSlots(props, {}, nil)",
+        "  ObservationPanel.clearChosenName(props)\n  ObservationPanel.clearTaxonomy(props)\n  ObservationPanel.applySuggestionSlots(props, {}, nil)",
+        "  ObservationPanel.clearTaxonomy(props)\n  ObservationPanel.applySuggestionSlots(props, {}, nil)",
     ),
     (
         "PanelCore",
@@ -246,7 +248,7 @@ MUTATIONS = [
     (
         "PanelCore",
         "the row and the field drift apart about what a taxon is called",
-        "  local name = PanelCore.suggestionName(row)",
+        "  local name = PanelCore.suggestionName(row, style)",
         "  local name = row.name or row.common_name or \"Unnamed taxon\"",
     ),
     (
@@ -803,8 +805,8 @@ MUTATIONS = [
     (
         "ObservationPanel",
         "a deselected suggestion leaves the buttons live against a stale taxon",
-        "    props.hasSuggestion     = false\n    ObservationPanel.clearChosenName(props)\n    ObservationPanel.applySuggestionSlots(props, rows, nil)\n    return nil",
-        "    ObservationPanel.clearChosenName(props)\n    ObservationPanel.applySuggestionSlots(props, rows, nil)\n    return nil",
+        "    ObservationPanel.applySuggestionSlots(props, rows, nil)\n    ObservationPanel.refreshHasSuggestion(props)\n    return nil",
+        "    ObservationPanel.applySuggestionSlots(props, rows, nil)\n    return nil",
     ),
     (
         "ObservationPanel",
