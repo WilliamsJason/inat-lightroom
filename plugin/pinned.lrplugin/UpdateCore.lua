@@ -252,6 +252,58 @@ function UpdateCore.shouldNotify(result, alreadyNotifiedTag)
   return tag ~= alreadyNotifiedTag
 end
 
+--- What to say when an update was applied during startup.
+function UpdateCore.restartNeededText(tag)
+  return "Pinned installed " .. tostring(tag) .. " while Lightroom was "
+    .. "starting. Quit and start Lightroom again to finish the installation."
+end
+
+--- Tell the user their session may be running a half-loaded update.
+--
+-- Called from PluginInit, and only on the path where the shutdown hook never
+-- ran. For a user whose Lightroom never runs LrShutdownPlugin that is every
+-- single update, so this is not a rare corner.
+--
+-- WHY THIS SAYS "MAY"
+-- -------------------
+-- Three users have now hit "Could not load toolkit script: X" where X is a
+-- file the release they were installing *added*, each time in a session that
+-- applied the update at startup:
+--
+--   0.3.0 added ExportPresets.lua -> could not load ExportPresets
+--   0.3.2 added PluginFiles.lua   -> could not load PluginFiles
+--   0.3.4 added NameStyle.lua     -> could not load NameStyle
+--
+-- The third is the one that settles what to do. That user restarted and was
+-- fine: nothing was re-downloaded and no repair was run, so the file was on
+-- disk all along and the session simply would not load it.
+--
+-- The mechanism is still not understood -- the probe in
+-- explore/probes/sdkprobe.lrplugin writes a file during LrInitPlugin and
+-- requires it successfully in the same session, so whatever separates the
+-- probe from the field is unknown. This notice therefore describes the
+-- symptom and the cure, and claims nothing about the cause. Restarting is
+-- cheap, it is the only thing that has ever helped, and it is harmless in the
+-- sessions where the problem does not appear.
+--
+-- In a task with the same delay as the startup check, for the same reason: a
+-- modal thrown during LrInitPlugin appears before Lightroom has drawn a
+-- window, and LrInitPlugin has to return promptly regardless.
+--
+-- Said once, at the moment it becomes true. Leaving the user to discover it by
+-- clicking a menu item and getting an internal error is how this took three
+-- releases to notice.
+function UpdateCore.announceRestartNeeded(tag)
+  LrTasks.startAsyncTask(function()
+    LrTasks.sleep(UpdateCore.STARTUP_DELAY_SECONDS)
+
+    import("LrDialogs").message(
+      "Restart Lightroom to finish updating",
+      UpdateCore.restartNeededText(tag),
+      "info")
+  end)
+end
+
 --- The startup check: quiet, throttled, and never blocking.
 --
 -- Runs in its own task because it sleeps and then touches the network, and

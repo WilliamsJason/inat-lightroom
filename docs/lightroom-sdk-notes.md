@@ -1854,16 +1854,18 @@ Two things follow for any plugin that updates itself:
 
 ---
 
-## A file added while the plugin is running *does* load
+## A file added while the plugin is running loads in the probe, not in the field
 
-This section previously said the opposite, at length, with a table. It was
-wrong, and it shipped in a release whose entire user-facing explanation rested
-on it. What follows is what the probe actually showed.
+This section has now been wrong in both directions. It first said a file added
+during `LrInitPlugin` cannot be required that session, at length, with a table.
+A probe showed the opposite and the section was rewritten to say so. Then a
+third user hit the original symptom. Both the probe result and the field
+reports are recorded below; they have not been reconciled.
 
-A plugin that writes a new `.lua` file into its own folder during
-`LrInitPlugin` **can** `require` it in that same session. There is no bound
-list of toolkit scripts, or if there is one it is built late enough not to
-matter. **Reload Plug-in** is enough; a full relaunch is not needed.
+**What the probe shows.** A plugin that writes a new `.lua` file into its own
+folder during `LrInitPlugin` **can** `require` it in that same session. There
+is no bound list of toolkit scripts, or if there is one it is built late enough
+not to matter. **Reload Plug-in** is enough; a full relaunch is not needed.
 
 The probe lives in `explore/probes/sdkprobe.lrplugin`. `ProbeInit.lua` runs as
 `LrInitPlugin`, writes `LateArrival_NNN.lua` into the plugin folder, and keeps
@@ -1894,8 +1896,40 @@ Two details make this a real result rather than a coincidence:
   probe. Check that the control can be observed *missing* before trusting it
   when present.
 
-So if a module will not load, it is not on disk. Go and look at the folder
-before theorising.
+So if a module will not load, go and look at the folder before theorising —
+but do not conclude from this probe that it must be absent. See the next
+section but one.
+
+### The field says otherwise, three times
+
+Three users have reported `Could not load toolkit script: X` where `X` is a
+file the release they were installing *added*, each in a session that applied
+the update at startup:
+
+| Release | File it added | Error |
+| --- | --- | --- |
+| 0.3.0 | `ExportPresets.lua` | `Could not load toolkit script: ExportPresets` |
+| 0.3.2 | `PluginFiles.lua` | `Could not load toolkit script: PluginFiles` |
+| 0.3.4 | `NameStyle.lua` | `Could not load toolkit script: NameStyle` |
+
+The third is the one that cannot be explained away. That user saw the internal
+error and the "finished installing while Lightroom was starting" notice from
+the previous version, quit Lightroom, started it again, and everything worked.
+**Nothing was downloaded again and no repair was run**, so the file was on disk
+throughout and the session would not load it. "The update did not copy it"
+cannot produce that outcome, and neither can the probe above.
+
+What differs between the probe and the field is not known. Candidates, none
+tested: the probe writes one file into a folder Lightroom has already opened
+while an update rewrites many; the probe ran on Windows and at least one report
+is macOS; the probe's successful `require` may have followed a **Reload
+Plug-in** rather than a cold launch. A probe that reproduces the field failure
+is the open work here.
+
+In the meantime the plugin treats a restart as the cure rather than the
+explanation — see `UpdateCore.announceRestartNeeded` and
+`PluginFiles.staleSessionText`. It is cheap, harmless when nothing is wrong,
+and it is the only thing that has ever helped.
 
 ### The error message is still not reproduced, and that is the finding
 
@@ -1969,9 +2003,11 @@ The 0.3.3 work was built on the wrong mechanism, but not all of it was wasted:
   has to place correctly, in a folder that has already demonstrated it can lose
   one.
 
-What did *not* survive is the advice to restart. A restart fixes nothing here,
-because nothing is waiting to take effect — the file is simply not there, and
-only **Repair Installation** brings it back.
+What did *not* survive is the advice to restart — and then that came back.
+0.3.4's `NameStyle` report was cleared by a restart with nothing downloaded
+again, so a restart is the first thing to try after an update that applied at
+startup. **Repair Installation** remains the answer when a file really is
+absent, which a restart cannot fix.
 
 ---
 

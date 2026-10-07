@@ -71,11 +71,16 @@ If Lightroom shows **"An internal error has occurred"** and names one of the
 plugin's own scripts, something in the plugin folder cannot be loaded. Nothing
 is wrong with your catalog and nothing you did caused it.
 
-Open **File → Plug-in Manager**, select **Pinned for iNaturalist**, and click
-**Repair Installation** in the **Updates** section. It downloads the current
-release and reinstalls it over the existing copy, checksum and all. It works
-whether or not there is a newer version, and you do not have to press **Check
-for Updates** first. Like any update, it finishes when you quit Lightroom.
+**Quit Lightroom and start it again first.** If the plugin updated itself while
+Lightroom was starting — it says so when it does — a restart is usually all it
+needs, and nothing has to be downloaded again.
+
+If that does not help, open **File → Plug-in Manager**, select **Pinned for
+iNaturalist**, and click **Repair Installation** in the **Updates** section. It
+downloads the current release and reinstalls it over the existing copy,
+checksum and all. It works whether or not there is a newer version, and you do
+not have to press **Check for Updates** first. Like any update, it finishes
+when you quit Lightroom.
 
 The **Updates** section also names any files it can see are missing when you
 open it — though note that a file can be present and still fail to load, so an
