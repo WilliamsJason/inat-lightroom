@@ -1,8 +1,9 @@
 --[[
   WindowFix.lua
   -------------
-  Makes the floating panel behave like a panel rather than a system-wide
-  overlay, by fixing up its window after Lightroom has created it.
+  Win32 fix-ups for the floating windows Lightroom builds for us: making the
+  panel behave like a panel rather than a system-wide overlay, and closing one
+  window by name.
 
   Lightroom creates SDK floating windows WS_EX_TOPMOST and with no owner
   window. Measured against a live Lightroom rather than assumed:
@@ -31,6 +32,11 @@
   into the docs in the first place.
 
   See docs/lightroom-sdk-notes.md for the measurements and the exit codes.
+
+  Closing is here for the same reason: the SDK's only programmatic close is
+  plugin-wide, so the taxonomy window's Close button would take the panel with
+  it. A window's close box sends WM_CLOSE and nothing stops us sending the same
+  message. Same platform caveat, same no-op on macOS.
 --]]
 
 local LrPathUtils = import "LrPathUtils"
@@ -42,9 +48,17 @@ local WindowFix = {}
 
 WindowFix.SCRIPT_NAME = "fix_window_z_order.ps1"
 
---- Where the helper script lives, given the plugin directory (_PLUGIN.path).
-function WindowFix.scriptPath(pluginPath)
-  return LrPathUtils.child(pluginPath, WindowFix.SCRIPT_NAME)
+--- The helper that closes one window by title.
+--
+-- Separate script, same approach, because the SDK has no per-window close:
+-- `closeFloatingDialogsForPlugin` is the only programmatic one and it is
+-- plugin-wide, so a Close button built on it would take the observation panel
+-- down with whatever window the user actually meant.
+WindowFix.CLOSE_SCRIPT_NAME = "close_window.ps1"
+
+--- Where a helper script lives, given the plugin directory (_PLUGIN.path).
+function WindowFix.scriptPath(pluginPath, name)
+  return LrPathUtils.child(pluginPath, name or WindowFix.SCRIPT_NAME)
 end
 
 --- The command line to run.
@@ -109,6 +123,43 @@ function WindowFix.apply(title)
   end
 
   logger:trace("WindowFix: panel is now owned by the Lightroom window")
+  return true
+end
+
+--- Ask the window with the given title to close itself.
+--
+-- Must be called from a task: LrTasks.execute blocks.
+--
+-- Returns whether the request got out. Failure is logged and swallowed, as
+-- above: the window's own close box is still there, so the worst case is a
+-- button that does nothing rather than a window that cannot be dismissed.
+--
+-- Windows only, for the same reason apply() is -- the behaviour on macOS has
+-- not been measured. Callers should ask `applicable()` before drawing a button
+-- for this, so nobody is offered one that cannot work.
+function WindowFix.close(title)
+  if not WindowFix.applicable() then return false end
+
+  if title:find('"', 1, true) then
+    logger:warn("WindowFix: refusing to close, title contains a quote")
+    return false
+  end
+
+  local script = WindowFix.scriptPath(_PLUGIN.path, WindowFix.CLOSE_SCRIPT_NAME)
+  local ok, result = LrTasks.pcall(function()
+    return LrTasks.execute(WindowFix.command(script, title))
+  end)
+
+  if not ok then
+    logger:warn("WindowFix: could not run the close helper: " .. tostring(result))
+    return false
+  end
+  if result ~= 0 then
+    logger:warn("WindowFix: close helper exited " .. tostring(result) ..
+      "; no window titled '" .. title .. "' was found")
+    return false
+  end
+
   return true
 end
 

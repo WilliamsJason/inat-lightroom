@@ -589,6 +589,94 @@ Not established: whether `visible` works on other view types, or only fails to
 collapse layout while still hiding content. Neither was worth another probe
 once the padding removed the need for it.
 
+This is also what rules out a collapsible section anywhere in the panel. The
+feature request that asked for one was the chosen suggestion's full taxonomy —
+seven or eight ranks — and a block that cannot be hidden is a block that is
+always there. The answer was to put it in a window of its own, which is built
+fresh each time it opens and is therefore exactly as tall as what it was
+handed, and to put the button that opens it in a row the panel already had.
+
+## Modal dialogs stack; floating windows do not
+
+A second `LrDialogs.presentModalDialog` while one is already up leaves the first
+on screen and untouchable: it cannot be raised, moved or closed until the top
+one is dismissed, and there is no API to close a modal from code at all. So
+"only one at a time" is not even enforceable — the only way to avoid the stack
+is not to use a modal.
+
+`presentFloatingDialog` has none of that. Each window is an ordinary window: it
+can be raised, dragged and closed on its own, which is what made opening two
+taxonomy windows a feature (comparing two lineages) rather than a bug.
+
+Three things to know before converting one:
+
+- **`blockTask = true` is mandatory.** The property table every binding reads
+  lives in the calling task's function context. Without it the call returns, the
+  task ends, the context dies, and the window is left bound to a dead object.
+  The corollary is that the calling task is held until the window closes, so it
+  has to be a task the caller can spare — start one for the window.
+- **`save_frame` is per key, and the key is shared.** It stores a *rectangle* —
+  position and size — and there is no API to forget it. Several windows of the
+  same kind sharing one key means the second opens exactly on top of the first,
+  at the position the user chose. Omitting it gives up remembering where the
+  window was, which is the lesser evil while there is no way to offset a window
+  from code.
+- **There is no per-window close *in the SDK*.** `closeFloatingDialogsForPlugin`
+  closes every floating window the plug-in owns, including the Observation
+  Panel, so a Close button built on it would take the panel with it. The
+  window's own close box is the only way out the SDK offers, which means
+  `closable = true` on anything the user may want to dismiss.
+
+  There is a way out of Lua, though, and the taxonomy window takes it: a close
+  box sends the window `WM_CLOSE`, and nothing stops the plug-in posting the
+  same message itself. `close_window.ps1` finds the window the way
+  `fix_window_z_order.ps1` does — process `Lightroom`, class `AgWinFrame`,
+  exact caption — and `PostMessageW`s it. `PostMessage` rather than
+  `SendMessage` because Lightroom is sitting inside `presentFloatingDialog` at
+  that moment and will not pump a synchronous one. Windows-only, so callers ask
+  `WindowFix.applicable()` and simply do not draw the button elsewhere; the
+  close box is still there. Exit 0 found and posted, 1 not found.
+
+An `id` is what distinguishes one window from another, so keying it on the
+subject — `com.williamsjason.pinned.taxonomy.<taxon id>` — is how asking twice
+about one taxon should raise the window already open instead of duplicating it.
+Not verified outside Lightroom.
+
+Every one of these windows needs the same `WindowFix.apply(title)` treatment the
+panel does, and it has to be started *before* presenting: the helper polls for
+the window by title, and the call that creates the window does not return until
+it closes.
+
+## Several lines onto the clipboard, without a newline in the command
+
+`Clipboard.lua` shells out because the SDK has no clipboard API. That made a
+newline a problem rather than a character: `LrTasks.execute` hands the whole
+line to the shell, and a raw newline in it is a second command rather than a
+second line of text. The original rule was to refuse newlines outright, which
+was fine while the only thing copied was an observation ID.
+
+The rule that replaced it is that a newline still never reaches the command
+line. Several lines become several **arguments**, and the helper on each
+platform is what joins them:
+
+```
+powershell … -Command "Set-Clipboard -Value @('Kingdom\tAnimalia','Phylum\tArthropoda')"
+printf '%s\n' 'Kingdom\tAnimalia' 'Phylum\tArthropoda' | pbcopy
+```
+
+`Set-Clipboard` joins an array with the platform's own line ending. `printf`
+applies its format once per argument, which is also why the multi-line form on
+macOS ends in a trailing newline and the single-line form does not: the format
+is applied to the last argument too and there is no way to skip it. A block of
+text ending in a line break is what a text field would have produced anyway; a
+nine-digit ID ending in one is not, so the single-argument form was left exactly
+as it was.
+
+A tab inside the quoted argument is safe on both and needs no escape. One
+trailing newline on the input is dropped, so text built by appending `\n` to
+every line does not copy with a blank last one; a blank line in the middle is
+kept, because that one is deliberate.
+
 ## A `scrolled_view` cannot be scrolled from code
 
 There is no scroll position to read or write. `f:scrolled_view` takes

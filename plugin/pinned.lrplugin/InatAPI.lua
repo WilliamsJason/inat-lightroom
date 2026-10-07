@@ -349,9 +349,26 @@ end
 -- Taxa
 --------------------------------------------------------------------------------
 
+--- The locale to ask for common names in.
+--
+-- The account's, when anything has already fetched it (currentUser memoises,
+-- and the panel reads it for the name-order preference at open). Never fetches
+-- on its own: this is called from inside request builders, which are not all on
+-- tasks, and a missing locale costs a common name in the wrong language rather
+-- than a failure.
+--
+-- English when there is nothing better, because that is what the plugin's own
+-- strings are in and what the previous hardcoded value asked for.
+function InatAPI:locale()
+  local user = self._currentUser
+  local locale = user and user.locale
+  if type(locale) == "string" and locale ~= "" then return locale end
+  return "en"
+end
+
 --- GET /taxa/autocomplete -- returns an array of taxon tables.
 function InatAPI:autocompleteTaxon(query, rank)
-  local params = { q = query, per_page = 10, locale = "en" }
+  local params = { q = query, per_page = 10, locale = self:locale() }
   if rank then params.rank = rank end
 
   local payload, err = apiGet(API_V1 .. "/taxa/autocomplete", params, self.token)
@@ -374,7 +391,8 @@ function InatAPI:getTaxon(taxonId)
   self._taxa = self._taxa or {}
   if self._taxa[key] then return self._taxa[key], nil end
 
-  local payload, err = apiGet(API_V1 .. "/taxa/" .. key, nil, self.token)
+  local payload, err = apiGet(API_V1 .. "/taxa/" .. key,
+    { locale = self:locale() }, self.token)
   if not payload then return nil, err end
 
   local taxon = firstResult(payload)

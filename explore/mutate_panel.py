@@ -22,11 +22,13 @@ TARGETS = {
     "UploadCore": PLUGIN / "UploadCore.lua",
     "SyncCore": PLUGIN / "SyncCore.lua",
     "InatAPI": PLUGIN / "InatAPI.lua",
+    "NameStyle": PLUGIN / "NameStyle.lua",
 }
 
 TESTS = ["test_panel_core_lua.py", "test_observation_panel_lua.py",
          "test_plugin_surface_lua.py", "test_upload_core_lua.py",
-         "test_sync_observation_lua.py", "test_inat_api_lua.py"]
+         "test_sync_observation_lua.py", "test_inat_api_lua.py",
+         "test_name_style_lua.py"]
 
 MUTATIONS = [
     # --- the identification trap, the whole reason for this rewrite ----------
@@ -111,10 +113,10 @@ MUTATIONS = [
         "  local score = tonumber(row.combined_score) or 0\n  if score then",
     ),
     (
-        "PanelCore",
+        "NameStyle",
         "the scientific name is dropped from the list",
-        "    return common .. \" (\" .. scientific .. \")\"",
-        "    return common",
+        "    return com .. \" (\" .. sci .. \")\"",
+        "    return com",
     ),
 
     # --- uploading -----------------------------------------------------------
@@ -216,8 +218,8 @@ MUTATIONS = [
         "ObservationPanel",
         "choosing a suggestion fills in the bare name, which cannot be copied "
         "into a caption",
-        "  props.speciesGuess             = PanelCore.suggestionName(row)",
-        "  props.speciesGuess             = row.name or row.common_name or \"\"",
+        "  props.suggestionOfferedName    = PanelCore.suggestionName(row)",
+        "  props.suggestionOfferedName    = row.name or row.common_name or \"\"",
     ),
     (
         "ObservationPanel",
@@ -234,8 +236,8 @@ MUTATIONS = [
     (
         "ObservationPanel",
         "a scientific name outlives the suggestions it came from",
-        "  ObservationPanel.clearChosenName(props)\n  ObservationPanel.applySuggestionSlots(props, {}, nil)",
-        "  ObservationPanel.applySuggestionSlots(props, {}, nil)",
+        "  ObservationPanel.clearChosenName(props)\n  ObservationPanel.clearTaxonomy(props)\n  ObservationPanel.applySuggestionSlots(props, {}, nil)",
+        "  ObservationPanel.clearTaxonomy(props)\n  ObservationPanel.applySuggestionSlots(props, {}, nil)",
     ),
     (
         "PanelCore",
@@ -246,7 +248,7 @@ MUTATIONS = [
     (
         "PanelCore",
         "the row and the field drift apart about what a taxon is called",
-        "  local name = PanelCore.suggestionName(row)",
+        "  local name = PanelCore.suggestionName(row, style)",
         "  local name = row.name or row.common_name or \"Unnamed taxon\"",
     ),
     (
@@ -419,9 +421,9 @@ MUTATIONS = [
     ),
     (
         "ObservationPanel",
-        "the confirmation is asked and then ignored",
-        '    if answer ~= "ok" then',
-        '    if false then',
+        "the merge confirmation is asked and then ignored",
+        '      "Upload " .. #photos .. " photos as one observation?", merging,\n      "Upload", "Cancel")\n    if answer ~= "ok" then',
+        '      "Upload " .. #photos .. " photos as one observation?", merging,\n      "Upload", "Cancel")\n    if false then',
     ),
     (
         "ObservationPanel",
@@ -487,8 +489,8 @@ MUTATIONS = [
     (
         "UploadCore",
         "the accuracy is sent without any coordinates to describe",
-        "positional_accuracy",
-        "PositionalAccuracy",
+        "    local accuracy = pluginField(photo, \"inat_positional_accuracy\")\n    if accuracy and tonumber(accuracy) then\n      params.positional_accuracy = tonumber(accuracy)\n    end\n  end",
+        "  end\n\n  local accuracy = pluginField(photo, \"inat_positional_accuracy\")\n  if accuracy and tonumber(accuracy) then\n    params.positional_accuracy = tonumber(accuracy)\n  end",
     ),
 
     # --- bringing the location home ------------------------------------------
@@ -637,6 +639,38 @@ MUTATIONS = [
         "  local doubt = UploadCore.pluginField(photos[1], \"inat_observation_id\") and nil or PanelCore.confidenceWarning({",
     ),
 
+    # --- a name that is only text --------------------------------------------
+    (
+        "PanelCore",
+        "a name with no taxon behind it goes up unquestioned",
+        "  if typed == \"\" then return nil end\n\n  local lead = reason or",
+        "  if typed ~= \"\" then return nil end\n\n  local lead = reason or",
+    ),
+    (
+        "PanelCore",
+        "an upload with no guess at all is confirmed like a typo",
+        '  local typed = tostring(name or ""):gsub("^%s+", ""):gsub("%s+$", "")\n  if typed == "" then return nil end',
+        '  local typed = tostring(name or "")',
+    ),
+    (
+        "PanelCore",
+        "an update is told its ignored text will be uploaded",
+        "  if isUpdate then\n    return lead",
+        "  if false then\n    return lead",
+    ),
+    (
+        "ObservationPanel",
+        "the free-text question is asked and then ignored",
+        "      if answer ~= \"ok\" then\n        props.suggestionStatus = \"\"\n        return\n      end\n    end\n  end\n\n  if existing then",
+        "      if false then\n        props.suggestionStatus = \"\"\n        return\n      end\n    end\n  end\n\n  if existing then",
+    ),
+    (
+        "ObservationPanel",
+        "a resolved taxon is questioned like free text",
+        "  if not taxonId then\n    local freeText = PanelCore.freeTextWarning(",
+        "  if true then\n    local freeText = PanelCore.freeTextWarning(",
+    ),
+
     # --- merging a selection into one observation ----------------------------
     (
         "PanelCore",
@@ -771,8 +805,8 @@ MUTATIONS = [
     (
         "ObservationPanel",
         "a deselected suggestion leaves the buttons live against a stale taxon",
-        "    props.hasSuggestion     = false\n    ObservationPanel.clearChosenName(props)\n    ObservationPanel.applySuggestionSlots(props, rows, nil)\n    return nil",
-        "    ObservationPanel.clearChosenName(props)\n    ObservationPanel.applySuggestionSlots(props, rows, nil)\n    return nil",
+        "    ObservationPanel.applySuggestionSlots(props, rows, nil)\n    ObservationPanel.refreshHasSuggestion(props)\n    return nil",
+        "    ObservationPanel.applySuggestionSlots(props, rows, nil)\n    return nil",
     ),
     (
         "ObservationPanel",

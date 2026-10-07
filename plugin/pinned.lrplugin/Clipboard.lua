@@ -17,6 +17,15 @@
   So this shells out, the same way WindowFix does. One command, no temporary
   files, and the text is passed as an argument rather than piped because
   LrTasks.execute hands the whole line to the shell either way.
+
+  Newlines used to be refused outright, back when the only thing copied was a
+  nine-digit observation ID and a line break could only be a mistake. A
+  taxonomy is the counter-example: eight ranks are worth having as eight lines,
+  and flattening them into one would hand the user something they have to take
+  apart again. So a line break is now a thing to carry rather than a thing to
+  reject -- but it is carried as *lines*, never as a newline inside the command
+  line, because a raw newline in a command is where quoting stops being a
+  formatting question and starts being a second command.
 --]]
 
 local LrTasks = import "LrTasks"
@@ -38,30 +47,74 @@ local function shellQuote(text)
   return "'" .. text:gsub("'", "'\\''") .. "'"
 end
 
+--- The lines this text should land on the clipboard as.
+--
+-- Both line endings are accepted because both turn up: text built here uses
+-- "\n", and anything that has been round a Windows control may not. One
+-- trailing newline is dropped, so that a block built by appending "\n" to each
+-- line does not copy as a blank last line.
+--
+-- @return a list of lines, or nil when there is nothing to copy
+local function linesOf(text)
+  if type(text) ~= "string" then return nil end
+
+  local normalised = text:gsub("\r\n", "\n"):gsub("\r", "\n"):gsub("\n$", "")
+  if normalised == "" then return nil end
+
+  local lines = {}
+  for line in (normalised .. "\n"):gmatch("([^\n]*)\n") do
+    lines[#lines + 1] = line
+  end
+
+  return lines
+end
+
 --- The command line that would copy this text, or nil if we cannot.
 --
--- Newlines are refused rather than handled: everything the plugin copies is a
--- single short token, and a line break would either break the command line or
--- silently land a second line on the clipboard.
+-- A single line keeps the form it has always had. Several lines become several
+-- arguments, which is the only way to get a line break onto the clipboard
+-- without putting one into the command: PowerShell's Set-Clipboard joins an
+-- array with the platform's own line ending, and printf repeats its format once
+-- per argument.
 function Clipboard.command(text)
-  if type(text) ~= "string" or text == "" then return nil end
-  if text:find("[\r\n]") then return nil end
+  local lines = linesOf(text)
+  if not lines then return nil end
 
   if WIN_ENV == true then
+    local quoted = {}
+    for index, line in ipairs(lines) do quoted[index] = powershellQuote(line) end
+
+    local value = quoted[1]
+    if #quoted > 1 then
+      value = "@(" .. table.concat(quoted, ",") .. ")"
+    end
+
     return table.concat({
       "powershell",
       "-NoProfile",
       "-NonInteractive",
       "-ExecutionPolicy Bypass",
       "-WindowStyle Hidden",
-      '-Command "Set-Clipboard -Value ' .. powershellQuote(text) .. '"',
+      '-Command "Set-Clipboard -Value ' .. value .. '"',
     }, " ")
   end
 
   -- printf rather than echo: echo is a shell builtin whose treatment of
   -- backslashes and leading dashes varies, and pbcopy should receive the text
   -- with no trailing newline.
-  return "printf %s " .. shellQuote(text) .. " | pbcopy"
+  if #lines == 1 then
+    return "printf %s " .. shellQuote(lines[1]) .. " | pbcopy"
+  end
+
+  -- Several lines do take a trailing newline, because the format is applied to
+  -- every argument including the last and printf has no way to skip it. A block
+  -- of text ending in a line break is what a text field would have produced
+  -- anyway; a single token ending in one is not, which is why the case above
+  -- stays as it was.
+  local quoted = {}
+  for index, line in ipairs(lines) do quoted[index] = shellQuote(line) end
+
+  return "printf '%s\\n' " .. table.concat(quoted, " ") .. " | pbcopy"
 end
 
 --- Copy text to the clipboard. MUST be called from inside a task.

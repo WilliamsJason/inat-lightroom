@@ -21,6 +21,7 @@
 --]]
 
 local InatAPI    = require "InatAPI"
+local NameStyle  = require "NameStyle"
 local RenderPhoto = require "RenderPhoto"
 local SyncCore   = require "SyncCore"
 local UploadCore = require "UploadCore"
@@ -77,28 +78,21 @@ PanelCore.NO_LOCATION = NO_LOCATION
 
 --- A suggestion's name, with nothing else attached.
 --
--- The common name leads because that is what most people are deciding between,
--- but the scientific name is always shown: common names are ambiguous enough
--- that hiding it would make the list impossible to check.
+-- Which way round the two names go is the account's business, not ours: see
+-- `NameStyle.lua`. Both are shown whenever iNaturalist would show both, because
+-- common names are ambiguous enough that hiding the scientific one would make
+-- the list impossible to check, and because this exact string is what the panel
+-- puts in the species guess field for the user to copy into a caption.
 --
--- Split out from describeSuggestion because this exact string is also what the
--- panel puts in the species guess field for the user to copy into a caption.
--- One function, so the row and the field can never come to disagree about what
--- a taxon is called.
-function PanelCore.suggestionName(row)
+-- Split out from describeSuggestion so the row and the field can never come to
+-- disagree about what a taxon is called.
+function PanelCore.suggestionName(row, style)
   if not row then return "" end
 
-  local common     = row.common_name
-  local scientific = row.name
+  local name = NameStyle.format(row.name, row.common_name, style)
+  if name == "" then return "Unnamed taxon" end
 
-  if common and common ~= "" and scientific and scientific ~= "" then
-    return common .. " (" .. scientific .. ")"
-  end
-
-  if common and common ~= "" then return common end
-  if scientific and scientific ~= "" then return scientific end
-
-  return "Unnamed taxon"
+  return name
 end
 
 --- One suggestion as a single line of text.
@@ -106,10 +100,10 @@ end
 -- The name plus what is known about how good a guess it is -- a score when the
 -- model gave one, and otherwise the note that says why a row without a score is
 -- there at all.
-function PanelCore.describeSuggestion(row)
+function PanelCore.describeSuggestion(row, style)
   if not row then return "" end
 
-  local name = PanelCore.suggestionName(row)
+  local name = PanelCore.suggestionName(row, style)
 
   local score = tonumber(row.combined_score)
   if score then
@@ -271,6 +265,312 @@ function PanelCore.confidenceWarning(row)
     "coarser record that is right is worth more than a precise one that is " ..
     "wrong.",
     score, name)
+end
+
+--- The case against sending a name no taxon was found for, if there is one.
+--
+-- @param name      What the species guess field holds, as the user sees it.
+-- @param reason    The lookup's own message, when it had one -- a failed
+--                  request reads very differently from a successful "no such
+--                  taxon", and the user's answer should differ too.
+-- @param isUpdate  Whether this is going onto an observation that already
+--                  exists, where free text is not merely weak but inert.
+-- @return A message to show, or nil when there is nothing worth saying.
+--
+-- Silent when there is no name: uploading without a guess is a deliberate,
+-- supported thing to do, not an accident to confirm. Silent, too, when a taxon
+-- was found -- the id carries the identification and the text is decoration.
+--
+-- Worth asking about because the failure is invisible otherwise. A typo in a
+-- scientific name produces an upload that succeeds, reports success, and
+-- carries an identification iNaturalist will never act on; on an observation
+-- that already has a taxon it carries nothing at all.
+function PanelCore.freeTextWarning(name, reason, isUpdate)
+  local typed = tostring(name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  if typed == "" then return nil end
+
+  local lead = reason or
+    ("iNaturalist has no taxon matching \"" .. typed .. "\".")
+
+  if isUpdate then
+    return lead .. "\n\n" ..
+      "This observation already has an identification, and iNaturalist " ..
+      "ignores free text on one that does -- so sending this would change " ..
+      "nothing at all.\n\n" ..
+      "Check the spelling, or open Taxonomy\226\128\166 to find a name that " ..
+      "resolves."
+  end
+
+  return lead .. "\n\n" ..
+    "It will be uploaded as free text in the species guess. The observation " ..
+    "will carry the words but no identification, so it will not appear " ..
+    "under that taxon and nobody searching for it will find it.\n\n" ..
+    "Check the spelling, or open Taxonomy\226\128\166 to find a name that " ..
+    "resolves."
+end
+
+--------------------------------------------------------------------------------
+-- The taxonomic tree
+--------------------------------------------------------------------------------
+
+--- The ranks worth putting a label on, and what to call them.
+--
+-- iNaturalist's `rank` is a lowercase string out of a list some seventy long:
+-- every rank a working taxonomist uses, plus the infra- and super- forms of
+-- most of them. Naming all of them here would be a dictionary nobody reads, so
+-- this covers the ranks that actually appear on a lineage the plugin shows and
+-- `PanelCore.rankLabel` title-cases anything it does not recognise rather than
+-- dropping the rung.
+--
+-- Dropping it would be the real bug: a lineage with a hole in it reads as a
+-- taxonomy the plugin got wrong, not as one rank nobody thought to list.
+PanelCore.RANK_LABELS = {
+  kingdom      = "Kingdom",
+  phylum       = "Phylum",
+  subphylum    = "Subphylum",
+  superclass   = "Superclass",
+  class        = "Class",
+  subclass     = "Subclass",
+  infraclass   = "Infraclass",
+  superorder   = "Superorder",
+  order        = "Order",
+  suborder     = "Suborder",
+  infraorder   = "Infraorder",
+  superfamily  = "Superfamily",
+  family       = "Family",
+  subfamily    = "Subfamily",
+  tribe        = "Tribe",
+  subtribe     = "Subtribe",
+  genus        = "Genus",
+  subgenus     = "Subgenus",
+  section      = "Section",
+  species      = "Species",
+  subspecies   = "Subspecies",
+  variety      = "Variety",
+  form         = "Form",
+  hybrid       = "Hybrid",
+}
+
+--- What to call a rank in the interface.
+--
+-- An unlabelled rung is worse than an oddly-labelled one, so an unknown rank
+-- gets its own name title-cased rather than nothing.
+function PanelCore.rankLabel(rank)
+  if type(rank) ~= "string" or rank == "" then return "Rank" end
+
+  local known = PanelCore.RANK_LABELS[rank]
+  if known then return known end
+
+  return (rank:gsub("^%l", string.upper))
+end
+
+--- One taxon's lineage as rows, kingdom first, the taxon itself last.
+--
+-- @param taxon  A taxon carrying its `ancestors`, as `/v1/taxa/{id}` returns.
+-- @return A list of { rank, label, name, common_name, id, text }, where `text`
+--         is the one line this rung copies as.
+--
+-- Nameless rungs are dropped. `ancestors` occasionally carries an entry with an
+-- id and no name -- a taxon the API knows of and had nothing to say about --
+-- and a row reading "Family:" with an empty value is a rung the user will think
+-- they are supposed to be able to read.
+--
+-- `name` and `common_name` stay as the API gave them, whatever the style: they
+-- are what `PanelCore.taxonForName` matches a pasted name against. Only `text`
+-- -- the line shown and copied -- is arranged to taste.
+function PanelCore.taxonomyRows(taxon, style)
+  local rows = {}
+
+  for _, link in ipairs(PanelCore.chainOf(taxon)) do
+    local name = link.name
+    if type(name) == "string" and name ~= "" then
+      local common = link.preferred_common_name or link.common_name
+      if common == "" then common = nil end
+
+      rows[#rows + 1] = {
+        id          = link.id,
+        rank        = link.rank,
+        label       = PanelCore.rankLabel(link.rank),
+        name        = name,
+        common_name = common,
+        text        = NameStyle.format(name, common, style),
+      }
+    end
+  end
+
+  return rows
+end
+
+--- The whole lineage as the block of text the Copy All button puts on the clipboard.
+--
+-- Tab-separated rather than `Kingdom: Animalia`, because the overwhelmingly
+-- likely destination is a spreadsheet or a notes field with a table in it, and
+-- a tab lands in two columns where a colon lands in one. Anything that cannot
+-- read tabs still shows the two parts separated, which a colon would not
+-- improve on.
+function PanelCore.taxonomyText(rows)
+  local lines = {}
+  for _, row in ipairs(rows or {}) do
+    lines[#lines + 1] = row.label .. "\t" .. row.text
+  end
+
+  return table.concat(lines, "\n")
+end
+
+--- Fill in a suggestion row's lineage and describe it.
+--
+-- MUST be called from inside a task: it may fetch.
+--
+-- Usually free. `PanelCore.withFallbacks` has already fetched the top
+-- candidate's lineage to build the coarser rows, and `InatAPI:getTaxon`
+-- memoises, so the taxon asked about here is normally already in the client's
+-- cache. Picking a candidate further down the list costs one request, once.
+--
+-- @param row  A suggestion row, as `suggestionSlots` draws them.
+-- @return rows, error message. The error is for the status line; there is no
+--         partial answer worth showing, because a lineage missing its middle is
+--         not a lineage.
+function PanelCore.taxonomyFor(api, row)
+  if not row or not row.taxon_id then
+    return nil, "Choose a suggestion first."
+  end
+
+  local taxon = SyncCore.withAncestors(api, {
+    id                    = row.taxon_id,
+    name                  = row.name,
+    rank                  = row.rank,
+    preferred_common_name = row.common_name,
+  })
+
+  -- `withAncestors` hands back what it was given when the fetch fails, which is
+  -- a taxon with a name and no lineage. That is exactly the shape that silently
+  -- became a one-rung taxonomy, so it is checked for rather than formatted.
+  if not SyncCore.hasLineage(taxon) then
+    return nil, "Could not load the taxonomy for " ..
+      (row.name or "that suggestion") .. "."
+  end
+
+  local rows = PanelCore.taxonomyRows(taxon)
+  if #rows == 0 then
+    return nil, "iNaturalist returned no taxonomy for that suggestion."
+  end
+
+  return rows, nil
+end
+
+--- The names worth asking iNaturalist about, given what the field now holds.
+--
+-- The field's own format is "Common Name (Scientific name)", and the taxonomy
+-- window's rows read the same way round the other way -- "Ischnura (Forktails)".
+-- Both are display forms, and `/taxa/autocomplete` matches taxon names, so
+-- either one asked verbatim matches nothing. Both halves are therefore tried
+-- separately, and the whole string first in case it was neither and the user
+-- simply typed a name with a bracket in it.
+--
+-- Order matters only in that the first hit wins, and an exact match is
+-- preferred over any of them by the caller.
+--
+-- @return A list of query strings, longest-shot last. Empty for empty input.
+function PanelCore.nameQueries(text)
+  text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  if text == "" then return {} end
+
+  local queries = { text }
+
+  local before, inside = text:match("^(.-)%s*%((.+)%)$")
+  if inside and inside ~= "" then
+    queries[#queries + 1] = inside
+    if before and before ~= "" then queries[#queries + 1] = before end
+  end
+
+  return queries
+end
+
+--- Pick the taxon a typed name meant.
+--
+-- An exact name match beats everything, because autocomplete is a prefix search
+-- and "Ischnura" otherwise returns whichever species of forktail iNaturalist
+-- ranks highest -- which would quietly turn a genus the user chose deliberately
+-- back into a species. A common-name match comes next, and only then the
+-- first result, which is autocomplete's own best guess.
+--
+-- @param results  What `autocompleteTaxon` returned.
+-- @param query    The string it was asked about.
+function PanelCore.bestNameMatch(results, query)
+  local wanted = tostring(query or ""):lower()
+  local common
+
+  for _, taxon in ipairs(results or {}) do
+    if type(taxon.name) == "string" and taxon.name:lower() == wanted then
+      return taxon
+    end
+    if not common and type(taxon.preferred_common_name) == "string"
+      and taxon.preferred_common_name:lower() == wanted then
+      common = taxon
+    end
+  end
+
+  return common or (results or {})[1]
+end
+
+--- Resolve whatever the species guess field holds to a real taxon.
+--
+-- MUST be called from inside a task: it fetches.
+--
+-- This is what makes a typed or pasted guess worth as much as a clicked one.
+-- The motivating case is agreeing with a suggestion's tribe but not its
+-- species: copy the tribe out of the taxonomy window, paste it into the field,
+-- and the next button press should be about the tribe. Without a lookup the
+-- field is free text, and free text is ignored by iNaturalist the moment an
+-- observation has any taxon at all.
+--
+-- @return taxon (carrying `ancestors`), or nil plus a message for the status line.
+function PanelCore.taxonForName(api, text)
+  local queries = PanelCore.nameQueries(text)
+  if #queries == 0 then
+    return nil, "Type a species guess first."
+  end
+
+  local failed
+  for _, query in ipairs(queries) do
+    local results, err = api:autocompleteTaxon(query)
+    if results then
+      local taxon = PanelCore.bestNameMatch(results, query)
+      if taxon and taxon.id then
+        return SyncCore.withAncestors(api, taxon), nil
+      end
+    else
+      failed = err
+    end
+  end
+
+  if failed then
+    return nil, "Could not look up " .. queries[1] .. "."
+  end
+
+  return nil, "iNaturalist knows no taxon called " .. queries[1] .. "."
+end
+
+--- The lineage of whatever the species guess field holds.
+--
+-- MUST be called from inside a task: it fetches.
+--
+-- @return rows, error message.
+function PanelCore.taxonomyForName(api, text)
+  local taxon, err = PanelCore.taxonForName(api, text)
+  if not taxon then return nil, err end
+
+  if not SyncCore.hasLineage(taxon) then
+    return nil, "Could not load the taxonomy for " ..
+      (taxon.name or "that name") .. "."
+  end
+
+  local rows = PanelCore.taxonomyRows(taxon)
+  if #rows == 0 then
+    return nil, "iNaturalist returned no taxonomy for that name."
+  end
+
+  return rows, nil
 end
 
 --------------------------------------------------------------------------------

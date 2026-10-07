@@ -46,6 +46,7 @@ local LrTasks   = import "LrTasks"
 local LrView    = import "LrView"
 
 local MatchCore  = require "MatchCore"
+local NameStyle  = require "NameStyle"
 local ThumbCache = require "ThumbCache"
 
 local logger = require "Log"
@@ -85,21 +86,21 @@ end
 -- The taxon's own common name is preferred over species_guess: the guess is
 -- whatever the observer typed at the time, and the taxon is what the community
 -- settled on since.
+--
+-- Which way round the two go is the account's business (`NameStyle.lua`), so
+-- this list reads the same way as the observation panel and the taxonomy
+-- window.
 function ReverseSyncDialog.speciesOf(match)
   local observation = match.observation or {}
   local taxon = observation.taxon or {}
 
-  local common     = taxon.preferred_common_name or observation.species_guess
-  local scientific = taxon.name
+  local name = NameStyle.format(
+    taxon.name,
+    taxon.preferred_common_name or observation.species_guess)
 
-  -- Not both when they are the same word: many taxa have no common name and
-  -- report the scientific one in its place, and "Dolomedes (Dolomedes)" reads
-  -- as a bug rather than as thoroughness.
-  if common and scientific and common ~= scientific then
-    return common .. " (" .. scientific .. ")"
-  end
+  if name == "" then return "Unknown species" end
 
-  return common or scientific or "Unknown species"
+  return name
 end
 
 --- One row's first line.

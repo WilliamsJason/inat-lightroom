@@ -25,11 +25,13 @@ pinned.lrplugin/
 ├── UploadCore.lua             # Creating and updating observations
 ├── SyncCore.lua               # Sync logic, callable from any entry point
 ├── LinkObservation.lua        # Adopting an observation that already exists
+├── TaxonomyDialog.lua         # A guess's full lineage, one rank per row, in its own window
+├── NameStyle.lua              # Which way round a taxon's two names go, per the account
 ├── SettingsMenu.lua           # Menu script: opens the settings window
 ├── SettingsDialog.lua         # The settings window
 ├── Settings.lua               # Reading, writing and validating settings
 ├── WindowFix.lua              # Fixes the panel's z-order (Windows only)
-├── Clipboard.lua              # Puts short text on the system clipboard
+├── Clipboard.lua              # Puts text on the system clipboard, one or many lines
 ├── fix_window_z_order.ps1     # The Win32 helper WindowFix shells out to
 ├── PluginInfoProvider.lua     # The plugin's section in the Plug-in Manager
 ├── PluginFiles.lua            # What a complete installation contains, and what to say when it is not
@@ -253,7 +255,10 @@ species guess** depending on whether the selection is already linked, and
 **Sync**, **Set on Map**, **Link to Observation…** and **Unlink**. The
 observation ID has a **Copy** button of its own, and is itself clickable: it
 opens the observation in a browser, which is what the **View on iNaturalist**
-button used to do beside it.
+button used to do beside it. Beside **Update photo tags** sits **Taxonomy…**,
+which opens the lineage of whatever the panel is currently claiming — the
+chosen suggestion, or the name typed or pasted into the field — one rank at a
+time, in a floating window of its own.
 
 Everything below the heading describes the *first* selected photo and the
 heading says so. Uploading is the exception: it takes the whole selection into a
@@ -478,6 +483,175 @@ shows could otherwise only be retyped — and a mistyped nine-digit ID attaches 
 photo to a stranger's observation. It shells out the same way `WindowFix.lua`
 does: `Set-Clipboard` on Windows, `pbcopy` on macOS.
 
+It takes more than one line now, and the rule that replaced the old blanket
+refusal is worth stating: a newline never reaches the command line. Several
+lines become several *arguments* — `Set-Clipboard -Value @('a','b')`,
+`printf '%s\n' 'a' 'b' | pbcopy` — and the helper on each platform is what joins
+them. A raw newline in a command is where quoting stops being a formatting
+question and becomes a second command. One trailing newline is dropped, so a
+block built by appending `\n` to each line does not copy with a blank last one.
+
+### Showing the taxonomy without growing the panel
+
+The vision endpoints answer with a taxon and nothing above it — `id`, `name`,
+`rank`, `preferred_common_name` — so the lineage is a second request,
+`GET /v1/taxa/{id}`, and `/v1/taxa?id=…` will not do (see
+`docs/inat-api-notes.md`).
+
+**It is usually free.** `PanelCore.withFallbacks` has already fetched the top
+candidate's lineage to build the coarser rows at the head of every suggestion
+list, and `InatAPI:getTaxon` memoises, so the lineage of the row most people
+click is already in the client's cache. A row further down costs one request,
+once. That is what makes it affordable to load on the click rather than behind a
+button nobody would press.
+
+**A collapsible taxonomy in the panel is not something the SDK can build.** A
+presented view tree cannot grow, shrink, or hide a row — a bound `visible` is
+accepted and ignored — so eight rows of lineage would stand at full height
+whether "collapsed" or not. Even the one-line form that was tried instead — a
+truncated `Animalia › Arthropoda › … › Ischnura erratica` with a **Copy
+Taxonomy** button beside it — cost the panel a row permanently for something
+wanted occasionally, and said less than the window it opened.
+
+So the whole feature is **Taxonomy…**, one button, which opens
+`TaxonomyDialog.lua`: one row per rank, each with its own **Copy** button, and
+**Copy All** for every rank at once, tab-separated — `Kingdom\tAnimalia` —
+because the destination is usually a spreadsheet or a table, where a tab is two
+columns and a colon is one. The window is built fresh each time, so it is
+exactly as tall as the lineage it was handed and costs the panel no height at
+all.
+
+Per-row buttons rather than selectable text, because `selectable = true` is
+honoured and takes the row's `mouse_down` with it, and leaves the user dragging
+across a label to get a name.
+
+The button sits in the row with **Update photo tags** rather than one of its
+own, which is why the panel did not grow: that is the other button working on
+the chosen name rather than on iNaturalist, and it comes on at the same moment.
+
+**It is a floating window, not a modal, and that is the point.** As a modal, a
+second one landed on top of the first and only the top could be touched — the
+first was stranded, unreadable and unmovable, until the top was dismissed, and
+a modal cannot be closed from code, so even "one at a time" was unenforceable.
+Floating windows are independently raisable, movable and closable, which turns
+the stack into the thing it looked like: two lineages side by side, which is how
+anyone actually decides between two suggestions. The window `id` is keyed on the
+leaf taxon (`TaxonomyDialog.windowId`), so asking twice about one species should
+raise the window already open rather than laying an identical one on top of it.
+
+No `save_frame`. It is a single prefs key holding a rectangle, and there is no
+API to forget it, so every taxonomy window would share one — and a second would
+open exactly on top of the first, which is the stacking this replaced, at the
+position the user had chosen.
+
+There *is* a **Close** button, but not the SDK's:
+`closeFloatingDialogsForPlugin` is plugin-wide and would take the observation
+panel with it, which is not a Close button, it is a trapdoor. What the button
+does instead is post the window the same `WM_CLOSE` its own close box sends,
+through `WindowFix.close` and `close_window.ps1` — the Win32 route the panel
+already needs for its z-order. That is Windows-only, so elsewhere the button is
+absent rather than dead and the close box remains the way out.
+
+The rank labels are left-aligned and each row is indented one step further than
+the one above it, so the window reads as the descent it is. They used to be
+right-aligned, which made a staircase by accident — "Kingdom" and "Subclass"
+are different lengths — and the raggedness carried no meaning. The indent is a
+spacer, not spaces: the label column is a fixed width, so padding the text
+would simply truncate it, and nothing drawn this way can reach the clipboard,
+which is what the Copy buttons promise. The name column gives back exactly what
+the indent takes, so the Copy buttons stay in one straight column however deep
+the lineage runs.
+
+The lineage belongs to whichever row was chosen last and is dropped the instant
+a different one is chosen, so the button never opens the previous answer. The
+fetch that follows checks that the chosen taxon is still the one it was asked
+about before it writes anything: clicking down a list faster than the network
+answers leaves several fetches in flight, and without the check the slowest
+reply wins.
+
+A lineage that will not load is never offered as a one-rung taxonomy —
+`SyncCore.withAncestors` hands back what it was given when the fetch fails, and
+that shape is checked for rather than formatted. The status line says so.
+
+### A typed guess is worth as much as a clicked one
+
+The **Species guess** field was an input nothing watched. A name typed or pasted
+over a chosen suggestion left the row's mark on screen *and* `suggestionTaxonId`
+behind it — and the taxon id is what the upload sends as an identification, so
+pasting `Argiini` over a species and pressing **Upload to iNaturalist** posted
+the species, silently. Free text loses to a taxon id every time.
+
+`ObservationPanel.guessEdited`, wired to the field as an observer, drops the
+mark and the id together the moment the text stops matching what was offered.
+`chooseSuggestion` writes `suggestionOfferedName` *before* the field, and that
+order is load-bearing: the observer fires inside the assignment, and writing the
+field first would have it compare against the previous row's name and unpick the
+choice being made.
+
+That leaves the three buttons below with no id, so they resolve one:
+`ObservationPanel.taxonIdToUse` answers "what did the user say this is?" once,
+from the chosen row when there is one and from `PanelCore.taxonForName`
+otherwise, writing the result back so a lookup, a taxonomy and an upload are one
+request rather than three. `hasSuggestion` therefore means "there is a name to
+act on" — a chosen row *or* any text in the field — rather than "a row is
+selected".
+
+The workflow this is for: agree with a suggestion's tribe but not its species.
+Click the species, press **Taxonomy…**, copy the tribe out of the window, paste
+it into the field, and the next press of **Taxonomy…**, **Upload to
+iNaturalist** or **Update photo tags** is about the tribe. That is also why
+`PanelCore.nameQueries` unwraps `Ischnura (Forktails)` — it is exactly what the
+window's **Copy** button puts on the clipboard.
+
+An unresolvable name stops **Update photo tags**, because the whole keyword
+hierarchy is read off the taxon and there is nothing to read. It does *not* stop
+the upload: free text in `species_guess` has always been allowed and is the only
+answer for something iNaturalist has no taxon for. It is, however, asked about
+first — see below.
+
+### One module decides which name goes first
+
+Every taxon has up to two names and there is no neutral way to show both. The
+plugin had an opinion of its own in two places and they disagreed: the
+suggestion list and the species guess field said *Swift Forktail (Ischnura
+erratica)*, the taxonomy window said *Ischnura erratica (Swift Forktail)*.
+Nobody chose that — the two were written months apart.
+
+The user has already answered this question, on the iNaturalist website, and
+`GET /v1/users/me` reports the answer (`prefers_common_names`,
+`prefers_scientific_name_first` — see `docs/inat-api-notes.md` for the traps).
+`NameStyle.lua` reads it once per session and `NameStyle.format` is the only
+place in the plugin that joins two names, so the panel, the suggestion rows, the
+taxonomy window and the reverse-sync list all read the same way round, and the
+same way round as the website.
+
+With common names switched off the common name is *dropped*, not moved, because
+that is what iNaturalist does: parenthesising the thing somebody switched off
+would be an odd way of honouring the setting.
+
+Three deliberate shapes:
+
+- **The formatter is pure and takes a style**, with the loaded one as the
+  default. The style lives in `NameStyle` rather than being threaded through
+  every caller because it is a property of the account, not of a taxon — a
+  function that formats a name should not need an API client — and the harness
+  can exercise all four combinations without a network.
+- **The loaded style is never nil.** The panel opens and draws before the
+  account comes back; drawing iNaturalist's default order for a moment beats
+  drawing nothing, and a failed lookup is logged rather than shown. A name in
+  the wrong order is a cosmetic disappointment; a suggestion list refused
+  because preferences could not be read is not.
+- **`PanelCore.taxonomyRows` keeps `name` and `common_name` raw** and restyles
+  only `text`. `PanelCore.bestNameMatch` matches pasted text against those
+  fields, so restyling them would make the window's own **Copy** output harder
+  to paste back in than a name typed by hand.
+
+`InatAPI:locale` follows the same record, so the common names being ordered are
+in the user's language rather than hardcoded English. It reads the memoised
+`/users/me` and never fetches on its own: it is called from request builders,
+which are not all on tasks, and the cost of not knowing is a common name in the
+wrong language rather than a failure.
+
 ### Offering a rank the evidence supports
 
 `PanelCore.coarserRows` prepends coarser taxa to every suggestion list,
@@ -591,6 +765,35 @@ exists — arguably worse, because it is already public.
 
 The message names the alternative rather than only asking "are you sure?". A
 warning with no suggested action is one people learn to dismiss.
+
+### Arguing before a name that is only text
+
+`PanelCore.freeTextWarning` returns a message when there is a species guess and
+`ObservationPanel.taxonIdToUse` found no taxon for it, and nil otherwise.
+
+It exists because this is the one failure the panel could not otherwise show.
+`taxonIdToUse` does the only lookup that can tell an identification from a
+string, and once it has, the upload goes through the same code either way and
+reports the same success. A misspelt scientific name would produce an
+observation that looks uploaded, says it uploaded, and carries a name
+iNaturalist will never match.
+
+Three things it deliberately does not do:
+
+- **Refuse.** Free text is the right answer for anything iNaturalist has no
+  taxon for, and a veto would send people to the website instead.
+- **Fire with no name.** Uploading an unidentified observation is supported and
+  deliberate; confirming it would be a dialog about nothing.
+- **Use one wording.** On an observation that already has a taxon, free text is
+  not weak but inert — iNaturalist ignores it outright — so the update wording
+  says it would change nothing, and the title becomes *Send a name iNaturalist
+  will ignore?* rather than *Upload without an identification?*. The lookup's
+  own message leads when there was one, because a request that failed is not
+  the same situation as a name that does not exist.
+
+Asked **last** of the four gates in `ObservationPanel.uploadOrUpdate`. It is
+the one most likely to be answered "no" after a second look at the spelling, and
+an answer of no should not have cost three dialogs first.
 
 ### Applying a taxon without publishing
 

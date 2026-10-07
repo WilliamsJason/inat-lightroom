@@ -858,18 +858,31 @@ def stub_upload_path(plugin):
     These tests are about the gate in front of the upload, not about the upload
     or about signing in. Returns a table whose "count" says how many times the
     upload was actually reached.
+
+    Its autocomplete answers with nothing by default, which is the "typed a name
+    iNaturalist has never heard of" case. Put rows in ``reached.matches`` to
+    make a name resolve.
     """
     return plugin.eval("""
       (function()
         local UploadCore = require "UploadCore"
         local PanelCore  = require "PanelCore"
-        local reached = { count = 0, updates = 0, accuracy = nil, guess = nil }
+        local reached = { count = 0, updates = 0, accuracy = nil, guess = nil,
+                          matches = {}, lookups = {} }
 
         UploadCore.requireAPI = function()
           return {
             updateObservation = function(_self, _id, params, _ignorePhotos)
               reached.accuracy = params.positional_accuracy
               return { id = 4242 }, nil
+            end,
+            autocompleteTaxon = function(_self, query)
+              reached.lookups[#reached.lookups + 1] = query
+              return reached.matches, nil
+            end,
+            getTaxon = function(_self, id)
+              return { id = id, name = "Resolved", rank = "species",
+                       ancestors = {} }, nil
             end,
           }, nil
         end
@@ -1209,6 +1222,7 @@ def test_a_hand_typed_name_with_no_suggestion_is_sent_as_is(plugin, panel):
     the only thing anyone has said about this photo."""
     reached = stub_upload_path(plugin)
     plugin.set_target_photos([plugin.new_photo(inat_observation_id="123")])
+    plugin.set_confirm_answer("ok")  # it resolves to nothing, so it is asked about
     props = plugin.runtime.table_from({})
     props["speciesGuess"] = "Ischnura erratica"
 
@@ -1224,6 +1238,7 @@ def test_a_name_from_a_cleared_list_is_not_sent(plugin, panel):
     surviving that would be sent for a photo it was never about."""
     reached = stub_upload_path(plugin)
     plugin.set_target_photos([plugin.new_photo(inat_observation_id="123")])
+    plugin.set_confirm_answer("ok")  # it resolves to nothing, so it is asked about
     props = chosen(plugin, panel, plugin.runtime.table_from({}),
                    {"taxon_id": 47219, "name": "Apis mellifera",
                     "common_name": "Western Honey Bee"})
@@ -1605,6 +1620,55 @@ def test_asking_for_suggestions_without_credentials_opens_the_settings(
     assert plugin.modal_dialogs[-1]["title"] == "Pinned Settings"
 
 
+def stub_account(plugin, scientific_first):
+    """Give the stubbed API client a /users/me answer, and forget any style a
+    previous call in this test already adopted."""
+    install = plugin.eval("""
+      function(first)
+        local UploadCore = require "UploadCore"
+        local NameStyle  = require "NameStyle"
+        NameStyle.forget()
+        local inner = UploadCore.requireAPI
+        UploadCore.requireAPI = function()
+          local api = inner() or {}
+          api.currentUser = function()
+            return { prefers_scientific_name_first = first }, nil
+          end
+          return api
+        end
+      end
+    """)
+    install(scientific_first)
+
+
+def test_an_account_that_wants_the_binomial_first_gets_it(plugin, panel):
+    """The order is the account's answer, given on the iNaturalist website --
+    the plugin used to hold two opinions of its own and they disagreed."""
+    props = plugin.runtime.table_from({})
+    stub_suggestions(plugin, [
+        {"taxon_id": 103486, "name": "Ischnura erratica",
+         "common_name": "Swift Forktail", "combined_score": 91},
+    ])
+    stub_account(plugin, True)
+
+    plugin.in_task(panel.loadSuggestions, props)
+
+    assert "Ischnura erratica (Swift Forktail)" in props["suggestionTitle1"]
+
+
+def test_an_account_that_wants_the_common_name_first_gets_that(plugin, panel):
+    props = plugin.runtime.table_from({})
+    stub_suggestions(plugin, [
+        {"taxon_id": 103486, "name": "Ischnura erratica",
+         "common_name": "Swift Forktail", "combined_score": 91},
+    ])
+    stub_account(plugin, False)
+
+    plugin.in_task(panel.loadSuggestions, props)
+
+    assert "Swift Forktail (Ischnura erratica)" in props["suggestionTitle1"]
+
+
 def test_moving_to_another_photo_empties_the_rows(plugin, panel):
     """Suggestions belong to the photo they were asked about: a leftover row is
     still clickable, and clicking it would put the previous photo's species on
@@ -1618,6 +1682,420 @@ def test_moving_to_another_photo_empties_the_rows(plugin, panel):
     assert props["suggestionTitle1"] == ""
     assert props["suggestionLink1"] == ""
     assert props["hasSuggestion"] is False
+
+
+# ---------------------------------------------------------------------------
+# The taxonomy of the chosen suggestion
+#
+# The vision endpoints answer with a taxon and nothing above it, so the lineage
+# is a second request. It is made on the click rather than behind a button
+# because Get Suggestions has already fetched the top candidate's lineage to
+# build the coarser rows and InatAPI:getTaxon memoises -- the common case costs
+# nothing.
+# ---------------------------------------------------------------------------
+
+
+LINEAGE = [
+    {"id": 1, "name": "Animalia", "rank": "kingdom"},
+    {"id": 47158, "name": "Insecta", "rank": "class"},
+    {"id": 52054, "name": "Ischnura", "rank": "genus",
+     "preferred_common_name": "Forktails"},
+]
+
+
+def stub_taxonomy(plugin, ancestors=None, fail=False):
+    """Answer the lineage fetch without a network or a sign-in."""
+    install = plugin.eval("""
+      function(taxon, fail)
+        local UploadCore = require "UploadCore"
+        UploadCore.requireAPI = function()
+          return {
+            getTaxon = function(_self, id)
+              if fail then return nil, "no" end
+              return taxon, nil
+            end,
+          }
+        end
+      end
+    """)
+    taxon = deep(plugin, {
+        "id": 103486, "name": "Ischnura erratica", "rank": "species",
+        "ancestors": ancestors if ancestors is not None else LINEAGE,
+    })
+    install(taxon, fail)
+
+
+def with_chosen_row(plugin, panel, taxon_id=103486):
+    props = plugin.runtime.table_from({})
+    plugin.call(panel.clearSuggestions, props)
+    props["suggestions"] = deep(plugin, [
+        {"taxon_id": taxon_id, "name": "Ischnura erratica", "rank": "species",
+         "common_name": "Swift Forktail", "combined_score": 91},
+    ])
+    plugin.call(panel.chooseSuggestion, props, 1)
+    return props
+
+
+def ranks(props):
+    """The lineage the panel is holding, finest last."""
+    held = props["taxonomy"]
+    return [] if held is None else [r["name"] for r in held.values()]
+
+
+def tribe_match(plugin):
+    """What autocomplete answers for a pasted tribe.
+
+    Carrying its own ancestors, as iNaturalist's autocomplete does, so there is
+    no second request to stub.
+    """
+    return deep(plugin, [
+        {"id": 207785, "name": "Argiini", "rank": "tribe",
+         "ancestors": [{"id": 1, "name": "Animalia", "rank": "kingdom"}]},
+    ])
+
+
+def test_choosing_a_suggestion_loads_its_lineage(plugin, panel):
+    stub_taxonomy(plugin)
+    props = with_chosen_row(plugin, panel)
+
+    plugin.in_task(panel.loadTaxonomy, props)
+
+    names = ranks(props)
+    assert names[0] == "Animalia"
+    assert names[-1] == "Ischnura erratica"
+
+
+def test_there_is_no_lineage_until_a_suggestion_is_chosen(plugin, panel):
+    """The held lineage is what the Taxonomy button opens without a request, so
+    an empty panel has to start with nothing in it rather than nil."""
+    props = plugin.runtime.table_from({})
+    plugin.call(panel.clearSuggestions, props)
+
+    assert ranks(props) == []
+
+
+def test_choosing_another_suggestion_drops_the_old_lineage_at_once(
+    plugin, panel
+):
+    """Between the two clicks there is nothing held, which is honest. Keeping
+    the previous lineage while the new row is marked would mean the button
+    opened a window about a different taxon."""
+    stub_taxonomy(plugin)
+    props = with_chosen_row(plugin, panel)
+    plugin.in_task(panel.loadTaxonomy, props)
+    assert ranks(props) != []
+
+    plugin.call(panel.chooseSuggestion, props, 1)
+
+    assert ranks(props) == []
+
+
+def test_a_slow_answer_for_a_row_already_moved_off_is_dropped(plugin, panel):
+    """Clicking down a list faster than the network answers leaves several
+    fetches in flight, and without this the slowest reply wins -- the panel
+    settles on the lineage of a row the user has left."""
+    stub_taxonomy(plugin)
+    props = with_chosen_row(plugin, panel)
+
+    # The fetch was started for this row; by the time it lands the chosen
+    # taxon is a different one.
+    props["suggestionTaxonId"] = 47219
+
+    plugin.in_task(panel.loadTaxonomy, props)
+
+    assert ranks(props) == []
+
+
+def test_a_lineage_that_will_not_load_says_so(plugin, panel):
+    """The button stays live, because a typed name can still be looked up on
+    the press -- but nothing is held, and the status line says why."""
+    stub_taxonomy(plugin, fail=True)
+    props = with_chosen_row(plugin, panel)
+
+    plugin.in_task(panel.loadTaxonomy, props)
+
+    assert ranks(props) == []
+    assert "taxonomy" in props["suggestionStatus"].lower()
+
+
+def test_a_row_with_no_taxon_asks_for_nothing(plugin, panel):
+    props = plugin.runtime.table_from({})
+    plugin.call(panel.clearSuggestions, props)
+    props["suggestions"] = deep(plugin, [{"name": "Unrankable"}])
+    plugin.call(panel.chooseSuggestion, props, 1)
+
+    plugin.in_task(panel.loadTaxonomy, props)
+
+    assert ranks(props) == []
+
+
+def test_choosing_a_row_starts_the_lineage_fetch(plugin, panel):
+    """The row is marked and the guess filled straight away; the fetch follows
+    on its own task, so a slow network does not delay the click."""
+    stub_taxonomy(plugin)
+    args = show(plugin, panel)
+    props = args["contents"]["bind_to_object"]
+    props["suggestions"] = deep(plugin, [
+        {"taxon_id": 103486, "name": "Ischnura erratica", "rank": "species"},
+    ])
+
+    plugin.call(panel.chooseSuggestion, props, 1)
+
+    assert props["speciesGuess"] == "Ischnura erratica"
+    assert ranks(props) == [], "the fetch has not run yet"
+
+    plugin.in_task(panel.loadTaxonomy, props)
+
+    assert ranks(props) != []
+
+
+# --- reading it ------------------------------------------------------------
+
+
+def with_taxonomy(plugin, panel):
+    stub_taxonomy(plugin)
+    props = with_chosen_row(plugin, panel)
+    plugin.in_task(panel.loadTaxonomy, props)
+    return props
+
+
+def test_the_taxonomy_window_opens_on_the_chosen_taxon(plugin, panel):
+    props = with_taxonomy(plugin, panel)
+
+    plugin.in_task(panel.showTaxonomy, None, props)
+
+    assert "Ischnura erratica" in plugin.floating_dialogs[-1]["title"]
+
+
+def test_the_taxonomy_window_will_not_open_on_nothing(plugin, panel):
+    props = plugin.runtime.table_from({})
+    plugin.call(panel.clearSuggestions, props)
+
+    assert plugin.in_task(panel.showTaxonomy, None, props) is False
+    assert plugin.floating_dialogs == []
+
+
+def test_a_typed_name_is_looked_up_rather_than_refused(plugin, panel):
+    """The point of the second half of this change: paste a tribe into the
+    field, press Taxonomy, and read the tribe's lineage -- without a suggestion
+    row anywhere in it."""
+    reached = stub_upload_path(plugin)
+    reached["matches"] = tribe_match(plugin)
+    props = plugin.runtime.table_from({})
+    plugin.call(panel.clearSuggestions, props)
+    props["speciesGuess"] = "Argiini"
+
+    assert plugin.in_task(panel.showTaxonomy, None, props) is True
+    assert "Argiini" in plugin.floating_dialogs[-1]["title"]
+    assert list(reached["lookups"].values()) == ["Argiini"]
+
+
+def test_a_typed_name_is_only_looked_up_once(plugin, panel):
+    """The lineage is kept, so pressing the button again -- or uploading right
+    after -- does not go back to iNaturalist for a name it just resolved."""
+    reached = stub_upload_path(plugin)
+    reached["matches"] = tribe_match(plugin)
+    props = plugin.runtime.table_from({})
+    plugin.call(panel.clearSuggestions, props)
+    props["speciesGuess"] = "Argiini"
+
+    plugin.in_task(panel.showTaxonomy, None, props)
+    plugin.in_task(panel.showTaxonomy, None, props)
+
+    assert len(plugin.floating_dialogs) == 2
+    assert len(list(reached["lookups"].values())) == 1
+
+
+def test_a_name_iNaturalist_does_not_know_says_so(plugin, panel):
+    stub_upload_path(plugin)
+    props = plugin.runtime.table_from({})
+    plugin.call(panel.clearSuggestions, props)
+    props["speciesGuess"] = "Sasquatch"
+
+    assert plugin.in_task(panel.showTaxonomy, None, props) is False
+    assert "Sasquatch" in props["suggestionStatus"]
+    assert plugin.floating_dialogs == []
+
+
+# --- what the buttons act on -----------------------------------------------
+
+
+def test_editing_the_guess_drops_the_mark_and_the_taxon_behind_it(
+    plugin, panel
+):
+    """The bug this fixes: a name pasted over a chosen suggestion left the
+    row's taxon id in place, and the id is what the upload sends -- so the
+    species went up however the field was edited."""
+    stub_taxonomy(plugin)
+    props = with_chosen_row(plugin, panel)
+    assert props["suggestionTaxonId"] == 103486
+
+    props["speciesGuess"] = "Argiini"
+    plugin.call(panel.guessEdited, props)
+
+    assert props["suggestionTaxonId"] is None
+    assert props["selectedSuggestion"] is None
+    assert props["suggestionScientificName"] is None
+    assert "✓" not in (props["suggestionTitle1"] or "")
+
+
+def test_editing_the_guess_back_to_what_was_offered_changes_nothing(
+    plugin, panel
+):
+    """Writing the field is how a suggestion is chosen, so the observer has to
+    be able to tell its own write from the user's."""
+    stub_taxonomy(plugin)
+    props = with_chosen_row(plugin, panel)
+
+    assert plugin.call(panel.guessEdited, props)[0] is False
+    assert props["suggestionTaxonId"] == 103486
+
+
+def test_a_typed_name_keeps_the_buttons_live(plugin, panel):
+    """Taxonomy and Update photo tags have something to act on as soon as there
+    is text, because they look it up."""
+    props = plugin.runtime.table_from({})
+    plugin.call(panel.clearSuggestions, props)
+    assert props["hasSuggestion"] is False
+
+    props["speciesGuess"] = "Argiini"
+    plugin.call(panel.guessEdited, props)
+
+    assert props["hasSuggestion"] is True
+
+
+def test_the_upload_sends_the_typed_name_not_the_old_row(plugin, panel):
+    """The workflow asked for: agree with the tribe, not the species. Pasting
+    the tribe over the field has to be what goes up."""
+    reached = stub_upload_path(plugin)
+    reached["matches"] = tribe_match(plugin)
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="123")])
+    props = chosen(plugin, panel, plugin.runtime.table_from({}),
+                   {"taxon_id": 47219, "name": "Apis mellifera"})
+    props["speciesGuess"] = "Argiini"
+    plugin.call(panel.guessEdited, props)
+
+    plugin.call(panel.uploadOrUpdate, props)
+
+    assert reached["taxonId"] == 207785
+    assert reached["guess"] == "Argiini"
+
+
+def test_a_name_that_resolves_to_nothing_still_uploads(plugin, panel):
+    """Free text in species_guess has always been allowed, and is the only
+    answer for something iNaturalist has no taxon for. It is asked about now --
+    the difference is invisible otherwise -- but confirming still sends it."""
+    reached = stub_upload_path(plugin)
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="123")])
+    plugin.set_confirm_answer("ok")
+    props = plugin.runtime.table_from({})
+    plugin.call(panel.clearSuggestions, props)
+    props["speciesGuess"] = "Sasquatch"
+
+    plugin.call(panel.uploadOrUpdate, props)
+
+    assert reached["updates"] == 1
+    assert reached["taxonId"] is None
+    assert reached["guess"] == "Sasquatch"
+
+
+def test_a_name_that_resolves_to_nothing_is_asked_about_first(plugin, panel):
+    """The upload reports success whether it carried an identification or a
+    string nothing will ever match, so the only moment the user can be told is
+    before it goes."""
+    reached = stub_upload_path(plugin)
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="123")])
+    # The harness answers Cancel unless told otherwise.
+    props = plugin.runtime.table_from({})
+    plugin.call(panel.clearSuggestions, props)
+    props["speciesGuess"] = "Sasquatch"
+
+    plugin.call(panel.uploadOrUpdate, props)
+
+    assert reached["updates"] == 0
+    assert "Sasquatch" in plugin.dialogs[-1]["message"]
+    assert props["suggestionStatus"] == ""
+
+
+def test_a_resolved_name_is_not_asked_about(plugin, panel):
+    """The gate is about free text. A name with a taxon behind it carries an
+    identification, and a dialog on every upload would be noise."""
+    reached = stub_upload_path(plugin)
+    reached["matches"] = tribe_match(plugin)
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="123")])
+    props = plugin.runtime.table_from({})
+    plugin.call(panel.clearSuggestions, props)
+    props["speciesGuess"] = "Argiini"
+
+    plugin.call(panel.uploadOrUpdate, props)
+
+    assert reached["updates"] == 1
+    assert plugin.dialogs == []
+
+
+def test_uploading_with_no_guess_at_all_is_not_asked_about(plugin, panel):
+    """There is no name to be wrong. Uploading an unidentified observation is a
+    supported thing to do, and confirming it would be a dialog about nothing."""
+    reached = stub_upload_path(plugin)
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="123")])
+
+    plugin.call(panel.uploadOrUpdate, plugin.runtime.table_from({}))
+
+    assert reached["updates"] == 1
+    assert plugin.dialogs == []
+
+
+# --- the button, and where it sits -----------------------------------------
+
+
+def taxonomy_buttons(args):
+    return [b for b in of_type(args["contents"], "push_button")
+            if isinstance(b["title"], str)
+            # The ellipsis is multi-byte and Lua hands back raw bytes, so
+            # match the ASCII part of the label.
+            and b["title"].startswith("Taxonomy")]
+
+
+def test_the_panel_offers_one_taxonomy_button(plugin, panel):
+    """One button, not a row of its own: the panel cannot afford height for
+    something wanted occasionally, and a window of its own costs it none."""
+    assert len(taxonomy_buttons(show(plugin, panel))) == 1
+
+
+def test_the_taxonomy_button_is_off_until_there_is_a_name(plugin, panel):
+    """Bound to there being a name rather than to a loaded lineage, because a
+    typed name has no lineage yet and is exactly what the button is for."""
+    args = show(plugin, panel)
+    button = taxonomy_buttons(args)[0]
+
+    assert button["enabled"]["__bind"] == "hasSuggestion"
+    assert args["contents"]["bind_to_object"]["hasSuggestion"] is False
+
+
+def test_the_taxonomy_button_sits_beside_update_photo_tags(plugin, panel):
+    """Beside the other button that works on the chosen name, so the panel does
+    not grow a row for it."""
+    args = show(plugin, panel)
+    rows = [v for v in of_type(args["contents"], "row")
+            if any(isinstance(b["title"], str)
+                   and b["title"] == "Update photo tags"
+                   for b in of_type(v, "push_button"))]
+
+    assert len(rows) == 1
+    assert len(taxonomy_buttons({"contents": rows[0]})) == 1
+
+
+def test_the_panel_has_no_taxonomy_line_of_its_own(plugin, panel):
+    """The breadcrumb and Copy Taxonomy were tried and dropped: the dialog
+    answers both, and neither earned the width."""
+    args = show(plugin, panel)
+    titles = {b["title"] for b in of_type(args["contents"], "push_button")
+              if isinstance(b["title"], str)}
+
+    assert "Copy Taxonomy" not in titles
+    assert not [v for v in of_type(args["contents"], "static_text")
+                if hasattr(v["title"], "keys")
+                and v["title"]["__bind"] == "taxonomyLine"]
 
 
 # ---------------------------------------------------------------------------

@@ -171,6 +171,61 @@ The usual run of it:
 4. Click **Upload to iNaturalist** — or, if the selection is already linked to
    an observation, **Update species guess**.
 
+Choosing a suggestion also loads its **taxonomy**, and **Taxonomy…** — beside
+**Update photo tags** — opens it: one row per rank, kingdom down to the thing
+itself, each with its own **Copy** button. It answers the question a scientific
+name on its own does not — is this even in the right group? — without leaving
+Lightroom, and it lets you take just the family, or just the genus, without
+editing anything afterwards. **Copy All** at the bottom puts every rank on the
+clipboard at once, one per line, with the rank name and the taxon separated by a
+tab: pasted into a spreadsheet that is two columns, pasted anywhere else it is a
+readable list.
+
+Copy buttons rather than text you can select, because Lightroom will not let a
+piece of text be both clickable and selectable.
+
+Each taxonomy opens in a **window of its own**, so you can leave one up, pick a
+different suggestion, and open a second beside it — which is the quickest way to
+decide between two names that look alike. They are ordinary windows: move them,
+raise them, close them in any order, with the **Close** button or the close box
+in the title bar. (On Windows, that is. The button is not there on a Mac, where
+the close box is the way out.) Lightroom places them for you, so a second may
+open on top of the first until you drag it aside.
+
+**You can type or paste into Species guess**, and every button below it will
+work on what you typed rather than on whatever was last clicked. Doing so drops
+the mark from the suggestion list, which is the plugin telling you it noticed:
+before this, an edited field was ignored and the original suggestion was
+uploaded anyway.
+
+That is what makes walking up a lineage possible. If you agree with a
+suggestion's tribe but not its species: click the species, press **Taxonomy…**,
+copy the tribe, paste it into **Species guess**, and then press **Taxonomy…**
+again to check it, **Update photo tags** to file the photo under it, or **Upload
+to iNaturalist** to post it. The brackets are fine — paste *Ischnura
+(Forktails)* exactly as the Copy button gave it to you.
+
+**Names appear in the order your iNaturalist account asks for.** The plugin
+reads your *Settings > Content & Display* choices — whether to show common
+names at all, and whether the scientific name comes first — and uses them
+everywhere it shows a species: the suggestion list, **Species guess**, the
+taxonomy windows, the line describing the current observation, and the
+reverse-sync list. Turn common names off on the website and the plugin shows
+the scientific name alone, as the website does. Change the setting and reopen
+the panel to pick it up. It also asks iNaturalist for common names in your
+account's language rather than always in English.
+
+A name iNaturalist has never heard of still uploads, as free text, because that
+is sometimes the only honest answer — but it asks first, since the upload
+succeeds either way and you would otherwise have no way to tell. On an
+observation that already has an identification it also tells you free text
+changes nothing there. **Update photo tags** needs a real taxon and will say so.
+
+The button is greyed out until there is a name to work on. The lineage comes
+from iNaturalist rather than from the photo, and for the top suggestion it has
+already been fetched by the time you click, so it normally appears instantly; a
+typed name costs one quick lookup.
+
 The button is one button that changes its name, because upload-or-update is one
 decision and the answer is already on screen. Uploading takes the whole
 selection into a **single observation** with several photos, which is what
@@ -372,15 +427,16 @@ disagreeing with itself. Posting a new identification withdraws the old one.
 ### The name in the box is the one you want to paste
 
 Clicking a suggestion fills the **Species guess** box with the row as you see
-it — *Western Honey Bee (Apis mellifera)*. That box is the only text in the
-panel you can select, so it is the only place a name can be copied from for a
-caption, and a common name used to mean retyping it.
+it — *Western Honey Bee (Apis mellifera)*, or *Apis mellifera (Western Honey
+Bee)* if that is the order your iNaturalist account asks for. That box is the
+only text in the panel you can select, so it is the only place a name can be
+copied from for a caption, and a common name used to mean retyping it.
 
 What gets sent is the bare scientific name, not that string. iNaturalist turns
 free text into an identification by matching it against taxon names, and it
-matches *Apis mellifera*, not the version with the common name in front of it.
-The two are kept separately for that reason, and the difference is never
-something you have to think about.
+matches *Apis mellifera*, not the version with the common name attached. The
+two are kept separately for that reason, and the difference is never something
+you have to think about.
 
 Type over the box and your own words are sent exactly as typed — editing it is
 how you overrule a suggestion, so a name you just deleted is never sent behind
@@ -606,6 +662,8 @@ pinned.lrplugin/
 ├── UploadCore.lua             # Creating and updating observations
 ├── SyncCore.lua               # Sync logic, callable from any entry point
 ├── LinkObservation.lua        # Adopting an existing observation
+├── TaxonomyDialog.lua         # A guess's lineage, one rank per row, in its own window
+├── NameStyle.lua              # Which way round a taxon's two names go, per your account
 ├── SettingsMenu.lua           # Plug-in Extras entry: opens settings
 ├── SettingsDialog.lua         # The settings window
 ├── Settings.lua               # Reading, writing and validating settings

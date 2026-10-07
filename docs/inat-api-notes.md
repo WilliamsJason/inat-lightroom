@@ -352,12 +352,49 @@ array from `/taxa/{id}` gives the full ladder of ranks they can choose from.
 GET /taxa/autocomplete?q=Quercus+rob&rank=species&locale=en
 ```
 
+`locale` is the account's (`InatAPI:locale`, from the memoised `/users/me`
+record), falling back to `en`. It controls which `preferred_common_name` comes
+back; `getTaxon` sends it too, so a lineage and a suggestion list agree.
+
 #### Full taxonomic tree from a taxon ID
 `GET /taxa/{id}` returns an `ancestors` array ordered from kingdom → species. Each ancestor has:
 - `id` – taxon ID
 - `name` – scientific name
 - `rank` – `kingdom`, `phylum`, `class`, `order`, `family`, `genus`, `species`, …
 - `preferred_common_name` – vernacular name (locale-dependent)
+
+**This is the only way to get it.** The suggestion endpoints do not carry a
+lineage at all — `score_image` and `score_observation` answer with `id`, `name`,
+`rank` and `preferred_common_name` per candidate, and `common_ancestor` is one
+taxon with the same four fields. So "show me the taxonomy of this guess" is
+always a second request, and `/v1/taxa?id=…` cannot serve it: the list endpoints
+answer with `ancestor_ids` and **no** `ancestors`, including `/v2/taxa` with
+`ancestors` asked for in `fields`. See "The list endpoint does not return
+ancestors" below for how the plugin assembles one from the other in bulk.
+
+In the panel that second request is usually free, because the panel has already
+made it. `PanelCore.withFallbacks` fetches the top candidate's lineage on every
+Get Suggestions to build the coarser rows, and `InatAPI:getTaxon` is memoised on
+the client — so the taxonomy of the row most people click comes out of the
+cache. A row further down the list costs one request, once.
+
+`rank` is a lowercase string out of a list some seventy long: every rank a
+working taxonomist uses, plus the infra- and super- forms of most of them.
+Anything displaying it should title-case an unrecognised rank rather than drop
+the rung — a lineage with a hole in it reads as a taxonomy the client got wrong.
+
+**Going the other way — a name to a taxon — is `/v1/taxa/autocomplete`, and it
+is a prefix search.** There is no "look up this exact name" endpoint, so the
+only route from a name the user typed or pasted to an id is autocomplete plus a
+choice. The prefix behaviour is the trap: `Ischnura` answers with whichever
+*species* of forktail iNaturalist ranks highest, not with the genus, so taking
+`results[1]` would quietly turn a genus the user chose deliberately back into a
+species. `PanelCore.bestNameMatch` prefers an exact lowercase `name` match,
+then an exact `preferred_common_name`, and only then the first result.
+
+It is also worth asking twice. Anything copied out of the taxonomy window comes
+as `Ischnura (Forktails)`, which matches nothing; `PanelCore.nameQueries` tries
+the whole string, then the part in brackets, then the part before it.
 
 ---
 
@@ -633,6 +670,36 @@ an extra round trip against a limit of 100 requests a minute.
 
 Note this is only true of the *search* endpoints. Elsewhere in the API `me`
 does work -- which is what makes it look safe.
+
+## Name order is an account setting, and only `/users/me` has it
+
+Every taxon has up to two names and there is no neutral way to show both.
+iNaturalist settles it per account, in Settings > Content & Display, and
+returns the answer on `GET /v1/users/me`:
+
+| Field | Website label | Default |
+| --- | --- | --- |
+| `prefers_common_names` | "Display name" includes the common name | `true` |
+| `prefers_scientific_name_first` | "Scientific name first" | `false` |
+| `locale` | Language for `preferred_common_name` | `en` |
+
+Two traps.
+
+**Only the authenticated record carries them.** The public user record
+(`GET /v1/users/{id}`) has `login`, counts and `roles` and no preferences at
+all -- verified by fetching one. `InatAPI:currentUser` memoises `/users/me`, so
+following the account costs one request per session at most, and nothing once
+anything else has asked who we are.
+
+**A missing field means "default", not "false".** iNaturalist stores a
+preference row only once the value differs from the default, so an account that
+never touched the setting sends neither field. Reading an absent
+`prefers_common_names` as false would strip every common name from the plugin
+for the majority of users. The defaults above are iNaturalistAPI's own `PREFS`
+table (`lib/models/user.js`), which is where they are authoritative.
+
+The plugin reads this in `NameStyle.lua` and every name it draws goes through
+`NameStyle.format`.
 
 ## One page of v1 observations is fifteen megabytes
 

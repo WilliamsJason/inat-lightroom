@@ -169,3 +169,50 @@ def test_the_fix_up_does_not_delay_the_window(plugin):
         "LrTasks.execute blocks, so running it first would hold the window "
         "shut for as long as the helper takes to find it"
     )
+
+
+# ---------------------------------------------------------------------------
+# Closing one window by name
+# ---------------------------------------------------------------------------
+
+
+def test_the_close_helper_is_shipped_with_the_plugin(fix):
+    name = fix.CLOSE_SCRIPT_NAME
+    assert (PLUGIN_DIR / name).is_file()
+
+
+def test_closing_runs_the_close_helper_not_the_z_order_one(plugin, fix):
+    plugin.set_platform(windows=True)
+    assert plugin.call(fix.close, "Pinned - Taxonomy")[0] is True
+    assert fix.CLOSE_SCRIPT_NAME in plugin.executed_commands[-1]
+    assert fix.SCRIPT_NAME not in plugin.executed_commands[-1]
+
+
+def test_closing_names_the_window_it_means(plugin, fix):
+    """The helper finds the window by its caption. There is one observation
+    panel and any number of taxonomy windows, and the SDK's own close is
+    plugin-wide -- getting the title wrong closes the wrong thing or, worse,
+    nothing while reporting success."""
+    plugin.set_platform(windows=True)
+    plugin.call(fix.close, "Pinned - Taxonomy: Ischnura")
+    assert '-Title "Pinned - Taxonomy: Ischnura"' in plugin.executed_commands[-1]
+
+
+def test_closing_does_nothing_off_windows(plugin, fix):
+    plugin.set_platform(windows=False)
+    assert plugin.call(fix.close, "Pinned - Taxonomy")[0] is False
+    assert plugin.executed_commands == []
+
+
+def test_a_window_that_was_not_found_is_reported_not_raised(plugin, fix):
+    """The user has probably already closed it with the close box."""
+    plugin.set_platform(windows=True)
+    plugin.set_execute_exit_code(1)
+    assert plugin.call(fix.close, "Pinned - Taxonomy")[0] is False
+    assert any("close helper exited 1" in line for line in plugin.log_lines)
+
+
+def test_a_title_containing_a_quote_is_refused_by_close_too(plugin, fix):
+    plugin.set_platform(windows=True)
+    assert plugin.call(fix.close, 'Pinned - "Taxonomy"')[0] is False
+    assert plugin.executed_commands == []
