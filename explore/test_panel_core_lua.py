@@ -158,6 +158,17 @@ def fake_api(plugin, **options):
             return opts.taxon, nil
           end
 
+          function api:autocompleteTaxon(query, rank)
+            record("autocomplete", query)
+            if opts.autocompleteError then return nil, opts.autocompleteError end
+            -- Per-query answers, because the name lookup asks more than once
+            -- for anything with a common name in brackets.
+            if opts.completions and opts.completions[query] then
+              return opts.completions[query], nil
+            end
+            return opts.completions and {} or (opts.matches or {}), nil
+          end
+
           return api, calls
         end
         """
@@ -1853,3 +1864,120 @@ def test_a_lineage_that_will_not_load_is_an_error_not_one_rung(plugin, core):
     assert "Ischnura erratica" in err
 
 
+
+# --- resolving a typed or pasted name --------------------------------------
+#
+# The other half of the taxonomy work: a name in the field is worth as much as
+# a clicked row, which means turning it into a taxon. /v1/taxa/autocomplete is
+# the only endpoint that takes a name, and it is a prefix search -- which is
+# why the first result is the last resort rather than the answer.
+
+
+def test_a_pasted_name_is_asked_about_as_written(plugin, core):
+    api, calls = fake_api(plugin, matches=rows(
+        plugin, {"id": 207785, "name": "Argiini", "rank": "tribe",
+                 "ancestors": {}}))
+
+    taxon, err = core["taxonForName"](api, "  Argiini  ")
+
+    assert err is None
+    assert taxon["id"] == 207785
+    assert call_named(calls, "autocomplete") == ["Argiini"]
+
+
+def test_an_exact_name_beats_autocompletes_own_order(plugin, core):
+    """Autocomplete is a prefix search: "Ischnura" answers with whichever
+    forktail species it ranks highest, which would quietly turn a genus the
+    user chose deliberately back into a species."""
+    api, _ = fake_api(plugin, matches=rows(
+        plugin,
+        {"id": 103486, "name": "Ischnura erratica", "rank": "species"},
+        {"id": 52054, "name": "Ischnura", "rank": "genus", "ancestors": {}}))
+
+    taxon, _ = core["taxonForName"](api, "Ischnura")
+
+    assert taxon["id"] == 52054
+
+
+def test_a_common_name_is_matched_too(plugin, core):
+    """Copy a rung out of the taxonomy window and it comes with its common
+    name; pasting it back has to work."""
+    api, _ = fake_api(plugin, matches=rows(
+        plugin,
+        {"id": 1, "name": "Forktailed Thing", "rank": "species"},
+        {"id": 52054, "name": "Ischnura", "rank": "genus",
+         "preferred_common_name": "Forktails", "ancestors": {}}))
+
+    taxon, _ = core["taxonForName"](api, "forktails")
+
+    assert taxon["id"] == 52054
+
+
+def test_a_name_with_its_common_name_in_brackets_is_unwrapped(plugin, core):
+    """Exactly what the window's Copy button puts on the clipboard, so pasting
+    it straight back into the field has to resolve."""
+    api, calls = fake_api(plugin, completions=plugin.runtime.table_from({
+        "Ischnura": rows(plugin, {"id": 52054, "name": "Ischnura",
+                                  "rank": "genus", "ancestors": {}}),
+    }))
+
+    taxon, _ = core["taxonForName"](api, "Ischnura (Forktails)")
+
+    assert taxon["id"] == 52054
+    assert call_named(calls, "autocomplete")[0] == "Ischnura (Forktails)"
+    assert "Ischnura" in call_named(calls, "autocomplete")
+
+
+def test_a_name_nobody_has_heard_of_is_said_to_be_unknown(plugin, core):
+    api, _ = fake_api(plugin, matches=rows(plugin))
+
+    taxon, err = core["taxonForName"](api, "Sasquatch")
+
+    assert taxon is None
+    assert "Sasquatch" in err
+
+
+def test_a_lookup_that_fails_is_not_reported_as_an_unknown_name(plugin, core):
+    """A name iNaturalist has never heard of and a name it could not be asked
+    about are different problems with different answers."""
+    api, _ = fake_api(plugin, autocompleteError="offline")
+
+    taxon, err = core["taxonForName"](api, "Argiini")
+
+    assert taxon is None
+    assert "look up" in err
+
+
+def test_an_empty_field_is_not_asked_about(plugin, core):
+    api, calls = fake_api(plugin, matches=rows(plugin))
+
+    taxon, err = core["taxonForName"](api, "   ")
+
+    assert taxon is None and err
+    assert call_named(calls, "autocomplete") == []
+
+
+def test_a_resolved_name_comes_back_as_a_whole_lineage(plugin, core):
+    api, _ = fake_api(
+        plugin,
+        matches=rows(plugin, {"id": 103486, "name": "Ischnura erratica",
+                              "rank": "species"}),
+        taxon=top_hit(plugin))
+
+    taxonomy, err = core["taxonomyForName"](api, "Ischnura erratica")
+
+    assert err is None
+    assert taxonomy[len(taxonomy)]["name"] == "Ischnura erratica"
+
+
+def test_a_resolved_name_with_no_lineage_is_an_error_not_one_rung(plugin, core):
+    api, _ = fake_api(
+        plugin,
+        matches=rows(plugin, {"id": 103486, "name": "Ischnura erratica",
+                              "rank": "species"}),
+        taxon=None)
+
+    taxonomy, err = core["taxonomyForName"](api, "Ischnura erratica")
+
+    assert taxonomy is None
+    assert "Ischnura erratica" in err

@@ -379,6 +379,19 @@ working taxonomist uses, plus the infra- and super- forms of most of them.
 Anything displaying it should title-case an unrecognised rank rather than drop
 the rung — a lineage with a hole in it reads as a taxonomy the client got wrong.
 
+**Going the other way — a name to a taxon — is `/v1/taxa/autocomplete`, and it
+is a prefix search.** There is no "look up this exact name" endpoint, so the
+only route from a name the user typed or pasted to an id is autocomplete plus a
+choice. The prefix behaviour is the trap: `Ischnura` answers with whichever
+*species* of forktail iNaturalist ranks highest, not with the genus, so taking
+`results[1]` would quietly turn a genus the user chose deliberately back into a
+species. `PanelCore.bestNameMatch` prefers an exact lowercase `name` match,
+then an exact `preferred_common_name`, and only then the first result.
+
+It is also worth asking twice. Anything copied out of the taxonomy window comes
+as `Ischnura (Forktails)`, which matches nothing; `PanelCore.nameQueries` tries
+the whole string, then the part in brackets, then the part before it.
+
 ---
 
 ### Identifications

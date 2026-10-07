@@ -592,9 +592,49 @@ once the padding removed the need for it.
 This is also what rules out a collapsible section anywhere in the panel. The
 feature request that asked for one was the chosen suggestion's full taxonomy —
 seven or eight ranks — and a block that cannot be hidden is a block that is
-always there. The answer was to put it in a dialog, which is built fresh each
-time it opens and is therefore exactly as tall as what it was handed, and to
-put the button that opens it in a row the panel already had.
+always there. The answer was to put it in a window of its own, which is built
+fresh each time it opens and is therefore exactly as tall as what it was
+handed, and to put the button that opens it in a row the panel already had.
+
+## Modal dialogs stack; floating windows do not
+
+A second `LrDialogs.presentModalDialog` while one is already up leaves the first
+on screen and untouchable: it cannot be raised, moved or closed until the top
+one is dismissed, and there is no API to close a modal from code at all. So
+"only one at a time" is not even enforceable — the only way to avoid the stack
+is not to use a modal.
+
+`presentFloatingDialog` has none of that. Each window is an ordinary window: it
+can be raised, dragged and closed on its own, which is what made opening two
+taxonomy windows a feature (comparing two lineages) rather than a bug.
+
+Three things to know before converting one:
+
+- **`blockTask = true` is mandatory.** The property table every binding reads
+  lives in the calling task's function context. Without it the call returns, the
+  task ends, the context dies, and the window is left bound to a dead object.
+  The corollary is that the calling task is held until the window closes, so it
+  has to be a task the caller can spare — start one for the window.
+- **`save_frame` is per key, and the key is shared.** It stores a *rectangle* —
+  position and size — and there is no API to forget it. Several windows of the
+  same kind sharing one key means the second opens exactly on top of the first,
+  at the position the user chose. Omitting it gives up remembering where the
+  window was, which is the lesser evil while there is no way to offset a window
+  from code.
+- **There is no per-window close.** `closeFloatingDialogsForPlugin` closes every
+  floating window the plug-in owns, including the Observation Panel, so a Close
+  button in one of these would take the panel with it. The window's own close
+  box is the only way out, which means `closable = true`.
+
+An `id` is what distinguishes one window from another, so keying it on the
+subject — `com.williamsjason.pinned.taxonomy.<taxon id>` — is how asking twice
+about one taxon should raise the window already open instead of duplicating it.
+Not verified outside Lightroom.
+
+Every one of these windows needs the same `WindowFix.apply(title)` treatment the
+panel does, and it has to be started *before* presenting: the helper polls for
+the window by title, and the call that creates the window does not return until
+it closes.
 
 ## Several lines onto the clipboard, without a newline in the command
 

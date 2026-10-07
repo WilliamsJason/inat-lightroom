@@ -330,8 +330,53 @@ end
 -- chosen -- otherwise the Taxonomy button opens the previous answer while the
 -- list marks the new one.
 function ObservationPanel.clearTaxonomy(props)
-  props.taxonomy    = {}
-  props.hasTaxonomy = false
+  props.taxonomy = {}
+end
+
+--- Let go of the chosen suggestion, because the field no longer says it.
+--
+-- Wired to the species guess field as an observer, so typing or pasting over
+-- the name unpicks the row that put it there: the mark goes, and so does the
+-- taxon id behind it.
+--
+-- Dropping the taxon id is the whole point. It is what the upload sends as an
+-- identification, and it used to survive an edit -- so pasting "Argiini" over
+-- a species and pressing Upload posted the species anyway, silently, because
+-- free text loses to a taxon id every time. The visible mark going is the
+-- honest version of that, and it is also the cue that the plugin noticed.
+--
+-- `hasSuggestion` is recomputed rather than cleared, because a typed name is
+-- still something the buttons can work on -- they look it up (see
+-- `PanelCore.taxonForName`) instead of reading an id off a row.
+function ObservationPanel.guessEdited(props)
+  local typed = props.speciesGuess or ""
+
+  if typed == (props.suggestionOfferedName or "") then return false end
+
+  props.selectedSuggestion = nil
+  props.suggestionTaxonId  = nil
+  props.suggestionRank     = nil
+  props.suggestionScore    = nil
+
+  ObservationPanel.clearChosenName(props)
+  ObservationPanel.clearTaxonomy(props)
+  ObservationPanel.applySuggestionSlots(props, props.suggestions or {}, nil)
+  ObservationPanel.refreshHasSuggestion(props)
+
+  return true
+end
+
+--- Whether there is a name for the buttons below the field to act on.
+--
+-- One rule in one place: a chosen row with a taxon id, or any text in the
+-- field. The second half is what lets a typed or pasted name drive Taxonomy…,
+-- Update photo tags and the upload -- and it is also why this is recomputed
+-- rather than set to false whenever the suggestion list is emptied. A photo
+-- that arrives with a species guess already in its metadata has a name worth
+-- looking up and no suggestions at all.
+function ObservationPanel.refreshHasSuggestion(props)
+  props.hasSuggestion = props.suggestionTaxonId ~= nil
+    or (props.speciesGuess or "") ~= ""
 end
 
 --- Empty the suggestion list and everything derived from it.
@@ -345,11 +390,11 @@ function ObservationPanel.clearSuggestions(props)
   props.suggestionTaxonId  = nil
   props.suggestionRank     = nil
   props.suggestionScore    = nil
-  props.hasSuggestion      = false
 
   ObservationPanel.clearChosenName(props)
   ObservationPanel.clearTaxonomy(props)
   ObservationPanel.applySuggestionSlots(props, {}, nil)
+  ObservationPanel.refreshHasSuggestion(props)
 end
 
 --- Copy the suggestion rows onto the fixed set of bound row properties.
@@ -662,11 +707,12 @@ function ObservationPanel.contents(f, props, actions)
       -- as the lineage it was handed.
       --
       -- It sits beside the other button that works on the chosen name rather
-      -- than beside the suggestions, and it is off until there is a lineage to
-      -- show -- which is the same moment Update photo tags comes on.
+      -- than beside the suggestions, and it is live whenever there is a name
+      -- to look up -- a clicked suggestion, or something typed or pasted into
+      -- the field, which it resolves against iNaturalist itself.
       f:push_button {
         title   = "Taxonomy…",
-        enabled = LrView.bind("hasTaxonomy"),
+        enabled = LrView.bind("hasSuggestion"),
         action  = actions.showTaxonomy,
       },
     },
@@ -780,23 +826,30 @@ function ObservationPanel.chooseSuggestion(props, selection)
     props.suggestionTaxonId = nil
     props.suggestionRank    = nil
     props.suggestionScore   = nil
-    props.hasSuggestion     = false
     ObservationPanel.clearChosenName(props)
     ObservationPanel.clearTaxonomy(props)
     ObservationPanel.applySuggestionSlots(props, rows, nil)
+    ObservationPanel.refreshHasSuggestion(props)
     return nil
   end
 
   -- All three written together, and only here. The pair below is only
   -- trustworthy as a pair: a scientific name left over from a row the field no
   -- longer shows is a wrong identification waiting to be sent.
-  props.speciesGuess             = PanelCore.suggestionName(row)
-  props.suggestionOfferedName    = props.speciesGuess
+  --
+  -- The offered name is written *before* the field, not after, and that order
+  -- is load-bearing: an observer on `speciesGuess` drops the chosen row the
+  -- moment the text stops matching what was offered, and it fires inside the
+  -- assignment. Writing the field first would have it compare against the
+  -- previous row's name, decide the user had typed something, and unpick the
+  -- choice being made.
+  props.suggestionOfferedName    = PanelCore.suggestionName(row)
+  props.speciesGuess             = props.suggestionOfferedName
   props.suggestionScientificName = row.name or row.common_name or ""
 
   props.selectedSuggestion = index
   props.suggestionTaxonId = row.taxon_id
-  props.hasSuggestion     = row.taxon_id ~= nil
+  ObservationPanel.refreshHasSuggestion(props)
 
   -- Kept so the upload can argue about a weak species-level claim. Read off the
   -- row at the moment it is chosen rather than looked up later, because the list
@@ -868,26 +921,89 @@ function ObservationPanel.loadTaxonomy(props)
     return nil
   end
 
-  props.taxonomy    = taxonomy
-  props.hasTaxonomy = true
+  props.taxonomy = taxonomy
 
   return taxonomy
 end
 
---- Open the taxonomy dialog for the chosen suggestion.
+--- The taxon every button below should act on.
 --
--- MUST be called from inside a task with a live context: the dialog's buttons
--- copy, and copying shells out.
+-- MUST be called from inside a task: it may fetch.
+--
+-- One answer to one question -- "what did the user say this is?" -- rather than
+-- each button reaching for `suggestionTaxonId` and getting nil the moment the
+-- field was edited. A chosen row answers it for free; anything typed or pasted
+-- costs a lookup, and is worth one, because an identification needs a taxon id
+-- and free text is ignored by iNaturalist on any observation that already has a
+-- taxon.
+--
+-- The resolved id is written back, so looking it up, reading its taxonomy and
+-- then uploading is one request rather than three.
+--
+-- @return taxon id or nil, and a message when there was a name that resolved to
+--         nothing. No name at all is not an error: uploading without a guess is
+--         allowed, and always has been.
+function ObservationPanel.taxonIdToUse(props, api)
+  if props.suggestionTaxonId then return props.suggestionTaxonId, nil end
+
+  local typed = props.speciesGuess or ""
+  if typed == "" then return nil, nil end
+
+  local taxon, err = PanelCore.taxonForName(api, typed)
+  if not taxon or not taxon.id then return nil, err end
+
+  props.suggestionTaxonId = taxon.id
+  props.suggestionRank    = taxon.rank
+  props.taxonomy          = PanelCore.taxonomyRows(taxon)
+
+  return taxon.id, nil
+end
+
+--- Open the taxonomy window for whatever the panel is currently claiming.
+--
+-- MUST be called from inside a task with a live context: the window's buttons
+-- copy, copying shells out, and presenting it blocks this task until it closes.
+--
+-- Two sources, in order of what they cost. A chosen row has had its lineage
+-- fetched already, on the click; a typed or pasted name has not, and is looked
+-- up here. The second case is the one that makes this worth having: reading a
+-- tribe out of one window, pasting it into the field and pressing the button
+-- again is how you walk up a lineage until you reach a rank you actually
+-- believe.
 function ObservationPanel.showTaxonomy(context, props)
   local taxonomy = props.taxonomy or {}
 
   if #taxonomy == 0 then
-    props.suggestionStatus = "Choose a suggestion first."
-    return false
+    local typed = props.speciesGuess or ""
+    if typed == "" then
+      props.suggestionStatus = "Choose a suggestion or type a name first."
+      return false
+    end
+
+    local api = UploadCore.requireAPI()
+    if not api then
+      InatAuth.reportMissingCredentials()
+      return false
+    end
+
+    props.suggestionStatus = "Looking up " .. typed .. "…"
+
+    local found, err = PanelCore.taxonomyForName(api, typed)
+    if not found then
+      props.suggestionStatus = err or "Could not load the taxonomy."
+      return false
+    end
+
+    -- Kept, so a second press of the button opens it again without a request,
+    -- and so an upload that follows already knows what it is identifying.
+    props.taxonomy = found
+    props.suggestionStatus = ""
+    taxonomy = found
   end
 
-  -- The finest rung names the dialog, because that is the taxon the user
-  -- clicked; the rest of the window is what it is a member of.
+  -- The finest rung names the window, because that is the taxon the user asked
+  -- about; the rest of it is what that is a member of. It is also what keys the
+  -- window, so asking twice about one species raises the window already open.
   local leaf = taxonomy[#taxonomy]
 
   return require("TaxonomyDialog").show(context, taxonomy, leaf and leaf.name)
@@ -960,8 +1076,21 @@ function ObservationPanel.uploadOrUpdate(props)
 
   local settings = Settings.all()
   local guess    = props.speciesGuess or ""
-  local taxonId  = props.suggestionTaxonId
   local accuracy = props.accuracy
+
+  -- Resolved rather than read off the chosen row, because there may not be a
+  -- chosen row: a name typed or pasted over the field is an identification the
+  -- user means just as much, and without an id behind it iNaturalist would
+  -- ignore it on anything already identified.
+  --
+  -- A name that resolves to nothing does not stop the upload. Free text in
+  -- species_guess has always been allowed and is the right answer for anything
+  -- iNaturalist has no taxon for; the note says what the upload will and will
+  -- not carry, and the upload goes.
+  local taxonId, lookupErr = ObservationPanel.taxonIdToUse(props, api)
+  if lookupErr then
+    props.suggestionStatus = lookupErr .. " Uploading the name as written."
+  end
 
   -- Both of these come before the confidence and location gates below, and
   -- before anything is rendered. They ask whether this is the right operation
@@ -1170,8 +1299,18 @@ function ObservationPanel.applyLocally(props)
 
   props.suggestionStatus = "Applying keywords…"
 
-  local ok, err = PanelCore.applyGuessLocally(catalog, api, photos,
-    props.suggestionTaxonId)
+  -- Same resolution the upload does, for the same reason: the keywords should
+  -- describe what the field says, not what was clicked before it was edited.
+  -- Unlike the upload this cannot go on without an id -- the whole keyword
+  -- hierarchy is read off the taxon -- so an unresolved name stops here.
+  local taxonId, lookupErr = ObservationPanel.taxonIdToUse(props, api)
+  if lookupErr then
+    LrDialogs.message("Pinned", lookupErr, "warning")
+    props.suggestionStatus = ""
+    return
+  end
+
+  local ok, err = PanelCore.applyGuessLocally(catalog, api, photos, taxonId)
   if not ok then
     LrDialogs.message("Pinned", err or "Could not apply that taxon.",
       "critical")
@@ -1252,6 +1391,18 @@ function ObservationPanel.show()
       props.uploading        = false
       props.uploadCanceled   = false
       ObservationPanel.clearSuggestions(props)
+
+      -- The field is the panel's other input, and until now it was an input
+      -- nothing watched: a name typed over a chosen suggestion left the mark on
+      -- the row and the taxon id behind it, and the taxon id is what got sent.
+      -- This is what makes editing the field mean what it looks like it means.
+      --
+      -- Registered after the first clearSuggestions so that setting the bound
+      -- keys up does not count as an edit, and before refresh() so that the
+      -- first photo's stored guess does.
+      props:addObserver("speciesGuess", function()
+        ObservationPanel.guessEdited(props)
+      end)
 
       refresh()
 

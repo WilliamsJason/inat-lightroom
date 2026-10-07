@@ -1,11 +1,15 @@
-"""The taxonomy dialog -- one rank per row, each with its own Copy button.
+"""The taxonomy window -- one rank per row, each with its own Copy button.
 
-Covers TaxonomyDialog.lua. This is a dialog rather than a part of the floating
-panel for a reason the SDK forces: the panel's view tree is fixed once
-presented and a bound ``visible`` does not hide a row, so a collapsible
+Covers TaxonomyDialog.lua. This is a window of its own rather than a part of
+the floating panel for a reason the SDK forces: the panel's view tree is fixed
+once presented and a bound ``visible`` does not hide a row, so a collapsible
 taxonomy inside the panel would stand at full height whether collapsed or not.
-A dialog is built fresh each time and is exactly as tall as the lineage it was
-handed.
+
+It is *floating* rather than modal because modals stack: a second one leaves
+the first on screen, unreadable and unmovable, until the top is dismissed, and
+there is no way to close a modal from code. Floating windows are independent,
+which turns opening two into the feature it looked like -- two lineages side by
+side.
 """
 
 from __future__ import annotations
@@ -71,7 +75,16 @@ def lineage(plugin):
 def shown(plugin, dialog, rows=None, heading="Ischnura erratica"):
     rows = lineage(plugin) if rows is None else rows
     result = plugin.in_task(dialog.show, None, rows, heading)
-    return result, plugin.modal_dialogs[-1] if plugin.modal_dialogs else None
+    return result, plugin.floating_dialogs[-1] if plugin.floating_dialogs else None
+
+
+def press(plugin, opened, title):
+    """Press a button in the window by its label, and let its task run."""
+    button = [b for b in of_type(opened["contents"], "push_button")
+              if b["title"] == title]
+    assert len(button) == 1, f"expected one {title} button"
+    button[0]["action"]()
+    plugin.run_pending_tasks()
 
 
 # ---------------------------------------------------------------------------
@@ -140,7 +153,82 @@ def test_an_empty_lineage_opens_nothing(plugin, dialog):
     result = plugin.in_task(dialog.show, None, deep(plugin, []), "")
 
     assert result is False
+    assert plugin.floating_dialogs == []
+
+
+# ---------------------------------------------------------------------------
+# Opening more than one
+# ---------------------------------------------------------------------------
+
+
+def test_the_window_floats_rather_than_blocking_the_panel(plugin, dialog):
+    """The bug this fixes: two modal windows stack, and only the top one can be
+    selected, so the first is stranded on screen."""
+    _, opened = shown(plugin, dialog)
+
     assert plugin.modal_dialogs == []
+    assert opened["blockTask"] is True, \
+        "without blockTask the context dies and every binding is dead"
+
+
+def test_two_taxa_get_two_windows(plugin, dialog):
+    """The reason for making them floating at all: comparing two lineages is
+    how anyone decides between two suggestions."""
+    core = plugin.require("PanelCore")
+    other = core["taxonomyRows"](deep(plugin, {
+        "id": 47219, "name": "Apis mellifera", "rank": "species",
+        "ancestors": [{"id": 1, "name": "Animalia", "rank": "kingdom"}],
+    }))
+
+    shown(plugin, dialog)
+    shown(plugin, dialog, rows=other, heading="Apis mellifera")
+
+    ids = [d["id"] for d in plugin.floating_dialogs]
+
+    assert len(plugin.floating_dialogs) == 2
+    assert ids[0] != ids[1]
+
+
+def test_the_same_taxon_keeps_the_same_window_id(plugin, dialog):
+    """Keyed on the taxon, so asking twice about one species raises the window
+    already open rather than laying an identical one on top of it."""
+    shown(plugin, dialog)
+    shown(plugin, dialog)
+
+    ids = [d["id"] for d in plugin.floating_dialogs]
+
+    assert ids[0] == ids[1]
+    assert "103486" in ids[0]
+
+
+def test_the_window_does_not_remember_a_frame(plugin, dialog):
+    """Every one of these would share one remembered rectangle, so a second
+    would open exactly on top of the first -- the stacking this replaced, at
+    the position the user had chosen."""
+    _, opened = shown(plugin, dialog)
+
+    assert opened["save_frame"] is None
+
+
+def test_the_window_can_be_closed(plugin, dialog):
+    """Its own close box is the only way out: closeFloatingDialogsForPlugin is
+    plugin-wide and would take the observation panel with it."""
+    _, opened = shown(plugin, dialog)
+
+    assert opened["closable"] is True
+
+
+def test_the_window_is_fixed_up_the_way_the_panel_is(plugin, dialog):
+    """Lightroom makes every window it creates this way topmost and ownerless,
+    so without this it floats over every other application."""
+    plugin.set_platform(windows=True)
+
+    _, opened = shown(plugin, dialog)
+    plugin.run_pending_tasks()
+
+    assert any(opened["title"] in command
+               for command in plugin.executed_commands), \
+        "the z-order helper was never asked about this window"
 
 
 # ---------------------------------------------------------------------------
@@ -191,15 +279,15 @@ def test_copying_nothing_runs_nothing(plugin, dialog):
 
 
 def test_copy_all_takes_the_whole_lineage(plugin, dialog):
-    """The action button is Copy All rather than OK, because there is nothing
-    here to accept."""
+    """One button for the common case, so the whole tree can go into a note
+    without four clicks and four pastes."""
     plugin.set_platform(windows=True)
-    plugin.set_modal_answer("ok")
 
     result, opened = shown(plugin, dialog)
 
-    assert opened["actionVerb"] == "Copy All"
     assert result is True
+
+    press(plugin, opened, "Copy All")
 
     command = plugin.executed_commands[-1]
     assert "'Kingdom\tAnimalia'" in command
@@ -207,11 +295,11 @@ def test_copy_all_takes_the_whole_lineage(plugin, dialog):
     assert "\n" not in command, "a newline in a command line is a second command"
 
 
-def test_closing_copies_nothing(plugin, dialog):
+def test_copy_all_is_reported_in_the_window(plugin, dialog):
     plugin.set_platform(windows=True)
-    plugin.set_modal_answer("cancel")
 
-    result, _ = shown(plugin, dialog)
+    _, opened = shown(plugin, dialog)
+    press(plugin, opened, "Copy All")
 
-    assert result is False
-    assert plugin.executed_commands == []
+    assert plugin.modal_dialogs == [], \
+        "a dialog to acknowledge a copy is worse than the copy was good"

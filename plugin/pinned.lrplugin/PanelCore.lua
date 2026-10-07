@@ -421,6 +421,121 @@ function PanelCore.taxonomyFor(api, row)
   return rows, nil
 end
 
+--- The names worth asking iNaturalist about, given what the field now holds.
+--
+-- The field's own format is "Common Name (Scientific name)", and the taxonomy
+-- window's rows read the same way round the other way -- "Ischnura (Forktails)".
+-- Both are display forms, and `/taxa/autocomplete` matches taxon names, so
+-- either one asked verbatim matches nothing. Both halves are therefore tried
+-- separately, and the whole string first in case it was neither and the user
+-- simply typed a name with a bracket in it.
+--
+-- Order matters only in that the first hit wins, and an exact match is
+-- preferred over any of them by the caller.
+--
+-- @return A list of query strings, longest-shot last. Empty for empty input.
+function PanelCore.nameQueries(text)
+  text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  if text == "" then return {} end
+
+  local queries = { text }
+
+  local before, inside = text:match("^(.-)%s*%((.+)%)$")
+  if inside and inside ~= "" then
+    queries[#queries + 1] = inside
+    if before and before ~= "" then queries[#queries + 1] = before end
+  end
+
+  return queries
+end
+
+--- Pick the taxon a typed name meant.
+--
+-- An exact name match beats everything, because autocomplete is a prefix search
+-- and "Ischnura" otherwise returns whichever species of forktail iNaturalist
+-- ranks highest -- which would quietly turn a genus the user chose deliberately
+-- back into a species. A common-name match comes next, and only then the
+-- first result, which is autocomplete's own best guess.
+--
+-- @param results  What `autocompleteTaxon` returned.
+-- @param query    The string it was asked about.
+function PanelCore.bestNameMatch(results, query)
+  local wanted = tostring(query or ""):lower()
+  local common
+
+  for _, taxon in ipairs(results or {}) do
+    if type(taxon.name) == "string" and taxon.name:lower() == wanted then
+      return taxon
+    end
+    if not common and type(taxon.preferred_common_name) == "string"
+      and taxon.preferred_common_name:lower() == wanted then
+      common = taxon
+    end
+  end
+
+  return common or (results or {})[1]
+end
+
+--- Resolve whatever the species guess field holds to a real taxon.
+--
+-- MUST be called from inside a task: it fetches.
+--
+-- This is what makes a typed or pasted guess worth as much as a clicked one.
+-- The motivating case is agreeing with a suggestion's tribe but not its
+-- species: copy the tribe out of the taxonomy window, paste it into the field,
+-- and the next button press should be about the tribe. Without a lookup the
+-- field is free text, and free text is ignored by iNaturalist the moment an
+-- observation has any taxon at all.
+--
+-- @return taxon (carrying `ancestors`), or nil plus a message for the status line.
+function PanelCore.taxonForName(api, text)
+  local queries = PanelCore.nameQueries(text)
+  if #queries == 0 then
+    return nil, "Type a species guess first."
+  end
+
+  local failed
+  for _, query in ipairs(queries) do
+    local results, err = api:autocompleteTaxon(query)
+    if results then
+      local taxon = PanelCore.bestNameMatch(results, query)
+      if taxon and taxon.id then
+        return SyncCore.withAncestors(api, taxon), nil
+      end
+    else
+      failed = err
+    end
+  end
+
+  if failed then
+    return nil, "Could not look up " .. queries[1] .. "."
+  end
+
+  return nil, "iNaturalist knows no taxon called " .. queries[1] .. "."
+end
+
+--- The lineage of whatever the species guess field holds.
+--
+-- MUST be called from inside a task: it fetches.
+--
+-- @return rows, error message.
+function PanelCore.taxonomyForName(api, text)
+  local taxon, err = PanelCore.taxonForName(api, text)
+  if not taxon then return nil, err end
+
+  if not SyncCore.hasLineage(taxon) then
+    return nil, "Could not load the taxonomy for " ..
+      (taxon.name or "that name") .. "."
+  end
+
+  local rows = PanelCore.taxonomyRows(taxon)
+  if #rows == 0 then
+    return nil, "iNaturalist returned no taxonomy for that name."
+  end
+
+  return rows, nil
+end
+
 --------------------------------------------------------------------------------
 -- How much of the selection is going up
 --------------------------------------------------------------------------------

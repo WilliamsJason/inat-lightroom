@@ -184,9 +184,33 @@ readable list.
 Copy buttons rather than text you can select, because Lightroom will not let a
 piece of text be both clickable and selectable.
 
-The button is greyed out until a suggestion is chosen. The lineage comes from
-iNaturalist rather than from the photo, and for the top suggestion it has
-already been fetched by the time you click, so it normally appears instantly.
+Each taxonomy opens in a **window of its own**, so you can leave one up, pick a
+different suggestion, and open a second beside it — which is the quickest way to
+decide between two names that look alike. They are ordinary windows: move them,
+raise them, close them in any order. Lightroom places them for you, so a second
+may open on top of the first until you drag it aside.
+
+**You can type or paste into Species guess**, and every button below it will
+work on what you typed rather than on whatever was last clicked. Doing so drops
+the mark from the suggestion list, which is the plugin telling you it noticed:
+before this, an edited field was ignored and the original suggestion was
+uploaded anyway.
+
+That is what makes walking up a lineage possible. If you agree with a
+suggestion's tribe but not its species: click the species, press **Taxonomy…**,
+copy the tribe, paste it into **Species guess**, and then press **Taxonomy…**
+again to check it, **Update photo tags** to file the photo under it, or **Upload
+to iNaturalist** to post it. The brackets are fine — paste *Ischnura
+(Forktails)* exactly as the Copy button gave it to you.
+
+A name iNaturalist has never heard of still uploads, as free text, because that
+is sometimes the only honest answer. **Update photo tags** needs a real taxon
+and will say so.
+
+The button is greyed out until there is a name to work on. The lineage comes
+from iNaturalist rather than from the photo, and for the top suggestion it has
+already been fetched by the time you click, so it normally appears instantly; a
+typed name costs one quick lookup.
 
 The button is one button that changes its name, because upload-or-update is one
 decision and the answer is already on screen. Uploading takes the whole
@@ -623,7 +647,7 @@ pinned.lrplugin/
 ├── UploadCore.lua             # Creating and updating observations
 ├── SyncCore.lua               # Sync logic, callable from any entry point
 ├── LinkObservation.lua        # Adopting an existing observation
-├── TaxonomyDialog.lua         # The chosen suggestion's lineage, one rank per row
+├── TaxonomyDialog.lua         # A guess's lineage, one rank per row, in its own window
 ├── SettingsMenu.lua           # Plug-in Extras entry: opens settings
 ├── SettingsDialog.lua         # The settings window
 ├── Settings.lua               # Reading, writing and validating settings
