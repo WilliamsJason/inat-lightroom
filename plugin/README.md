@@ -155,7 +155,8 @@ service](#why-there-is-no-publish-service).
 **File → Plug-in Extras → Observation Panel** opens a window that follows
 whatever is selected in the filmstrip. It shows what the selection currently is
 on iNaturalist — observation ID, taxon, common name, quality grade, last sync —
-and carries every action.
+and carries every action. There is only ever one: choose the menu item again
+and the panel you already have comes to the front.
 
 The usual run of it:
 

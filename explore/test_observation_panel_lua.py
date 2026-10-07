@@ -2192,3 +2192,60 @@ def test_a_coarser_rank_upload_asks_nothing(plugin, panel):
     plugin.run_pending_tasks()
 
     assert reached["count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Only one panel
+# ---------------------------------------------------------------------------
+
+
+def test_two_clicks_before_the_first_lands_open_one_panel(plugin, panel):
+    """The menu item queues a task and returns, so a guard set inside that
+    task would be set too late for a second click that arrives first. Two
+    panels mean two metadata watchers, two selection observers, and two
+    windows describing the same photo -- an upload in one leaves the other
+    still calling it unlinked."""
+    assert plugin.call(panel.show)[0] is True
+    assert plugin.call(panel.show)[0] is False
+
+    plugin.run_pending_tasks()
+
+    assert len(plugin.floating_dialogs) == 1
+
+
+def test_the_menu_item_brings_the_panel_it_already_opened_forward(
+        plugin, panel):
+    """A menu item that does nothing visible reads as the plugin having
+    failed, and the panel may well be behind Lightroom."""
+    plugin.set_platform(windows=True)
+    panel["open"] = True
+
+    plugin.call(panel.show)
+    plugin.run_pending_tasks()
+
+    assert plugin.floating_dialogs == []
+    assert any("raise_window.ps1" in command
+               for command in plugin.executed_commands)
+
+
+def test_the_raise_does_not_hold_up_the_menu_item(plugin, panel):
+    """It shells out, and LrTasks.execute blocks whatever runs it."""
+    plugin.set_platform(windows=True)
+    panel["open"] = True
+
+    plugin.call(panel.show)
+
+    assert plugin.executed_commands == []
+
+
+def test_a_panel_that_was_closed_can_be_opened_again(plugin, panel):
+    """The guard is cleared by the task's cleanup handler, which runs however
+    the task ends -- so a closed panel, or one whose task died on the way to
+    building a window, does not lock the menu item forever."""
+    plugin.call(panel.show)
+    plugin.run_pending_tasks()
+
+    assert plugin.call(panel.show)[0] is True
+    plugin.run_pending_tasks()
+
+    assert len(plugin.floating_dialogs) == 2

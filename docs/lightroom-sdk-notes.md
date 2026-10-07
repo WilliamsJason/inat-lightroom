@@ -642,6 +642,11 @@ subject — `com.williamsjason.pinned.taxonomy.<taxon id>` — is how asking twi
 about one taxon should raise the window already open instead of duplicating it.
 Not verified outside Lightroom.
 
+**It does not, in fact, prevent a duplicate.** The observation panel has always
+passed a constant `id`, and a second trip through its menu item opens a second
+window rather than raising the first. So a plug-in that wants one of something
+has to keep the flag itself, and raise the window it already has.
+
 Raising a window the plug-in already has open is therefore tempting to do by
 calling `presentFloatingDialog` again with the same `id` — but `blockTask`
 means each such call parks a task and a function context until the window

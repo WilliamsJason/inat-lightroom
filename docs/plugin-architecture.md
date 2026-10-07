@@ -200,6 +200,19 @@ of a dialog:
   the plugin unusable.
 - `save_frame` (with `id`) persists position and size across sessions.
 
+**One panel, enforced in Lua.** `id` is documented to identify the window, but
+a second trip through the menu item opens a second panel rather than raising
+the first — and two of them is worse than it looks: each runs its own metadata
+watcher and selection observer, and both describe the same photo, so an upload
+started in one leaves the other still calling it unlinked. `ObservationPanel.open`
+is the guard. It is set *before* the task is queued, because the menu item
+returns as soon as it has queued one and a guard set inside the task would be
+set too late for a second click; it is cleared by the task's cleanup handler,
+which runs however the task ends, so a panel that was closed — or one whose
+task died before it built a window — does not lock the menu item forever. The
+second click raises the existing panel through `WindowFix.raise`, for the same
+reason the Taxonomy button does.
+
 `blockTask = true` is load-bearing rather than cosmetic: the window's bindings
 belong to a property table owned by the calling task's function context, and
 without it that task ends immediately, the context dies, and every binding is

@@ -1407,10 +1407,47 @@ end
 -- Showing it
 --------------------------------------------------------------------------------
 
+--- Whether a panel is already on screen.
+--
+-- `presentFloatingDialog` is documented to key a window by its `id`, and the
+-- panel has always passed one, but a second File ▸ Plug-in Extras ▸
+-- Observation Panel opens a second window rather than raising the first. Two
+-- of them is worse than it sounds: each runs its own metadata watcher, each
+-- has its own selection observer, and both describe the same photo -- so an
+-- upload started in one leaves the other claiming the photo is unlinked.
+--
+-- Module state rather than a window handle, because there is nothing in the
+-- SDK to ask. It is set before the task is queued, so that two clicks in quick
+-- succession cannot both get through, and cleared by the task's cleanup
+-- handler, which runs however the task ends -- window closed, Lightroom
+-- quitting, or an error on the way to building it.
+ObservationPanel.open = false
+
 --- Open the panel, or bring it to the front if it is already open.
 function ObservationPanel.show()
+  if ObservationPanel.open then
+    -- The window is up but may be behind Lightroom, so a menu item that did
+    -- nothing visible would read as the plugin having failed. The raise is on
+    -- a task of its own because it shells out, and nothing waits for it.
+    LrTasks.startAsyncTask(function()
+      require("WindowFix").raise(WINDOW_TITLE)
+    end)
+    return false
+  end
+
+  -- Set here rather than inside the task, so that two clicks of the menu item
+  -- in quick succession cannot both queue a panel before either has opened
+  -- one.
+  ObservationPanel.open = true
+
   LrFunctionContext.postAsyncTaskWithContext("inat_observation_panel",
     function(context)
+      -- Cleared by the context rather than only by the window, so that an
+      -- error raised anywhere below -- before the window exists, or while it
+      -- is being built -- cannot leave the panel permanently unopenable with
+      -- nothing on screen to explain why.
+      context:addCleanupHandler(function() ObservationPanel.open = false end)
+
       local f     = LrView.osFactory()
       local props = LrBinding.makePropertyTable(context)
       local refresh = makeRefresh(props)
@@ -1616,7 +1653,10 @@ function ObservationPanel.show()
 
         -- Stops the watcher at the earliest moment there is, rather than
         -- whenever this task is next scheduled.
-        windowWillClose = function() open = false end,
+        windowWillClose = function()
+          open = false
+          ObservationPanel.open = false
+        end,
       })
 
       -- blockTask means this line is reached when the window has closed, which
@@ -1625,6 +1665,8 @@ function ObservationPanel.show()
       -- of thing that would only show up as a mystery in the log much later.
       open = false
     end)
+
+  return true
 end
 
 return ObservationPanel
