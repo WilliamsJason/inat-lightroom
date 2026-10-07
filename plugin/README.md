@@ -216,8 +216,10 @@ the panel to pick it up. It also asks iNaturalist for common names in your
 account's language rather than always in English.
 
 A name iNaturalist has never heard of still uploads, as free text, because that
-is sometimes the only honest answer. **Update photo tags** needs a real taxon
-and will say so.
+is sometimes the only honest answer — but it asks first, since the upload
+succeeds either way and you would otherwise have no way to tell. On an
+observation that already has an identification it also tells you free text
+changes nothing there. **Update photo tags** needs a real taxon and will say so.
 
 The button is greyed out until there is a name to work on. The lineage comes
 from iNaturalist rather than from the photo, and for the top suggestion it has

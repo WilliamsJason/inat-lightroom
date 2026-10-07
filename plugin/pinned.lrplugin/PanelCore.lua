@@ -267,6 +267,48 @@ function PanelCore.confidenceWarning(row)
     score, name)
 end
 
+--- The case against sending a name no taxon was found for, if there is one.
+--
+-- @param name      What the species guess field holds, as the user sees it.
+-- @param reason    The lookup's own message, when it had one -- a failed
+--                  request reads very differently from a successful "no such
+--                  taxon", and the user's answer should differ too.
+-- @param isUpdate  Whether this is going onto an observation that already
+--                  exists, where free text is not merely weak but inert.
+-- @return A message to show, or nil when there is nothing worth saying.
+--
+-- Silent when there is no name: uploading without a guess is a deliberate,
+-- supported thing to do, not an accident to confirm. Silent, too, when a taxon
+-- was found -- the id carries the identification and the text is decoration.
+--
+-- Worth asking about because the failure is invisible otherwise. A typo in a
+-- scientific name produces an upload that succeeds, reports success, and
+-- carries an identification iNaturalist will never act on; on an observation
+-- that already has a taxon it carries nothing at all.
+function PanelCore.freeTextWarning(name, reason, isUpdate)
+  local typed = tostring(name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  if typed == "" then return nil end
+
+  local lead = reason or
+    ("iNaturalist has no taxon matching \"" .. typed .. "\".")
+
+  if isUpdate then
+    return lead .. "\n\n" ..
+      "This observation already has an identification, and iNaturalist " ..
+      "ignores free text on one that does -- so sending this would change " ..
+      "nothing at all.\n\n" ..
+      "Check the spelling, or open Taxonomy\226\128\166 to find a name that " ..
+      "resolves."
+  end
+
+  return lead .. "\n\n" ..
+    "It will be uploaded as free text in the species guess. The observation " ..
+    "will carry the words but no identification, so it will not appear " ..
+    "under that taxon and nobody searching for it will find it.\n\n" ..
+    "Check the spelling, or open Taxonomy\226\128\166 to find a name that " ..
+    "resolves."
+end
+
 --------------------------------------------------------------------------------
 -- The taxonomic tree
 --------------------------------------------------------------------------------

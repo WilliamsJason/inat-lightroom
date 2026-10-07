@@ -1091,14 +1091,11 @@ function ObservationPanel.uploadOrUpdate(props)
   -- user means just as much, and without an id behind it iNaturalist would
   -- ignore it on anything already identified.
   --
-  -- A name that resolves to nothing does not stop the upload. Free text in
+  -- A name that resolves to nothing does not stop the upload; free text in
   -- species_guess has always been allowed and is the right answer for anything
-  -- iNaturalist has no taxon for; the note says what the upload will and will
-  -- not carry, and the upload goes.
+  -- iNaturalist has no taxon for. It does get asked about, below, because the
+  -- difference is otherwise invisible: the upload succeeds either way.
   local taxonId, lookupErr = ObservationPanel.taxonIdToUse(props, api)
-  if lookupErr then
-    props.suggestionStatus = lookupErr .. " Uploading the name as written."
-  end
 
   -- Both of these come before the confidence and location gates below, and
   -- before anything is rendered. They ask whether this is the right operation
@@ -1167,7 +1164,31 @@ function ObservationPanel.uploadOrUpdate(props)
 
   -- Which of the two jobs this is depends on the photo, not on the button: the
   -- caption is only a description of what is about to happen.
-  if UploadCore.pluginField(photos[1], "inat_observation_id") then
+  local existing = UploadCore.pluginField(photos[1], "inat_observation_id")
+
+  -- Last of the gates, because it is the one most likely to be answered "no"
+  -- after a second look at the spelling, and an answer of no here should not
+  -- have cost the three dialogs above.
+  --
+  -- Asked at all because `taxonIdToUse` has just done the only lookup that can
+  -- tell the difference, and without this the upload reports success whether
+  -- it carried an identification or a string nothing will ever match.
+  if not taxonId then
+    local freeText = PanelCore.freeTextWarning(guess, lookupErr, existing ~= nil)
+    if freeText then
+      local answer = LrDialogs.confirm(
+        existing and "Send a name iNaturalist will ignore?"
+                  or "Upload without an identification?",
+        freeText,
+        existing and "Send Anyway" or "Upload Anyway", "Cancel")
+      if answer ~= "ok" then
+        props.suggestionStatus = ""
+        return
+      end
+    end
+  end
+
+  if existing then
     props.suggestionStatus = "Updating the identification…"
 
     -- Before the identification, because this is the step that can be skipped

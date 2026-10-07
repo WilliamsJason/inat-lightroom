@@ -637,6 +637,38 @@ MUTATIONS = [
         "  local doubt = UploadCore.pluginField(photos[1], \"inat_observation_id\") and nil or PanelCore.confidenceWarning({",
     ),
 
+    # --- a name that is only text --------------------------------------------
+    (
+        "PanelCore",
+        "a name with no taxon behind it goes up unquestioned",
+        "  if typed == \"\" then return nil end\n\n  local lead = reason or",
+        "  if typed ~= \"\" then return nil end\n\n  local lead = reason or",
+    ),
+    (
+        "PanelCore",
+        "an upload with no guess at all is confirmed like a typo",
+        '  local typed = tostring(name or ""):gsub("^%s+", ""):gsub("%s+$", "")\n  if typed == "" then return nil end',
+        '  local typed = tostring(name or "")',
+    ),
+    (
+        "PanelCore",
+        "an update is told its ignored text will be uploaded",
+        "  if isUpdate then\n    return lead",
+        "  if false then\n    return lead",
+    ),
+    (
+        "ObservationPanel",
+        "the free-text question is asked and then ignored",
+        "      if answer ~= \"ok\" then\n        props.suggestionStatus = \"\"\n        return\n      end\n    end\n  end\n\n  if existing then",
+        "      if false then\n        props.suggestionStatus = \"\"\n        return\n      end\n    end\n  end\n\n  if existing then",
+    ),
+    (
+        "ObservationPanel",
+        "a resolved taxon is questioned like free text",
+        "  if not taxonId then\n    local freeText = PanelCore.freeTextWarning(",
+        "  if true then\n    local freeText = PanelCore.freeTextWarning(",
+    ),
+
     # --- merging a selection into one observation ----------------------------
     (
         "PanelCore",

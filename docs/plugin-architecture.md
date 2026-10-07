@@ -606,8 +606,8 @@ window's **Copy** button puts on the clipboard.
 An unresolvable name stops **Update photo tags**, because the whole keyword
 hierarchy is read off the taxon and there is nothing to read. It does *not* stop
 the upload: free text in `species_guess` has always been allowed and is the only
-answer for something iNaturalist has no taxon for, so the status line says what
-the upload will not carry and the upload goes.
+answer for something iNaturalist has no taxon for. It is, however, asked about
+first — see below.
 
 ### One module decides which name goes first
 
@@ -765,6 +765,35 @@ exists — arguably worse, because it is already public.
 
 The message names the alternative rather than only asking "are you sure?". A
 warning with no suggested action is one people learn to dismiss.
+
+### Arguing before a name that is only text
+
+`PanelCore.freeTextWarning` returns a message when there is a species guess and
+`ObservationPanel.taxonIdToUse` found no taxon for it, and nil otherwise.
+
+It exists because this is the one failure the panel could not otherwise show.
+`taxonIdToUse` does the only lookup that can tell an identification from a
+string, and once it has, the upload goes through the same code either way and
+reports the same success. A misspelt scientific name would produce an
+observation that looks uploaded, says it uploaded, and carries a name
+iNaturalist will never match.
+
+Three things it deliberately does not do:
+
+- **Refuse.** Free text is the right answer for anything iNaturalist has no
+  taxon for, and a veto would send people to the website instead.
+- **Fire with no name.** Uploading an unidentified observation is supported and
+  deliberate; confirming it would be a dialog about nothing.
+- **Use one wording.** On an observation that already has a taxon, free text is
+  not weak but inert — iNaturalist ignores it outright — so the update wording
+  says it would change nothing, and the title becomes *Send a name iNaturalist
+  will ignore?* rather than *Upload without an identification?*. The lookup's
+  own message leads when there was one, because a request that failed is not
+  the same situation as a name that does not exist.
+
+Asked **last** of the four gates in `ObservationPanel.uploadOrUpdate`. It is
+the one most likely to be answered "no" after a second look at the spelling, and
+an answer of no should not have cost three dialogs first.
 
 ### Applying a taxon without publishing
 

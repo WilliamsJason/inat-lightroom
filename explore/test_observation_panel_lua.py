@@ -1222,6 +1222,7 @@ def test_a_hand_typed_name_with_no_suggestion_is_sent_as_is(plugin, panel):
     the only thing anyone has said about this photo."""
     reached = stub_upload_path(plugin)
     plugin.set_target_photos([plugin.new_photo(inat_observation_id="123")])
+    plugin.set_confirm_answer("ok")  # it resolves to nothing, so it is asked about
     props = plugin.runtime.table_from({})
     props["speciesGuess"] = "Ischnura erratica"
 
@@ -1237,6 +1238,7 @@ def test_a_name_from_a_cleared_list_is_not_sent(plugin, panel):
     surviving that would be sent for a photo it was never about."""
     reached = stub_upload_path(plugin)
     plugin.set_target_photos([plugin.new_photo(inat_observation_id="123")])
+    plugin.set_confirm_answer("ok")  # it resolves to nothing, so it is asked about
     props = chosen(plugin, panel, plugin.runtime.table_from({}),
                    {"taxon_id": 47219, "name": "Apis mellifera",
                     "common_name": "Western Honey Bee"})
@@ -1981,10 +1983,11 @@ def test_the_upload_sends_the_typed_name_not_the_old_row(plugin, panel):
 
 def test_a_name_that_resolves_to_nothing_still_uploads(plugin, panel):
     """Free text in species_guess has always been allowed, and is the only
-    answer for something iNaturalist has no taxon for. The note says what the
-    upload will not carry; it does not refuse to make it."""
+    answer for something iNaturalist has no taxon for. It is asked about now --
+    the difference is invisible otherwise -- but confirming still sends it."""
     reached = stub_upload_path(plugin)
     plugin.set_target_photos([plugin.new_photo(inat_observation_id="123")])
+    plugin.set_confirm_answer("ok")
     props = plugin.runtime.table_from({})
     plugin.call(panel.clearSuggestions, props)
     props["speciesGuess"] = "Sasquatch"
@@ -1994,7 +1997,52 @@ def test_a_name_that_resolves_to_nothing_still_uploads(plugin, panel):
     assert reached["updates"] == 1
     assert reached["taxonId"] is None
     assert reached["guess"] == "Sasquatch"
-    assert plugin.dialogs == [], "a refusal would be a regression"
+
+
+def test_a_name_that_resolves_to_nothing_is_asked_about_first(plugin, panel):
+    """The upload reports success whether it carried an identification or a
+    string nothing will ever match, so the only moment the user can be told is
+    before it goes."""
+    reached = stub_upload_path(plugin)
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="123")])
+    # The harness answers Cancel unless told otherwise.
+    props = plugin.runtime.table_from({})
+    plugin.call(panel.clearSuggestions, props)
+    props["speciesGuess"] = "Sasquatch"
+
+    plugin.call(panel.uploadOrUpdate, props)
+
+    assert reached["updates"] == 0
+    assert "Sasquatch" in plugin.dialogs[-1]["message"]
+    assert props["suggestionStatus"] == ""
+
+
+def test_a_resolved_name_is_not_asked_about(plugin, panel):
+    """The gate is about free text. A name with a taxon behind it carries an
+    identification, and a dialog on every upload would be noise."""
+    reached = stub_upload_path(plugin)
+    reached["matches"] = tribe_match(plugin)
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="123")])
+    props = plugin.runtime.table_from({})
+    plugin.call(panel.clearSuggestions, props)
+    props["speciesGuess"] = "Argiini"
+
+    plugin.call(panel.uploadOrUpdate, props)
+
+    assert reached["updates"] == 1
+    assert plugin.dialogs == []
+
+
+def test_uploading_with_no_guess_at_all_is_not_asked_about(plugin, panel):
+    """There is no name to be wrong. Uploading an unidentified observation is a
+    supported thing to do, and confirming it would be a dialog about nothing."""
+    reached = stub_upload_path(plugin)
+    plugin.set_target_photos([plugin.new_photo(inat_observation_id="123")])
+
+    plugin.call(panel.uploadOrUpdate, plugin.runtime.table_from({}))
+
+    assert reached["updates"] == 1
+    assert plugin.dialogs == []
 
 
 # --- the button, and where it sits -----------------------------------------

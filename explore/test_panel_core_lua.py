@@ -1443,6 +1443,53 @@ def test_the_warning_says_what_to_do_instead(core):
 
 
 # ---------------------------------------------------------------------------
+# Arguing before a name no taxon was found for
+# ---------------------------------------------------------------------------
+
+
+def test_an_unresolved_name_is_argued_with(core):
+    warning = core["freeTextWarning"]("Sasquatch", None, False)
+
+    assert warning and "Sasquatch" in warning
+    assert "free text" in warning.lower()
+
+
+def test_no_name_is_not_argued_with(core):
+    """Uploading without a guess is supported and deliberate, so there is
+    nothing here to confirm."""
+    assert core["freeTextWarning"](None, None, False) is None
+    assert core["freeTextWarning"]("", None, False) is None
+    assert core["freeTextWarning"]("   ", None, False) is None
+
+
+def test_the_lookups_own_message_leads_when_there_is_one(core):
+    """A request that failed is a different situation from a name that does not
+    exist, and answering "upload anyway" to the first is a worse idea."""
+    warning = core["freeTextWarning"](
+        "Ischnura", "Could not look up Ischnura.", False)
+
+    assert warning.startswith("Could not look up Ischnura.")
+
+
+def test_an_update_is_told_the_text_does_nothing_at_all(core):
+    """On an observation that already has a taxon, free text is not weak -- it
+    is inert. Saying it "will be uploaded" there would be wrong."""
+    warning = core["freeTextWarning"]("Sasquatch", None, True)
+
+    assert "ignores free text" in warning
+    assert "nothing" in warning
+
+
+def test_both_warnings_say_what_to_do_instead(core):
+    """Same reason as the confidence one: a dialog that only asks "are you
+    sure?" gets clicked through."""
+    for is_update in (False, True):
+        warning = core["freeTextWarning"]("Sasquatch", None, is_update)
+        assert "spelling" in warning
+        assert "Taxonomy" in warning
+
+
+# ---------------------------------------------------------------------------
 # Asking before the selection is merged into one observation
 # ---------------------------------------------------------------------------
 
