@@ -1859,12 +1859,23 @@ def with_taxonomy(plugin, panel):
     return props
 
 
+def heading(plugin):
+    """What the taxonomy window names the taxon.
+
+    The single window's title bar is fixed -- it is what the Win32 helpers find
+    it by, and it outlives any one taxon -- so the taxon is in a bound heading
+    inside the window instead.
+    """
+    opened = plugin.floating_dialogs[-1]
+    return opened["contents"]["bind_to_object"]["heading"]
+
+
 def test_the_taxonomy_window_opens_on_the_chosen_taxon(plugin, panel):
     props = with_taxonomy(plugin, panel)
 
     plugin.in_task(panel.showTaxonomy, None, props)
 
-    assert "Ischnura erratica" in plugin.floating_dialogs[-1]["title"]
+    assert heading(plugin) == "Ischnura erratica"
 
 
 def test_the_taxonomy_window_will_not_open_on_nothing(plugin, panel):
@@ -1886,7 +1897,7 @@ def test_a_typed_name_is_looked_up_rather_than_refused(plugin, panel):
     props["speciesGuess"] = "Argiini"
 
     assert plugin.in_task(panel.showTaxonomy, None, props) is True
-    assert "Argiini" in plugin.floating_dialogs[-1]["title"]
+    assert heading(plugin) == "Argiini"
     assert list(reached["lookups"].values()) == ["Argiini"]
 
 
@@ -1902,7 +1913,6 @@ def test_a_typed_name_is_only_looked_up_once(plugin, panel):
     plugin.in_task(panel.showTaxonomy, None, props)
     plugin.in_task(panel.showTaxonomy, None, props)
 
-    assert len(plugin.floating_dialogs) == 2
     assert len(list(reached["lookups"].values())) == 1
 
 
@@ -2182,3 +2192,60 @@ def test_a_coarser_rank_upload_asks_nothing(plugin, panel):
     plugin.run_pending_tasks()
 
     assert reached["count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Only one panel
+# ---------------------------------------------------------------------------
+
+
+def test_two_clicks_before_the_first_lands_open_one_panel(plugin, panel):
+    """The menu item queues a task and returns, so a guard set inside that
+    task would be set too late for a second click that arrives first. Two
+    panels mean two metadata watchers, two selection observers, and two
+    windows describing the same photo -- an upload in one leaves the other
+    still calling it unlinked."""
+    assert plugin.call(panel.show)[0] is True
+    assert plugin.call(panel.show)[0] is False
+
+    plugin.run_pending_tasks()
+
+    assert len(plugin.floating_dialogs) == 1
+
+
+def test_the_menu_item_brings_the_panel_it_already_opened_forward(
+        plugin, panel):
+    """A menu item that does nothing visible reads as the plugin having
+    failed, and the panel may well be behind Lightroom."""
+    plugin.set_platform(windows=True)
+    panel["open"] = True
+
+    plugin.call(panel.show)
+    plugin.run_pending_tasks()
+
+    assert plugin.floating_dialogs == []
+    assert any("raise_window.ps1" in command
+               for command in plugin.executed_commands)
+
+
+def test_the_raise_does_not_hold_up_the_menu_item(plugin, panel):
+    """It shells out, and LrTasks.execute blocks whatever runs it."""
+    plugin.set_platform(windows=True)
+    panel["open"] = True
+
+    plugin.call(panel.show)
+
+    assert plugin.executed_commands == []
+
+
+def test_a_panel_that_was_closed_can_be_opened_again(plugin, panel):
+    """The guard is cleared by the task's cleanup handler, which runs however
+    the task ends -- so a closed panel, or one whose task died on the way to
+    building a window, does not lock the menu item forever."""
+    plugin.call(panel.show)
+    plugin.run_pending_tasks()
+
+    assert plugin.call(panel.show)[0] is True
+    plugin.run_pending_tasks()
+
+    assert len(plugin.floating_dialogs) == 2

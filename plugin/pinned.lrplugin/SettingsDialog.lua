@@ -505,7 +505,8 @@ end
 -- Observations tab
 --------------------------------------------------------------------------------
 
---- Linking this catalog to iNaturalist, and where the taxonomy lands.
+--- Linking this catalog to iNaturalist, where the taxonomy lands, and how the
+--- Taxonomy window behaves.
 --
 -- What an observation *says* is not here: geoprivacy, the project, and whether
 -- coordinates travel are all decided at upload time, and they read better
@@ -521,6 +522,24 @@ local function observationsTab(f, props, actions)
       margin  = 10,
 
       keywordRootSection(f, props),
+
+      f:spacer { height = 10 },
+      f:separator { fill_horizontal = 1 },
+      f:spacer { height = 6 },
+
+      f:static_text { title = "The Taxonomy window", font = "<system/bold>" },
+      f:checkbox {
+        title = "Allow multiple Taxonomy windows",
+        value = LrView.bind("taxonomy_multiple_windows"),
+      },
+      f:static_text {
+        title = "Off, Taxonomy… keeps one window and refills it as you choose\n"
+          .. "different suggestions, so you can leave it open beside the panel.\n"
+          .. "On, every press opens a window of its own, which is how to put\n"
+          .. "two lineages side by side. Takes effect on the next press.",
+        width           = 500,
+        height_in_lines = 4,
+      },
 
       f:spacer { height = 10 },
       f:separator { fill_horizontal = 1 },

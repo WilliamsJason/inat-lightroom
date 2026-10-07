@@ -437,3 +437,293 @@ def test_a_close_that_does_not_land_says_so(plugin, dialog):
     press(plugin, opened, "Close")
 
     assert plugin.modal_dialogs == []
+
+
+# ---------------------------------------------------------------------------
+# The window that stays open
+# ---------------------------------------------------------------------------
+
+
+def settings(plugin):
+    return plugin.require("Settings")
+
+
+def allow_multiple(plugin, value):
+    settings(plugin)["set"]("taxonomy_multiple_windows", value)
+
+
+def presented(plugin, dialog, rows=None, heading="Ischnura erratica"):
+    """Press Taxonomy… -- whichever window the preference asks for."""
+    rows = lineage(plugin) if rows is None else rows
+    result = plugin.in_task(dialog.present, None, rows, heading)
+    return result, plugin.floating_dialogs[-1] if plugin.floating_dialogs else None
+
+
+def ladder(contents):
+    """The slot rows of the single window, in order."""
+    rows = []
+    for row in of_type(contents, "row"):
+        if row[2] is None or row[2]["_viewType"] != "static_text":
+            continue
+        title = row[2]["title"]
+        if not hasattr(title, "keys"):
+            continue
+        if not str(title["__bind"]).startswith("rowLabel"):
+            continue
+        rows.append(row)
+    return rows
+
+
+def slots(props, prefix, count):
+    return [props[f"{prefix}{slot}"] for slot in range(1, count + 1)]
+
+
+def long_lineage(plugin, depth):
+    core = plugin.require("PanelCore")
+    ancestors = [{"id": step, "name": f"Rung{step}", "rank": "genus"}
+                 for step in range(1, depth)]
+    return core["taxonomyRows"](deep(plugin, {
+        "id": depth, "name": "Leaf", "rank": "species", "ancestors": ancestors,
+    }))
+
+
+def another_lineage(plugin):
+    return plugin.require("PanelCore")["taxonomyRows"](deep(plugin, {
+        "id": 47219, "name": "Apis mellifera", "rank": "species",
+        "ancestors": [{"id": 1, "name": "Animalia", "rank": "kingdom"}],
+    }))
+
+
+def test_one_window_is_the_default(plugin, dialog):
+    """Clicking down a list of suggestions is the way the panel is used, and a
+    window per click means a press of the button and a window to close for
+    every row."""
+    _, opened = presented(plugin, dialog)
+
+    assert opened["id"] == dialog["SINGLE_ID"]
+    assert opened["title"] == dialog["SINGLE_TITLE"]
+
+
+def test_the_preference_brings_the_per_taxon_windows_back(plugin, dialog):
+    """Two lineages side by side is how anyone decides between two
+    suggestions, and that needs two windows."""
+    allow_multiple(plugin, True)
+
+    _, opened = presented(plugin, dialog)
+
+    assert opened["id"] != dialog["SINGLE_ID"]
+    assert "Ischnura erratica" in opened["title"]
+
+
+def test_the_one_window_remembers_where_it_was_put(plugin, dialog):
+    """The objection to save_frame is that every per-taxon window would share
+    one rectangle and open on top of the last. There is only ever one of
+    these."""
+    _, opened = presented(plugin, dialog)
+
+    assert opened["save_frame"] == dialog["SINGLE_FRAME"]
+
+
+def test_the_taxon_is_named_inside_the_window(plugin, dialog):
+    """The title bar cannot carry it: it is fixed when the window is built, it
+    outlives any one taxon, and it is what the Win32 helpers find the window
+    by."""
+    _, opened = presented(plugin, dialog)
+
+    headings = [v for v in of_type(opened["contents"], "static_text")
+                if hasattr(v["title"], "keys")
+                and v["title"]["__bind"] == "heading"]
+
+    assert len(headings) == 1
+    assert opened["contents"]["bind_to_object"]["heading"] == "Ischnura erratica"
+
+
+def test_the_window_is_built_as_a_fixed_ladder(plugin, dialog):
+    """A presented view tree cannot grow a row, so a window that outlives the
+    lineage it was opened for has to be built for the deepest one it will ever
+    be asked to show."""
+    _, opened = presented(plugin, dialog)
+
+    assert len(ladder(opened["contents"])) == dialog["SLOTS"]
+
+
+def test_the_rungs_past_the_lineage_are_left_empty(plugin, dialog):
+    state = dialog.singleWindow(None, lineage(plugin), "Ischnura erratica")
+    props = state["props"]
+    count = dialog["SLOTS"]
+
+    assert slots(props, "rowLabel", count)[:4] == \
+        ["Kingdom:", "Class:", "Genus:", "Species:"]
+    assert slots(props, "rowLabel", count)[4:] == [""] * (count - 4)
+    assert slots(props, "rowUsed", count)[4:] == [False] * (count - 4)
+    assert slots(props, "rowCopy", count)[4:] == [""] * (count - 4)
+
+
+def test_a_shorter_lineage_clears_the_rungs_the_last_one_reached(plugin, dialog):
+    """Otherwise the tail of the previous taxon stays on screen below the new
+    one and reads as part of it."""
+    state = dialog.singleWindow(None, lineage(plugin), "Ischnura erratica")
+    shorter = plugin.require("PanelCore")["taxonomyRows"](deep(plugin, {
+        "id": 1, "name": "Animalia", "rank": "kingdom",
+    }))
+
+    dialog.refresh(shorter, "Animalia")
+
+    count = dialog["SLOTS"]
+    assert slots(state["props"], "rowLabel", count)[:2] == ["Kingdom:", ""]
+    assert state["props"]["heading"] == "Animalia"
+
+
+def test_a_lineage_deeper_than_the_ladder_keeps_its_finest_ranks(plugin, dialog):
+    """Trimming the other end would drop the species and leave the window
+    describing something nobody chose."""
+    count = dialog["SLOTS"]
+    kept = dialog.visibleRows(long_lineage(plugin, count + 4))
+
+    assert len(kept) == count
+    assert kept[count]["name"] == "Leaf"
+
+
+def test_the_open_window_follows_the_panel(plugin, dialog):
+    """The whole point of one window: it keeps up with the species guess
+    without the button being pressed again."""
+    state = dialog.singleWindow(None, lineage(plugin), "Ischnura erratica")
+
+    assert dialog.refresh(another_lineage(plugin)) is True
+    assert state["props"]["heading"] == "Apis mellifera"
+    assert state["props"]["rowLabel2"] == "Species:"
+
+
+def test_a_refresh_does_not_bring_the_window_forward(plugin, dialog):
+    """A refresh is something the user did not ask for. Stealing focus from
+    the panel they are clicking in would be."""
+    plugin.set_platform(windows=True)
+    dialog.singleWindow(None, lineage(plugin), "Ischnura erratica")
+
+    dialog.refresh(another_lineage(plugin))
+    plugin.run_pending_tasks()
+
+    assert not any("raise_window.ps1" in command
+                   for command in plugin.executed_commands)
+
+
+def test_an_unresolved_guess_leaves_the_last_lineage_up(plugin, dialog):
+    """The panel clears its taxonomy between one suggestion and the next, and
+    while a typed name is unresolved. Blanking the window at each of those
+    moments would make it flicker through empty."""
+    state = dialog.singleWindow(None, lineage(plugin), "Ischnura erratica")
+
+    assert dialog.refresh(deep(plugin, [])) is False
+    assert state["props"]["heading"] == "Ischnura erratica"
+    assert state["props"]["rowLabel1"] == "Kingdom:"
+
+
+def test_a_refresh_with_no_window_opens_nothing(plugin, dialog):
+    """Choosing a suggestion must not pop up a window nobody asked for."""
+    assert dialog.refresh(lineage(plugin)) is False
+    assert plugin.floating_dialogs == []
+
+
+def test_pressing_the_button_again_raises_the_window_it_already_opened(
+        plugin, dialog):
+    plugin.set_platform(windows=True)
+    dialog.singleWindow(None, lineage(plugin), "Ischnura erratica")
+
+    assert plugin.in_task(dialog.showSingle, None, lineage(plugin),
+                          "Ischnura erratica") is True
+    plugin.run_pending_tasks()
+
+    assert plugin.floating_dialogs == [], "a second window was opened"
+    assert any("raise_window.ps1" in command
+               for command in plugin.executed_commands)
+
+
+def test_pressing_the_button_again_also_refills_it(plugin, dialog):
+    """Pressing Taxonomy… on a different guess has to show that guess, even
+    though the window it raises is the one already up."""
+    state = dialog.singleWindow(None, lineage(plugin), "Ischnura erratica")
+
+    plugin.in_task(dialog.showSingle, None, another_lineage(plugin),
+                   "Apis mellifera")
+
+    assert state["props"]["heading"] == "Apis mellifera"
+
+
+def test_the_copy_buttons_follow_the_refresh(plugin, dialog):
+    """They are built once and the window outlives the lineage, so they act on
+    what it is showing now rather than on what it was opened with."""
+    plugin.set_platform(windows=True)
+    state = dialog.singleWindow(None, lineage(plugin), "Ischnura erratica")
+
+    dialog.refresh(another_lineage(plugin))
+    state["actions"]["copyRow"](2)
+    plugin.run_pending_tasks()
+
+    assert "'Apis mellifera'" in plugin.executed_commands[-1]
+
+
+def test_copying_an_empty_rung_runs_nothing(plugin, dialog):
+    plugin.set_platform(windows=True)
+    state = dialog.singleWindow(None, lineage(plugin), "Ischnura erratica")
+
+    state["actions"]["copyRow"](dialog["SLOTS"])
+    plugin.run_pending_tasks()
+
+    assert plugin.executed_commands == []
+
+
+def test_an_empty_lineage_opens_no_single_window(plugin, dialog):
+    assert plugin.in_task(dialog.showSingle, None, deep(plugin, []), "") is False
+    assert plugin.floating_dialogs == []
+
+
+def test_the_one_window_is_fixed_up_the_way_the_panel_is(plugin, dialog):
+    plugin.set_platform(windows=True)
+
+    presented(plugin, dialog)
+    plugin.run_pending_tasks()
+
+    assert any("fix_window_z_order.ps1" in command
+               and dialog["SINGLE_TITLE"] in command
+               for command in plugin.executed_commands)
+
+
+def test_every_copy_button_is_built_the_same_width(plugin, dialog):
+    """A push_button measures itself against the title it holds when the
+    window is built, and these are bound. A slot that was empty then is a box
+    built for "" -- so the first deeper lineage to reach it shows a clipped
+    button, on the species row, which is the one row nobody wants clipped."""
+    _, opened = presented(plugin, dialog)
+
+    widths = {row[4]["width"] for row in ladder(opened["contents"])}
+
+    assert len(widths) == 1
+    assert widths.pop() > 0
+
+
+def test_the_one_window_does_not_sit_against_its_frame(plugin, dialog):
+    """It is built once and never resized, so a row that reaches the edge
+    stays there."""
+    _, opened = presented(plugin, dialog)
+
+    assert opened["contents"]["margin_horizontal"] > 0
+
+
+def test_a_per_taxon_window_does_not_sit_against_its_frame_either(
+        plugin, dialog):
+    allow_multiple(plugin, True)
+
+    _, opened = presented(plugin, dialog)
+
+    assert opened["contents"]["margin_horizontal"] > 0
+
+
+def test_closing_the_one_window_lets_the_next_press_build_another(
+        plugin, dialog):
+    """Otherwise a refresh writes into a property table nothing is drawing,
+    and the next press raises a window that is not there."""
+    _, opened = presented(plugin, dialog)
+    opened["windowWillClose"]()
+
+    assert dialog["single"] is None
+    assert dialog.refresh(lineage(plugin)) is False

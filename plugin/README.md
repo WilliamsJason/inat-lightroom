@@ -160,7 +160,8 @@ service](#why-there-is-no-publish-service).
 **File → Plug-in Extras → Observation Panel** opens a window that follows
 whatever is selected in the filmstrip. It shows what the selection currently is
 on iNaturalist — observation ID, taxon, common name, quality grade, last sync —
-and carries every action.
+and carries every action. There is only ever one: choose the menu item again
+and the panel you already have comes to the front.
 
 The usual run of it:
 
@@ -189,13 +190,21 @@ readable list.
 Copy buttons rather than text you can select, because Lightroom will not let a
 piece of text be both clickable and selectable.
 
-Each taxonomy opens in a **window of its own**, so you can leave one up, pick a
-different suggestion, and open a second beside it — which is the quickest way to
-decide between two names that look alike. They are ordinary windows: move them,
-raise them, close them in any order, with the **Close** button or the close box
-in the title bar. (On Windows, that is. The button is not there on a Mac, where
-the close box is the way out.) Lightroom places them for you, so a second may
-open on top of the first until you drag it aside.
+Each taxonomy opens in **one window that keeps up with you**: pick a different
+suggestion and it redraws on that one, so the quickest way to compare names is
+to click down the list and read the window. It stays where you put it, it never
+jumps in front of the panel you are clicking in, and when a guess is one the
+plugin cannot resolve, the last good lineage stays up rather than blanking.
+Pressing **Taxonomy…** again brings that window forward instead of opening a
+second. They are ordinary windows: move them, raise them, close them with the
+**Close** button or the close box in the title bar. (On Windows, that is. The
+button is not there on a Mac, where the close box is the way out.)
+
+If you would rather have two lineages side by side — which is the other way to
+decide between two names that look alike — tick **Allow multiple Taxonomy
+windows** on the Observations tab of settings. Every press then opens a window
+of its own, on the guess as it stood when you pressed, and Lightroom places
+them, so a second may open on top of the first until you drag it aside.
 
 **You can type or paste into Species guess**, and every button below it will
 work on what you typed rather than on whatever was last clicked. Doing so drops
@@ -667,7 +676,7 @@ pinned.lrplugin/
 ├── UploadCore.lua             # Creating and updating observations
 ├── SyncCore.lua               # Sync logic, callable from any entry point
 ├── LinkObservation.lua        # Adopting an existing observation
-├── TaxonomyDialog.lua         # A guess's lineage, one rank per row, in its own window
+├── TaxonomyDialog.lua         # A guess's lineage, one rank per row, in a window of its own
 ├── NameStyle.lua              # Which way round a taxon's two names go, per your account
 ├── SettingsMenu.lua           # Plug-in Extras entry: opens settings
 ├── SettingsDialog.lua         # The settings window
@@ -726,6 +735,20 @@ cd explore
 The source is taken from wherever the script lives, so running it from a
 worktree installs that worktree without being told which one. Switching
 branches becomes: check out, run this, click **Reload Plug-in**.
+
+To try a branch out *without* disturbing the copy you rely on, install it to a
+second fixed folder instead:
+
+```powershell
+.\install_plugin.ps1 -Staging   # → ~\Documents\LrPlugins\staging\pinned.lrplugin
+```
+
+Add that one in the Plug-in Manager as well, once. Both copies declare the same
+identifier, so Lightroom lets only one be enabled at a time — which is what
+makes switching between the shipping version and whatever you are building a
+matter of clicking **Enable** on one of two entries, rather than removing a
+plugin and adding another. The path shown under the name is what tells them
+apart.
 
 Pointing Lightroom straight at a working tree instead is tempting and worth
 avoiding. Lightroom remembers a plugin by path, so every worktree is a separate

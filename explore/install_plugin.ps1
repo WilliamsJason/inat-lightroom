@@ -16,9 +16,26 @@
   The source is taken from wherever this script lives, so running it from a
   worktree installs that worktree without being told which one.
 
+  -Staging adds a second fixed folder, for trying a worktree out without
+  disturbing the copy you rely on day to day. See that parameter.
+
 .PARAMETER Destination
   The folder Lightroom is pointed at. Defaults to
   ~\Documents\LrPlugins\pinned.lrplugin.
+
+.PARAMETER Staging
+  Install to ~\Documents\LrPlugins\staging\pinned.lrplugin instead.
+
+  The folder above is where the copy you *use* lives, and overwriting it to try
+  a branch out means overwriting it again to get back. So there is a second
+  fixed folder for the copy you are *testing*: add both in the Plug-in Manager
+  once, and switching between the shipping version and a worktree becomes a
+  checkbox rather than a Remove and an Add.
+
+  Both copies declare the same LrToolkitIdentifier, so Lightroom will only let
+  one of them be enabled at a time -- which is the behaviour that makes the
+  checkbox work. They are told apart in the Plug-in Manager by the path shown
+  under the name, which is why the staging path says "staging" in it.
 
 .PARAMETER KeepStaged
   Keep any update the installed copy has already staged.
@@ -41,21 +58,36 @@
   .\install_plugin.ps1
 
 .EXAMPLE
+  .\install_plugin.ps1 -Staging
+
+.EXAMPLE
   .\install_plugin.ps1 -Destination D:\LrPlugins\pinned.lrplugin
 
 .EXAMPLE
   .\install_plugin.ps1 -IncludeProbe
 #>
 
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = 'Destination')]
 param(
+  [Parameter(ParameterSetName = 'Destination')]
   [string] $Destination = (Join-Path $HOME "Documents\LrPlugins\pinned.lrplugin"),
+
+  [Parameter(ParameterSetName = 'Staging', Mandatory = $true)]
+  [switch] $Staging,
+
   [switch] $KeepStaged,
   [switch] $IncludeProbe
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# Its own folder, not a sibling file name: Lightroom shows the plugin's path in
+# the Plug-in Manager, and a "staging" path segment is what tells the two
+# entries apart there.
+if ($Staging) {
+  $Destination = Join-Path $HOME "Documents\LrPlugins\staging\pinned.lrplugin"
+}
 
 # The plugin sits beside this script's parent: <repo>/explore/.. /plugin/...
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -66,8 +98,8 @@ if (-not (Test-Path (Join-Path $source "Info.lua"))) {
   exit 1
 }
 
-$staging = Join-Path $Destination ".update-staging"
-$hadStaged = Test-Path $staging
+$stagedUpdate = Join-Path $Destination ".update-staging"
+$hadStaged = Test-Path $stagedUpdate
 
 New-Item -ItemType Directory -Force -Path $Destination | Out-Null
 
@@ -80,7 +112,7 @@ New-Item -ItemType Directory -Force -Path $Destination | Out-Null
 $robocopyArgs = @(
   $source, $Destination,
   "/MIR",
-  "/XD", $staging, (Join-Path $source ".update-staging"),
+  "/XD", $stagedUpdate, (Join-Path $source ".update-staging"),
   "/NFL", "/NDL", "/NJH", "/NJS", "/NP"
 )
 
@@ -97,7 +129,7 @@ if ($robocopyExit -ge 8) {
 }
 
 if ($hadStaged -and -not $KeepStaged) {
-  Remove-Item -Recurse -Force $staging
+  Remove-Item -Recurse -Force $stagedUpdate
 }
 
 # The probe plugin, when asked for.
@@ -125,7 +157,7 @@ if ($IncludeProbe) {
 }
 
 $files = (Get-ChildItem $Destination -Recurse -File |
-  Where-Object { $_.FullName -notlike "$staging*" }).Count
+  Where-Object { $_.FullName -notlike "$stagedUpdate*" }).Count
 
 $version = (Select-String -Path (Join-Path $Destination "Info.lua") `
   -Pattern 'display\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
@@ -133,6 +165,14 @@ $version = (Select-String -Path (Join-Path $Destination "Info.lua") `
 Write-Output "Installed $version ($files files)"
 Write-Output "  from  $source"
 Write-Output "  to    $Destination"
+
+if ($Staging) {
+  Write-Output ""
+  Write-Output "This is the staging copy. Add it in the Plug-in Manager once; after that,"
+  Write-Output "switch between it and the shipping copy with their Enable/Disable buttons."
+  Write-Output "Both share one identifier, so only one can be enabled at a time, and the"
+  Write-Output "path under the name is what tells them apart."
+}
 
 if ($IncludeProbe) {
   $probeFiles = (Get-ChildItem $probeDestination -Recurse -File).Count

@@ -184,7 +184,13 @@ plugin in the Plug-in Manager:
 
 ```powershell
 .\install_plugin.ps1        # → ~\Documents\LrPlugins\pinned.lrplugin
+.\install_plugin.ps1 -Staging   # → ~\Documents\LrPlugins\staging\pinned.lrplugin
 ```
+
+The second is for trying a worktree out without overwriting the copy you use
+day to day: add both in the Plug-in Manager once and switch between them with
+**Enable** / **Disable**. They share an identifier, so only one can be enabled
+at a time, and the path under the name is what tells them apart.
 
 See [plugin/README.md](../plugin/README.md#installing-a-working-tree) for why
 Lightroom should not be aimed at a checkout directly.

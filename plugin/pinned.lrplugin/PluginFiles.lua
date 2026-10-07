@@ -137,6 +137,7 @@ PluginFiles.FILES = {
   "install_update.sh",
   "json.lua",
   "no-photo.png",
+  "raise_window.ps1",
 }
 
 --- Why a file that should ship cannot be used, or nil if it is fine.

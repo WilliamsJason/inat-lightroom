@@ -29,6 +29,24 @@
   -- which turns the stack from a defect into the feature it looked like: two
   lineages side by side is how anyone decides between two suggestions.
 
+  Two windows, or one that keeps up. Opening a second window for a second
+  suggestion is the point above, and it is the right answer for anyone
+  comparing two lineages -- but it is the wrong answer for anyone who wants one
+  window left open beside the panel, because it means pressing the button again
+  for every guess and closing what the last press left behind. So which one
+  happens is a preference ("Allow multiple Taxonomy windows", Settings ▸
+  Observations), and the default is the single window: it is the one that
+  cannot end the session with eleven windows open.
+
+  The single window is a different build of the same contents, and it has to
+  be. A presented view tree cannot grow or lose rows, so a window that outlives
+  the lineage it was opened for cannot be a row per rank -- it is a fixed
+  SLOTS-deep ladder of rows whose labels and names are bound, and refreshing it
+  is writing to those properties. That costs blank rows below a short lineage,
+  which is the price of the window not moving, not flickering and not stealing
+  focus every time a suggestion is clicked. The per-taxon windows keep their
+  built-to-fit shape, so nobody who wanted that loses it.
+
   The cost is that a floating window has no action buttons of its own, so Copy
   All and Close are buttons in the contents. Close cannot be
   `closeFloatingDialogsForPlugin` -- that is the only programmatic close the SDK
@@ -49,6 +67,7 @@ local LrView     = import "LrView"
 
 local Clipboard = require "Clipboard"
 local PanelCore = require "PanelCore"
+local Settings  = require "Settings"
 
 local TaxonomyDialog = {}
 
@@ -95,6 +114,66 @@ local NAME_WIDTH = 420
 -- lineage needs.
 local CLOSE_WIDTH = 70
 
+--- How many rank rows the single window is built with.
+--
+-- A presented view tree cannot grow, so the window that stays open has to be
+-- built once for the deepest lineage it will ever be asked to show, and the
+-- rows past the end of a shorter one are left empty. Sixteen covers everything
+-- iNaturalist has handed this plugin -- a subspecies of an insect, which is
+-- where the sub- and infra- ranks pile up, runs to about fourteen -- without
+-- making the window a screen tall for the eight-rung lineages that are
+-- ordinary.
+--
+-- Anything deeper is trimmed from the top rather than the bottom: the finest
+-- ranks are what the user asked about and what the heading names, and a
+-- lineage missing its kingdom still reads as a lineage, while one missing its
+-- species does not.
+TaxonomyDialog.SLOTS = 16
+
+--- Width of the single window's Copy buttons, and of its side margins.
+--
+-- A `push_button` measures itself against the title it holds at build time,
+-- exactly as the status line does, and the single window's buttons are bound:
+-- a slot past the end of the lineage the window was built on holds "" and gets
+-- sized for it. When a deeper lineage arrives that slot's button says "Copy"
+-- in a box built for nothing, so the one row the user most wants -- the
+-- species, at the bottom -- is the one whose button is clipped. A fixed width
+-- is the fix, and it has to be fixed for every slot or the buttons stop
+-- lining up.
+--
+-- The margin is the same number for no better reason than that the rows would
+-- otherwise sit against the frame on both sides, which is what made the
+-- clipping look like a width problem rather than a measuring one. Both kinds
+-- of window get it: the per-taxon one never clipped a button, because its
+-- titles are literal, but its Copy column was just as hard against the frame.
+local COPY_WIDTH = 60
+local SIDE_MARGIN = 8
+
+--- The single window's title, id and remembered frame.
+--
+-- The title cannot carry the taxon the way the per-taxon windows' does: it is
+-- fixed when the window is built, and this one outlives any one taxon. It is
+-- also what the Win32 helpers find the window by, so a changing title would be
+-- a window they could no longer close or raise. The taxon is named in a bound
+-- heading inside the window instead.
+--
+-- `save_frame` is safe here and is not on the per-taxon windows, for the same
+-- reason: there is only ever one of these, so there is no second window to
+-- open exactly on top of the first.
+TaxonomyDialog.SINGLE_TITLE = "Pinned - Taxonomy"
+TaxonomyDialog.SINGLE_ID    = "com.williamsjason.pinned.taxonomy.single"
+TaxonomyDialog.SINGLE_FRAME = "inat_taxonomy_single"
+
+--- The single window while it is on screen, or nil.
+--
+-- Module state rather than something passed around, because the two callers
+-- cannot hand it to each other: the panel's observer fires on a photo's
+-- taxonomy changing and knows nothing about windows, and the button that
+-- opened the window is in a different task from the one blocked in presenting
+-- it. Cleared when the window closes, so that the next press builds a new one
+-- rather than writing into a property table nothing is drawing.
+TaxonomyDialog.single = nil
+
 --- Put one piece of text on the clipboard and say so.
 --
 -- MUST be called from inside a task: the copy shells out.
@@ -123,8 +202,10 @@ end
 -- presenting anything.
 function TaxonomyDialog.contents(f, props, rows, actions)
   local column = {
-    bind_to_object = props,
-    spacing        = f:label_spacing(),
+    bind_to_object    = props,
+    spacing           = f:label_spacing(),
+    margin_horizontal = SIDE_MARGIN,
+    margin_vertical   = SIDE_MARGIN / 2,
   }
 
   for index, row in ipairs(rows) do
@@ -294,6 +375,316 @@ function TaxonomyDialog.show(context, rows, heading)
   })
 
   return true
+end
+
+--------------------------------------------------------------------------------
+-- The window that stays open
+--------------------------------------------------------------------------------
+
+--- The rows the single window can actually show, deepest kept.
+--
+-- A lineage longer than the ladder is trimmed from the kingdom end, because
+-- the rungs nearest the leaf are the ones the user asked about. Trimming from
+-- the other end would drop the species and leave the window describing
+-- something nobody chose.
+function TaxonomyDialog.visibleRows(rows)
+  rows = rows or {}
+
+  local extra = #rows - TaxonomyDialog.SLOTS
+  if extra <= 0 then return rows end
+
+  local kept = {}
+  for index = extra + 1, #rows do
+    kept[#kept + 1] = rows[index]
+  end
+
+  return kept
+end
+
+--- Point the single window at a lineage.
+--
+-- Every slot is written on every refresh, including the empty ones, because a
+-- shorter lineage replacing a longer one has to clear the rows it does not
+-- reach -- otherwise the tail of the previous taxon stays on screen below the
+-- new one and reads as part of it.
+--
+-- `rows` is kept on the property table rather than closed over, so the Copy
+-- buttons built once at the top of this file act on whatever the window is
+-- showing now rather than on what it was opened with.
+--
+-- @return the rows actually shown.
+function TaxonomyDialog.fill(props, rows, heading)
+  local shown = TaxonomyDialog.visibleRows(rows)
+  local leaf  = shown[#shown]
+
+  props.rows = shown
+
+  if heading == nil or heading == "" then
+    heading = leaf and leaf.name or ""
+  end
+  props.heading = heading
+
+  for slot = 1, TaxonomyDialog.SLOTS do
+    local row = shown[slot]
+
+    props["rowUsed"  .. slot] = row ~= nil
+    props["rowLabel" .. slot] = row and (row.label .. ":") or ""
+    props["rowText"  .. slot] = row and row.text or ""
+    props["rowCopy"  .. slot] = row and "Copy" or ""
+  end
+
+  return shown
+end
+
+--- The single window's contents: a fixed ladder of bound rows.
+--
+-- The same shape as `contents` above, built from properties instead of from a
+-- lineage. The indent is still per position rather than bound, because
+-- position is the one thing about a slot that cannot change: slot 3 is always
+-- the third rung shown, whatever it holds.
+--
+-- An unused slot is emptied three ways on purpose. Its label, name and button
+-- titles go to "" so nothing of the last taxon is left behind; `enabled` goes
+-- false so a stray click on an empty row copies nothing; and `visible` is
+-- bound as well because it costs nothing and might work -- it was measured not
+-- *collapsing* a row (docs/lightroom-sdk-notes.md), and whether it hides the
+-- control was never established. If it does, an empty row is genuinely empty;
+-- if it does not, it is a blank disabled button, which is what it would have
+-- been anyway.
+function TaxonomyDialog.slotContents(f, props, actions)
+  local column = {
+    bind_to_object    = props,
+    spacing           = f:label_spacing(),
+    margin_horizontal = SIDE_MARGIN,
+    margin_vertical   = SIDE_MARGIN / 2,
+  }
+
+  -- What the per-taxon windows put in the title bar. This one's title bar is
+  -- fixed -- it is how the Win32 helpers find the window -- so the taxon is
+  -- named here instead, where it can change with the lineage below it.
+  column[#column + 1] = f:static_text {
+    title      = LrView.bind("heading"),
+    font       = "<system/bold>",
+    width      = LABEL_WIDTH + NAME_WIDTH,
+    truncation = "tail",
+  }
+
+  column[#column + 1] = f:separator { fill_horizontal = 1 }
+
+  for slot = 1, TaxonomyDialog.SLOTS do
+    local indent = (slot - 1) * INDENT_WIDTH
+    local used   = "rowUsed" .. slot
+    local text   = "rowText" .. slot
+
+    column[#column + 1] = f:row {
+      spacing = f:label_spacing(),
+
+      f:spacer { width = indent },
+
+      f:static_text {
+        title      = LrView.bind("rowLabel" .. slot),
+        width      = LABEL_WIDTH,
+        alignment  = "left",
+        truncation = "tail",
+      },
+
+      f:static_text {
+        title      = LrView.bind(text),
+        tooltip    = LrView.bind(text),
+        width      = NAME_WIDTH - indent,
+        truncation = "tail",
+      },
+
+      f:push_button {
+        title   = LrView.bind("rowCopy" .. slot),
+        width   = COPY_WIDTH,
+        enabled = LrView.bind(used),
+        visible = LrView.bind(used),
+        action  = function() actions.copyRow(slot) end,
+      },
+    }
+  end
+
+  column[#column + 1] = f:separator { fill_horizontal = 1 }
+
+  column[#column + 1] = f:row {
+    spacing = f:label_spacing(),
+
+    f:push_button {
+      title  = "Copy All",
+      action = actions.copyAll,
+    },
+
+    actions.close and f:push_button {
+      title  = "Close",
+      action = actions.close,
+    } or f:spacer { width = 0 },
+
+    f:static_text {
+      title           = LrView.bind("status"),
+      width           = LABEL_WIDTH + NAME_WIDTH -
+                          (actions.close and CLOSE_WIDTH or 0),
+      truncation      = "tail",
+      height_in_lines = 1,
+    },
+  }
+
+  column[#column + 1] = f:spacer { height = 6 }
+
+  return f:column(column)
+end
+
+--- Build the single window and register it, without presenting it.
+--
+-- Split from `showSingle` for the same reason `contents` is split from `show`:
+-- presenting blocks the task until the window closes, so a test that called
+-- the whole thing could never look at what it built. It is also what makes the
+-- module state observable -- `showSingle` clears it on the line after the
+-- window closes, which in a harness that does not block is the line after it
+-- opens.
+--
+-- @param context  A live LrFunctionContext; it MUST outlive the window.
+-- @return the window state: { props, contents, actions }.
+function TaxonomyDialog.singleWindow(context, rows, heading)
+  local f     = LrView.osFactory()
+  local props = LrBinding.makePropertyTable(context)
+
+  props.status = ""
+  TaxonomyDialog.fill(props, rows, heading)
+
+  local WindowFix = require "WindowFix"
+
+  local actions = {
+    copyRow = function(slot)
+      local row = (props.rows or {})[slot]
+      if not row then return end
+
+      LrTasks.startAsyncTask(function()
+        TaxonomyDialog.copy(props, row.text, row.label:lower())
+      end)
+    end,
+
+    copyAll = function()
+      LrTasks.startAsyncTask(function()
+        TaxonomyDialog.copy(props, PanelCore.taxonomyText(props.rows),
+          "the taxonomy")
+      end)
+    end,
+  }
+
+  if WindowFix.applicable() then
+    actions.close = function()
+      LrTasks.startAsyncTask(function()
+        if not WindowFix.close(TaxonomyDialog.SINGLE_TITLE) then
+          props.status = "Could not close the window. Use the close box."
+        end
+      end)
+    end
+  end
+
+  local state = {
+    props   = props,
+    actions = actions,
+  }
+  state.contents = TaxonomyDialog.slotContents(f, props, actions)
+
+  TaxonomyDialog.single = state
+
+  return state
+end
+
+--- Show the one taxonomy window, or point the open one at this lineage.
+--
+-- A second press is not a second window: the one already up is refilled and
+-- raised. Raising is a Win32 call like the rest of the window handling here,
+-- so where it cannot run the window is still correct, just not brought to the
+-- front -- which is a worse answer than Windows gets and a much better one
+-- than a window that silently ignores the button.
+--
+-- MUST be called from inside a task with a context that can be held: the call
+-- below does not return until the window closes.
+function TaxonomyDialog.showSingle(context, rows, heading)
+  rows = rows or {}
+  if #rows == 0 then return false end
+
+  local WindowFix = require "WindowFix"
+  local live      = TaxonomyDialog.single
+
+  if live then
+    TaxonomyDialog.fill(live.props, rows, heading)
+
+    LrTasks.startAsyncTask(function()
+      WindowFix.raise(TaxonomyDialog.SINGLE_TITLE)
+    end)
+
+    return true
+  end
+
+  local state = TaxonomyDialog.singleWindow(context, rows, heading)
+
+  LrTasks.startAsyncTask(function()
+    WindowFix.apply(TaxonomyDialog.SINGLE_TITLE)
+  end)
+
+  LrDialogs.presentFloatingDialog(_PLUGIN, {
+    title      = TaxonomyDialog.SINGLE_TITLE,
+    contents   = state.contents,
+    id         = TaxonomyDialog.SINGLE_ID,
+    save_frame = TaxonomyDialog.SINGLE_FRAME,
+    closable   = true,
+    blockTask  = true,
+
+    -- The earliest moment there is. Also cleared below, because a window state
+    -- left behind is a refresh writing into a property table nothing draws,
+    -- and the next press would raise a window that is not there.
+    windowWillClose = function()
+      if TaxonomyDialog.single == state then TaxonomyDialog.single = nil end
+    end,
+  })
+
+  if TaxonomyDialog.single == state then TaxonomyDialog.single = nil end
+
+  return true
+end
+
+--- Point the open single window at a new lineage, if there is one.
+--
+-- The panel calls this whenever the taxonomy it holds changes, which is how a
+-- window left open follows the species guess without the button being pressed
+-- again. Three things it deliberately does not do:
+--
+--   * nothing, when no single window is open. There is no window to fill and
+--     opening one uninvited would make choosing a suggestion pop up a window.
+--   * nothing, for an empty lineage. The panel clears its taxonomy between one
+--     suggestion and the next, and while a typed name is unresolved; blanking
+--     the window at each of those moments would make it flicker through empty
+--     and leave it empty whenever the guess is not a name iNaturalist knows.
+--     The last good lineage stays until there is a better one.
+--   * it does not raise the window. A refresh is something the user did not
+--     ask for; stealing focus from the panel they are clicking in would be.
+function TaxonomyDialog.refresh(rows, heading)
+  local live = TaxonomyDialog.single
+  if not live then return false end
+
+  rows = rows or {}
+  if #rows == 0 then return false end
+
+  TaxonomyDialog.fill(live.props, rows, heading)
+
+  return true
+end
+
+--- Show a lineage, in whichever kind of window the user has asked for.
+--
+-- The only entry point callers should use. Which one it is is a preference
+-- rather than a guess, because both answers are right for somebody: one window
+-- left open beside the panel, or a window per taxon for comparing two.
+function TaxonomyDialog.present(context, rows, heading)
+  if Settings.get("taxonomy_multiple_windows") then
+    return TaxonomyDialog.show(context, rows, heading)
+  end
+
+  return TaxonomyDialog.showSingle(context, rows, heading)
 end
 
 return TaxonomyDialog
