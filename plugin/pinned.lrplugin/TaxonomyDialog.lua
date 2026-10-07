@@ -143,7 +143,9 @@ TaxonomyDialog.SLOTS = 16
 --
 -- The margin is the same number for no better reason than that the rows would
 -- otherwise sit against the frame on both sides, which is what made the
--- clipping look like a width problem rather than a measuring one.
+-- clipping look like a width problem rather than a measuring one. Both kinds
+-- of window get it: the per-taxon one never clipped a button, because its
+-- titles are literal, but its Copy column was just as hard against the frame.
 local COPY_WIDTH = 60
 local SIDE_MARGIN = 8
 
@@ -200,8 +202,10 @@ end
 -- presenting anything.
 function TaxonomyDialog.contents(f, props, rows, actions)
   local column = {
-    bind_to_object = props,
-    spacing        = f:label_spacing(),
+    bind_to_object    = props,
+    spacing           = f:label_spacing(),
+    margin_horizontal = SIDE_MARGIN,
+    margin_vertical   = SIDE_MARGIN / 2,
   }
 
   for index, row in ipairs(rows) do

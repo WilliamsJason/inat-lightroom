@@ -709,6 +709,15 @@ def test_the_one_window_does_not_sit_against_its_frame(plugin, dialog):
     assert opened["contents"]["margin_horizontal"] > 0
 
 
+def test_a_per_taxon_window_does_not_sit_against_its_frame_either(
+        plugin, dialog):
+    allow_multiple(plugin, True)
+
+    _, opened = presented(plugin, dialog)
+
+    assert opened["contents"]["margin_horizontal"] > 0
+
+
 def test_closing_the_one_window_lets_the_next_press_build_another(
         plugin, dialog):
     """Otherwise a refresh writes into a property table nothing is drawing,
