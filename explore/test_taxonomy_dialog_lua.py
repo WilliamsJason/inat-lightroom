@@ -688,6 +688,27 @@ def test_the_one_window_is_fixed_up_the_way_the_panel_is(plugin, dialog):
                for command in plugin.executed_commands)
 
 
+def test_every_copy_button_is_built_the_same_width(plugin, dialog):
+    """A push_button measures itself against the title it holds when the
+    window is built, and these are bound. A slot that was empty then is a box
+    built for "" -- so the first deeper lineage to reach it shows a clipped
+    button, on the species row, which is the one row nobody wants clipped."""
+    _, opened = presented(plugin, dialog)
+
+    widths = {row[4]["width"] for row in ladder(opened["contents"])}
+
+    assert len(widths) == 1
+    assert widths.pop() > 0
+
+
+def test_the_one_window_does_not_sit_against_its_frame(plugin, dialog):
+    """It is built once and never resized, so a row that reaches the edge
+    stays there."""
+    _, opened = presented(plugin, dialog)
+
+    assert opened["contents"]["margin_horizontal"] > 0
+
+
 def test_closing_the_one_window_lets_the_next_press_build_another(
         plugin, dialog):
     """Otherwise a refresh writes into a property table nothing is drawing,

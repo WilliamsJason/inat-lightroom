@@ -130,6 +130,23 @@ local CLOSE_WIDTH = 70
 -- species does not.
 TaxonomyDialog.SLOTS = 16
 
+--- Width of the single window's Copy buttons, and of its side margins.
+--
+-- A `push_button` measures itself against the title it holds at build time,
+-- exactly as the status line does, and the single window's buttons are bound:
+-- a slot past the end of the lineage the window was built on holds "" and gets
+-- sized for it. When a deeper lineage arrives that slot's button says "Copy"
+-- in a box built for nothing, so the one row the user most wants -- the
+-- species, at the bottom -- is the one whose button is clipped. A fixed width
+-- is the fix, and it has to be fixed for every slot or the buttons stop
+-- lining up.
+--
+-- The margin is the same number for no better reason than that the rows would
+-- otherwise sit against the frame on both sides, which is what made the
+-- clipping look like a width problem rather than a measuring one.
+local COPY_WIDTH = 60
+local SIDE_MARGIN = 8
+
 --- The single window's title, id and remembered frame.
 --
 -- The title cannot carry the taxon the way the per-taxon windows' does: it is
@@ -432,8 +449,10 @@ end
 -- been anyway.
 function TaxonomyDialog.slotContents(f, props, actions)
   local column = {
-    bind_to_object = props,
-    spacing        = f:label_spacing(),
+    bind_to_object    = props,
+    spacing           = f:label_spacing(),
+    margin_horizontal = SIDE_MARGIN,
+    margin_vertical   = SIDE_MARGIN / 2,
   }
 
   -- What the per-taxon windows put in the title bar. This one's title bar is
@@ -474,6 +493,7 @@ function TaxonomyDialog.slotContents(f, props, actions)
 
       f:push_button {
         title   = LrView.bind("rowCopy" .. slot),
+        width   = COPY_WIDTH,
         enabled = LrView.bind(used),
         visible = LrView.bind(used),
         action  = function() actions.copyRow(slot) end,
