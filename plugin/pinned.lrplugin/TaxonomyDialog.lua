@@ -30,10 +30,13 @@
   lineages side by side is how anyone decides between two suggestions.
 
   The cost is that a floating window has no action buttons of its own, so Copy
-  All is a button in the contents, and closing is the window's own close box.
-  `closeFloatingDialogsForPlugin` is the only programmatic close and it is
-  plugin-wide -- it would take the observation panel with it, which is not a
-  Close button, it is a trapdoor.
+  All and Close are buttons in the contents. Close cannot be
+  `closeFloatingDialogsForPlugin` -- that is the only programmatic close the SDK
+  has and it is plugin-wide, so it would take the observation panel with it,
+  which is not a Close button, it is a trapdoor. What it does instead is send
+  the window the same WM_CLOSE its own close box sends, through the Win32 helper
+  the panel already needs for its z-order. That is Windows-only, so on anything
+  else the button is absent rather than dead and the close box is the way out.
 
   Nothing here talks to the API. The lineage arrives already fetched, because
   the caller is the only one that knows whether it is allowed to block.
@@ -53,6 +56,24 @@ local TaxonomyDialog = {}
 -- longest label a lineage the plugin shows has produced.
 local LABEL_WIDTH = 90
 
+--- How far each rank steps right from the one above it.
+--
+-- The point of the window is that a lineage is a descent, and a flush-left list
+-- of eight ranks does not say so -- it reads as eight unrelated facts. One step
+-- per level makes the nesting visible at a glance.
+--
+-- The labels were right-aligned before, which produced a staircase by accident:
+-- "Kingdom" and "Subclass" are different lengths, so the column of names was
+-- straight and the column of labels was ragged, and the raggedness carried no
+-- meaning. It read as centring. Now the labels are left-aligned, so every step
+-- in the staircase is a real step down the tree.
+--
+-- A spacer rather than spaces in the label text, for two reasons: the label
+-- column is a fixed width, so padding "Subspecies" with eight spaces would
+-- simply truncate it; and nothing indented this way can leak into the
+-- clipboard, which is what the Copy buttons promise.
+local INDENT_WIDTH = 10
+
 --- Width of the name column.
 --
 -- Generous on purpose, and affordable in a way the panel's 480 is not: this
@@ -64,6 +85,15 @@ local LABEL_WIDTH = 90
 -- backstop: what the button copies is the untruncated text, so a name too long
 -- to read is still a name you can paste.
 local NAME_WIDTH = 420
+
+--- Roughly what the Close button takes from the status line beside it.
+--
+-- The status line is given an explicit width because `static_text` with a bound
+-- title measures itself against whatever it happens to hold at build time --
+-- "" -- and would otherwise be a few pixels wide forever. Adding a button to
+-- the row without taking the room back would push the window wider than the
+-- lineage needs.
+local CLOSE_WIDTH = 70
 
 --- Put one piece of text on the clipboard and say so.
 --
@@ -98,19 +128,28 @@ function TaxonomyDialog.contents(f, props, rows, actions)
   }
 
   for index, row in ipairs(rows) do
+    -- The deeper the rank, the further right, and the name column gives back
+    -- exactly what the indent takes -- so the Copy buttons stay in one straight
+    -- column no matter how deep the lineage runs. A staircase of buttons would
+    -- be the same accident the right-aligned labels were.
+    local indent = (index - 1) * INDENT_WIDTH
+
     column[#column + 1] = f:row {
       spacing = f:label_spacing(),
 
+      f:spacer { width = indent },
+
       f:static_text {
-        title     = row.label .. ":",
-        width     = LABEL_WIDTH,
-        alignment = "right",
+        title      = row.label .. ":",
+        width      = LABEL_WIDTH,
+        alignment  = "left",
+        truncation = "tail",
       },
 
       f:static_text {
         title      = row.text,
         tooltip    = row.text,
-        width      = NAME_WIDTH,
+        width      = NAME_WIDTH - indent,
         truncation = "tail",
       },
 
@@ -126,6 +165,12 @@ function TaxonomyDialog.contents(f, props, rows, actions)
   -- Copy All is a button in the contents because a floating window has no
   -- action bar to put it in. It reports in the status line below, and unlike
   -- the modal version it can: the window is still there to read it.
+  --
+  -- Close is beside it because a window of this shape reads as a dialog and a
+  -- dialog is expected to have one. The close box in the title bar still works
+  -- and does the same thing -- literally, it is the same WM_CLOSE -- but the
+  -- button is where people look. It is absent rather than dead where the
+  -- helper behind it cannot run, which today means anywhere but Windows.
   column[#column + 1] = f:row {
     spacing = f:label_spacing(),
 
@@ -134,13 +179,24 @@ function TaxonomyDialog.contents(f, props, rows, actions)
       action = actions.copyAll,
     },
 
+    actions.close and f:push_button {
+      title  = "Close",
+      action = actions.close,
+    } or f:spacer { width = 0 },
+
     f:static_text {
       title           = LrView.bind("status"),
-      width           = LABEL_WIDTH + NAME_WIDTH,
+      width           = LABEL_WIDTH + NAME_WIDTH -
+                          (actions.close and CLOSE_WIDTH or 0),
       truncation      = "tail",
       height_in_lines = 1,
     },
   }
+
+  -- The window hugs its contents, so without this the button row sits on the
+  -- frame. Everything else has a row below it to breathe against; this one has
+  -- the bottom of the window.
+  column[#column + 1] = f:spacer { height = 6 }
 
   return f:column(column)
 end
@@ -183,6 +239,11 @@ function TaxonomyDialog.show(context, rows, heading)
   local props = LrBinding.makePropertyTable(context)
   props.status = ""
 
+  local WindowFix = require "WindowFix"
+
+  local title = "Pinned - Taxonomy"
+  if heading and heading ~= "" then title = title .. ": " .. heading end
+
   local actions = {
     copyRow = function(index)
       local row = rows[index]
@@ -200,11 +261,20 @@ function TaxonomyDialog.show(context, rows, heading)
     end,
   }
 
+  -- Only offered where it can work. The helper is Win32; the title-bar close
+  -- box does the same job everywhere, and a button that silently does nothing
+  -- would be worse than no button.
+  if WindowFix.applicable() then
+    actions.close = function()
+      LrTasks.startAsyncTask(function()
+        if not WindowFix.close(title) then
+          props.status = "Could not close the window. Use the close box."
+        end
+      end)
+    end
+  end
+
   local contents = TaxonomyDialog.contents(f, props, rows, actions)
-
-  local title = "Pinned - Taxonomy"
-  if heading and heading ~= "" then title = title .. ": " .. heading end
-
   -- Same fix-up the panel needs, for the same reason: Lightroom makes every
   -- window it creates this way topmost and ownerless, so without this a
   -- taxonomy window floats over every other application and does not minimise
@@ -212,7 +282,7 @@ function TaxonomyDialog.show(context, rows, heading)
   -- for the title, and because the call below does not return until the window
   -- has closed.
   LrTasks.startAsyncTask(function()
-    require("WindowFix").apply(title)
+    WindowFix.apply(title)
   end)
 
   LrDialogs.presentFloatingDialog(_PLUGIN, {

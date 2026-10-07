@@ -542,9 +542,25 @@ raise the window already open rather than laying an identical one on top of it.
 No `save_frame`. It is a single prefs key holding a rectangle, and there is no
 API to forget it, so every taxonomy window would share one — and a second would
 open exactly on top of the first, which is the stacking this replaced, at the
-position the user had chosen. There is no **Close** button either:
+position the user had chosen.
+
+There *is* a **Close** button, but not the SDK's:
 `closeFloatingDialogsForPlugin` is plugin-wide and would take the observation
-panel with it. The window's own close box is the way out.
+panel with it, which is not a Close button, it is a trapdoor. What the button
+does instead is post the window the same `WM_CLOSE` its own close box sends,
+through `WindowFix.close` and `close_window.ps1` — the Win32 route the panel
+already needs for its z-order. That is Windows-only, so elsewhere the button is
+absent rather than dead and the close box remains the way out.
+
+The rank labels are left-aligned and each row is indented one step further than
+the one above it, so the window reads as the descent it is. They used to be
+right-aligned, which made a staircase by accident — "Kingdom" and "Subclass"
+are different lengths — and the raggedness carried no meaning. The indent is a
+spacer, not spaces: the label column is a fixed width, so padding the text
+would simply truncate it, and nothing drawn this way can reach the clipboard,
+which is what the Copy buttons promise. The name column gives back exactly what
+the indent takes, so the Copy buttons stay in one straight column however deep
+the lineage runs.
 
 The lineage belongs to whichever row was chosen last and is dropped the instant
 a different one is chosen, so the button never opens the previous answer. The

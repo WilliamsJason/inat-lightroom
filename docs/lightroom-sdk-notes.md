@@ -621,10 +621,21 @@ Three things to know before converting one:
   at the position the user chose. Omitting it gives up remembering where the
   window was, which is the lesser evil while there is no way to offset a window
   from code.
-- **There is no per-window close.** `closeFloatingDialogsForPlugin` closes every
-  floating window the plug-in owns, including the Observation Panel, so a Close
-  button in one of these would take the panel with it. The window's own close
-  box is the only way out, which means `closable = true`.
+- **There is no per-window close *in the SDK*.** `closeFloatingDialogsForPlugin`
+  closes every floating window the plug-in owns, including the Observation
+  Panel, so a Close button built on it would take the panel with it. The
+  window's own close box is the only way out the SDK offers, which means
+  `closable = true` on anything the user may want to dismiss.
+
+  There is a way out of Lua, though, and the taxonomy window takes it: a close
+  box sends the window `WM_CLOSE`, and nothing stops the plug-in posting the
+  same message itself. `close_window.ps1` finds the window the way
+  `fix_window_z_order.ps1` does — process `Lightroom`, class `AgWinFrame`,
+  exact caption — and `PostMessageW`s it. `PostMessage` rather than
+  `SendMessage` because Lightroom is sitting inside `presentFloatingDialog` at
+  that moment and will not pump a synchronous one. Windows-only, so callers ask
+  `WindowFix.applicable()` and simply do not draw the button elsewhere; the
+  close box is still there. Exit 0 found and posted, 1 not found.
 
 An `id` is what distinguishes one window from another, so keying it on the
 subject — `com.williamsjason.pinned.taxonomy.<taxon id>` — is how asking twice

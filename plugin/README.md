@@ -187,8 +187,10 @@ piece of text be both clickable and selectable.
 Each taxonomy opens in a **window of its own**, so you can leave one up, pick a
 different suggestion, and open a second beside it — which is the quickest way to
 decide between two names that look alike. They are ordinary windows: move them,
-raise them, close them in any order. Lightroom places them for you, so a second
-may open on top of the first until you drag it aside.
+raise them, close them in any order, with the **Close** button or the close box
+in the title bar. (On Windows, that is. The button is not there on a Mac, where
+the close box is the way out.) Lightroom places them for you, so a second may
+open on top of the first until you drag it aside.
 
 **You can type or paste into Species guess**, and every button below it will
 work on what you typed rather than on whatever was last clicked. Doing so drops

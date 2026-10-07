@@ -118,6 +118,7 @@ PluginFiles.FILES = {
   "UploadCore.lua",
   "URLHandler.lua",
   "WindowFix.lua",
+  "close_window.ps1",
   "fix_window_z_order.ps1",
   "install_update.ps1",
   "install_update.sh",

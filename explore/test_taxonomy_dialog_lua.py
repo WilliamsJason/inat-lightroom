@@ -211,8 +211,10 @@ def test_the_window_does_not_remember_a_frame(plugin, dialog):
 
 
 def test_the_window_can_be_closed(plugin, dialog):
-    """Its own close box is the only way out: closeFloatingDialogsForPlugin is
-    plugin-wide and would take the observation panel with it."""
+    """The close box is always there. The Close button below is the same
+    WM_CLOSE by another route -- it cannot be
+    closeFloatingDialogsForPlugin, which is plugin-wide and would take the
+    observation panel with it."""
     _, opened = shown(plugin, dialog)
 
     assert opened["closable"] is True
@@ -303,3 +305,135 @@ def test_copy_all_is_reported_in_the_window(plugin, dialog):
 
     assert plugin.modal_dialogs == [], \
         "a dialog to acknowledge a copy is worse than the copy was good"
+
+
+# ---------------------------------------------------------------------------
+# The shape of it
+# ---------------------------------------------------------------------------
+
+
+def rank_rows(contents):
+    """The lineage rows, in order, as [spacer, label, name, Copy]."""
+    rows = []
+    for row in of_type(contents, "row"):
+        label = row[2]
+        if label is None or label["_viewType"] != "static_text":
+            continue
+        if not isinstance(label["title"], str) or not label["title"].endswith(":"):
+            continue
+        rows.append(row)
+    return rows
+
+
+def test_the_rank_labels_are_left_aligned(plugin, dialog):
+    """They were right-aligned, which made a staircase out of the different
+    lengths of "Kingdom" and "Subclass" -- raggedness that carried no meaning
+    and read as centring."""
+    _, opened = shown(plugin, dialog)
+
+    alignments = [row[2]["alignment"] for row in rank_rows(opened["contents"])]
+
+    assert alignments == ["left"] * 4
+
+
+def test_each_rank_steps_one_further_right_than_the_one_above(plugin, dialog):
+    """A lineage is a descent. A flush-left list of eight ranks reads as eight
+    unrelated facts."""
+    _, opened = shown(plugin, dialog)
+
+    indents = [row[1]["width"] for row in rank_rows(opened["contents"])]
+    step = indents[1]
+
+    assert step > 0, "no indent at all is the flush-left list this replaced"
+    assert indents == [0, step, step * 2, step * 3]
+
+
+def test_the_indent_is_a_spacer_rather_than_spaces(plugin, dialog):
+    """Two reasons, and the second is the one the user asked for: the label
+    column is a fixed width, so padding "Subspecies" would simply truncate it;
+    and nothing indented this way can reach the clipboard."""
+    _, opened = shown(plugin, dialog)
+
+    for row in rank_rows(opened["contents"]):
+        assert row[1]["_viewType"] == "spacer"
+        assert not row[2]["title"].startswith(" ")
+        assert not row[3]["title"].startswith(" ")
+
+
+def test_the_copy_buttons_stay_in_one_straight_column(plugin, dialog):
+    """The name column gives back exactly what the indent takes. Otherwise the
+    buttons would run away to the right in their own staircase -- the same
+    accident the right-aligned labels were."""
+    _, opened = shown(plugin, dialog)
+
+    reach = [row[1]["width"] + row[3]["width"]
+             for row in rank_rows(opened["contents"])]
+
+    assert len(set(reach)) == 1, f"the Copy buttons drift: {reach}"
+
+
+def test_the_button_row_does_not_sit_on_the_frame(plugin, dialog):
+    """The window hugs its contents. Every other row has one below it to
+    breathe against; this one has the bottom of the window."""
+    _, opened = shown(plugin, dialog)
+
+    column = opened["contents"]
+    positions = [k for k in column.keys() if isinstance(k, int)]
+    last = column[max(positions)]
+
+    assert last["_viewType"] == "spacer"
+    assert last["height"] > 0
+
+
+# ---------------------------------------------------------------------------
+# Closing
+# ---------------------------------------------------------------------------
+
+
+def test_there_is_a_close_button_on_windows(plugin, dialog):
+    """A window of this shape reads as a dialog, and a dialog is expected to
+    have one. The close box still works and does the same thing."""
+    plugin.set_platform(windows=True)
+
+    _, opened = shown(plugin, dialog)
+
+    assert [b for b in of_type(opened["contents"], "push_button")
+            if b["title"] == "Close"]
+
+
+def test_there_is_no_close_button_where_it_could_not_work(plugin, dialog):
+    """The helper behind it is Win32. A button that silently does nothing is
+    worse than no button, and the close box is still there."""
+    plugin.set_platform(windows=False)
+
+    _, opened = shown(plugin, dialog)
+
+    assert not [b for b in of_type(opened["contents"], "push_button")
+                if b["title"] == "Close"]
+
+
+def test_close_asks_the_window_manager_about_this_window_only(plugin, dialog):
+    """closeFloatingDialogsForPlugin is the only programmatic close the SDK
+    has and it is plugin-wide -- it would take the observation panel with it.
+    That is not a Close button, it is a trapdoor."""
+    plugin.set_platform(windows=True)
+
+    _, opened = shown(plugin, dialog)
+    press(plugin, opened, "Close")
+
+    assert f'-Title "{opened["title"]}"' in plugin.executed_commands[-1]
+    assert "close_window.ps1" in plugin.executed_commands[-1]
+    assert not any("closeFloatingDialogs" in command
+                   for command in plugin.executed_commands)
+
+
+def test_a_close_that_does_not_land_says_so(plugin, dialog):
+    """Rather than a dialog on top of the window the user was trying to be rid
+    of, the status line beside the button says to use the close box."""
+    plugin.set_platform(windows=True)
+
+    _, opened = shown(plugin, dialog)
+    plugin.set_execute_exit_code(1)
+    press(plugin, opened, "Close")
+
+    assert plugin.modal_dialogs == []
