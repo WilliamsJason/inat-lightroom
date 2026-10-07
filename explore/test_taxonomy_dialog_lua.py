@@ -119,7 +119,7 @@ def test_a_rank_shows_its_common_name_too(plugin, dialog):
     texts = [v["title"] for v in of_type(opened["contents"], "static_text")
              if isinstance(v["title"], str)]
 
-    assert "Ischnura (Forktails)" in texts
+    assert "Forktails (Ischnura)" in texts
 
 
 def test_the_name_column_truncates_rather_than_dropping_a_word(plugin, dialog):
@@ -128,7 +128,7 @@ def test_the_name_column_truncates_rather_than_dropping_a_word(plugin, dialog):
     _, opened = shown(plugin, dialog)
 
     names = [v for v in of_type(opened["contents"], "static_text")
-             if v["title"] == "Ischnura (Forktails)"]
+             if v["title"] == "Forktails (Ischnura)"]
 
     assert len(names) == 1
     assert names[0]["truncation"] == "tail"

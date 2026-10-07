@@ -92,6 +92,7 @@ PluginFiles.FILES = {
   "LinkObservation.lua",
   "Log.lua",
   "MatchCore.lua",
+  "NameStyle.lua",
   "ObservationPanel.lua",
   "ObservationPanelMenu.lua",
   "PanelCore.lua",

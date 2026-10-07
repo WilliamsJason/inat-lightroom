@@ -26,6 +26,7 @@ pinned.lrplugin/
 ├── SyncCore.lua               # Sync logic, callable from any entry point
 ├── LinkObservation.lua        # Adopting an observation that already exists
 ├── TaxonomyDialog.lua         # A guess's full lineage, one rank per row, in its own window
+├── NameStyle.lua              # Which way round a taxon's two names go, per the account
 ├── SettingsMenu.lua           # Menu script: opens the settings window
 ├── SettingsDialog.lua         # The settings window
 ├── Settings.lua               # Reading, writing and validating settings
@@ -591,6 +592,49 @@ hierarchy is read off the taxon and there is nothing to read. It does *not* stop
 the upload: free text in `species_guess` has always been allowed and is the only
 answer for something iNaturalist has no taxon for, so the status line says what
 the upload will not carry and the upload goes.
+
+### One module decides which name goes first
+
+Every taxon has up to two names and there is no neutral way to show both. The
+plugin had an opinion of its own in two places and they disagreed: the
+suggestion list and the species guess field said *Swift Forktail (Ischnura
+erratica)*, the taxonomy window said *Ischnura erratica (Swift Forktail)*.
+Nobody chose that — the two were written months apart.
+
+The user has already answered this question, on the iNaturalist website, and
+`GET /v1/users/me` reports the answer (`prefers_common_names`,
+`prefers_scientific_name_first` — see `docs/inat-api-notes.md` for the traps).
+`NameStyle.lua` reads it once per session and `NameStyle.format` is the only
+place in the plugin that joins two names, so the panel, the suggestion rows, the
+taxonomy window and the reverse-sync list all read the same way round, and the
+same way round as the website.
+
+With common names switched off the common name is *dropped*, not moved, because
+that is what iNaturalist does: parenthesising the thing somebody switched off
+would be an odd way of honouring the setting.
+
+Three deliberate shapes:
+
+- **The formatter is pure and takes a style**, with the loaded one as the
+  default. The style lives in `NameStyle` rather than being threaded through
+  every caller because it is a property of the account, not of a taxon — a
+  function that formats a name should not need an API client — and the harness
+  can exercise all four combinations without a network.
+- **The loaded style is never nil.** The panel opens and draws before the
+  account comes back; drawing iNaturalist's default order for a moment beats
+  drawing nothing, and a failed lookup is logged rather than shown. A name in
+  the wrong order is a cosmetic disappointment; a suggestion list refused
+  because preferences could not be read is not.
+- **`PanelCore.taxonomyRows` keeps `name` and `common_name` raw** and restyles
+  only `text`. `PanelCore.bestNameMatch` matches pasted text against those
+  fields, so restyling them would make the window's own **Copy** output harder
+  to paste back in than a name typed by hand.
+
+`InatAPI:locale` follows the same record, so the common names being ordered are
+in the user's language rather than hardcoded English. It reads the memoised
+`/users/me` and never fetches on its own: it is called from request builders,
+which are not all on tasks, and the cost of not knowing is a common name in the
+wrong language rather than a failure.
 
 ### Offering a rank the evidence supports
 

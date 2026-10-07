@@ -1618,6 +1618,55 @@ def test_asking_for_suggestions_without_credentials_opens_the_settings(
     assert plugin.modal_dialogs[-1]["title"] == "Pinned Settings"
 
 
+def stub_account(plugin, scientific_first):
+    """Give the stubbed API client a /users/me answer, and forget any style a
+    previous call in this test already adopted."""
+    install = plugin.eval("""
+      function(first)
+        local UploadCore = require "UploadCore"
+        local NameStyle  = require "NameStyle"
+        NameStyle.forget()
+        local inner = UploadCore.requireAPI
+        UploadCore.requireAPI = function()
+          local api = inner() or {}
+          api.currentUser = function()
+            return { prefers_scientific_name_first = first }, nil
+          end
+          return api
+        end
+      end
+    """)
+    install(scientific_first)
+
+
+def test_an_account_that_wants_the_binomial_first_gets_it(plugin, panel):
+    """The order is the account's answer, given on the iNaturalist website --
+    the plugin used to hold two opinions of its own and they disagreed."""
+    props = plugin.runtime.table_from({})
+    stub_suggestions(plugin, [
+        {"taxon_id": 103486, "name": "Ischnura erratica",
+         "common_name": "Swift Forktail", "combined_score": 91},
+    ])
+    stub_account(plugin, True)
+
+    plugin.in_task(panel.loadSuggestions, props)
+
+    assert "Ischnura erratica (Swift Forktail)" in props["suggestionTitle1"]
+
+
+def test_an_account_that_wants_the_common_name_first_gets_that(plugin, panel):
+    props = plugin.runtime.table_from({})
+    stub_suggestions(plugin, [
+        {"taxon_id": 103486, "name": "Ischnura erratica",
+         "common_name": "Swift Forktail", "combined_score": 91},
+    ])
+    stub_account(plugin, False)
+
+    plugin.in_task(panel.loadSuggestions, props)
+
+    assert "Swift Forktail (Ischnura erratica)" in props["suggestionTitle1"]
+
+
 def test_moving_to_another_photo_empties_the_rows(plugin, panel):
     """Suggestions belong to the photo they were asked about: a leftover row is
     still clickable, and clicking it would put the previous photo's species on

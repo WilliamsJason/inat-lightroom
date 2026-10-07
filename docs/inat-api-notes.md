@@ -352,6 +352,10 @@ array from `/taxa/{id}` gives the full ladder of ranks they can choose from.
 GET /taxa/autocomplete?q=Quercus+rob&rank=species&locale=en
 ```
 
+`locale` is the account's (`InatAPI:locale`, from the memoised `/users/me`
+record), falling back to `en`. It controls which `preferred_common_name` comes
+back; `getTaxon` sends it too, so a lineage and a suggestion list agree.
+
 #### Full taxonomic tree from a taxon ID
 `GET /taxa/{id}` returns an `ancestors` array ordered from kingdom → species. Each ancestor has:
 - `id` – taxon ID
@@ -666,6 +670,36 @@ an extra round trip against a limit of 100 requests a minute.
 
 Note this is only true of the *search* endpoints. Elsewhere in the API `me`
 does work -- which is what makes it look safe.
+
+## Name order is an account setting, and only `/users/me` has it
+
+Every taxon has up to two names and there is no neutral way to show both.
+iNaturalist settles it per account, in Settings > Content & Display, and
+returns the answer on `GET /v1/users/me`:
+
+| Field | Website label | Default |
+| --- | --- | --- |
+| `prefers_common_names` | "Display name" includes the common name | `true` |
+| `prefers_scientific_name_first` | "Scientific name first" | `false` |
+| `locale` | Language for `preferred_common_name` | `en` |
+
+Two traps.
+
+**Only the authenticated record carries them.** The public user record
+(`GET /v1/users/{id}`) has `login`, counts and `roles` and no preferences at
+all -- verified by fetching one. `InatAPI:currentUser` memoises `/users/me`, so
+following the account costs one request per session at most, and nothing once
+anything else has asked who we are.
+
+**A missing field means "default", not "false".** iNaturalist stores a
+preference row only once the value differs from the default, so an account that
+never touched the setting sends neither field. Reading an absent
+`prefers_common_names` as false would strip every common name from the plugin
+for the majority of users. The defaults above are iNaturalistAPI's own `PREFS`
+table (`lib/models/user.js`), which is where they are authoritative.
+
+The plugin reads this in `NameStyle.lua` and every name it draws goes through
+`NameStyle.format`.
 
 ## One page of v1 observations is fifteen megabytes
 

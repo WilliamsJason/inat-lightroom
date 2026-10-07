@@ -21,6 +21,7 @@
 --]]
 
 local InatAPI    = require "InatAPI"
+local NameStyle  = require "NameStyle"
 local RenderPhoto = require "RenderPhoto"
 local SyncCore   = require "SyncCore"
 local UploadCore = require "UploadCore"
@@ -77,28 +78,21 @@ PanelCore.NO_LOCATION = NO_LOCATION
 
 --- A suggestion's name, with nothing else attached.
 --
--- The common name leads because that is what most people are deciding between,
--- but the scientific name is always shown: common names are ambiguous enough
--- that hiding it would make the list impossible to check.
+-- Which way round the two names go is the account's business, not ours: see
+-- `NameStyle.lua`. Both are shown whenever iNaturalist would show both, because
+-- common names are ambiguous enough that hiding the scientific one would make
+-- the list impossible to check, and because this exact string is what the panel
+-- puts in the species guess field for the user to copy into a caption.
 --
--- Split out from describeSuggestion because this exact string is also what the
--- panel puts in the species guess field for the user to copy into a caption.
--- One function, so the row and the field can never come to disagree about what
--- a taxon is called.
-function PanelCore.suggestionName(row)
+-- Split out from describeSuggestion so the row and the field can never come to
+-- disagree about what a taxon is called.
+function PanelCore.suggestionName(row, style)
   if not row then return "" end
 
-  local common     = row.common_name
-  local scientific = row.name
+  local name = NameStyle.format(row.name, row.common_name, style)
+  if name == "" then return "Unnamed taxon" end
 
-  if common and common ~= "" and scientific and scientific ~= "" then
-    return common .. " (" .. scientific .. ")"
-  end
-
-  if common and common ~= "" then return common end
-  if scientific and scientific ~= "" then return scientific end
-
-  return "Unnamed taxon"
+  return name
 end
 
 --- One suggestion as a single line of text.
@@ -106,10 +100,10 @@ end
 -- The name plus what is known about how good a guess it is -- a score when the
 -- model gave one, and otherwise the note that says why a row without a score is
 -- there at all.
-function PanelCore.describeSuggestion(row)
+function PanelCore.describeSuggestion(row, style)
   if not row then return "" end
 
-  local name = PanelCore.suggestionName(row)
+  local name = PanelCore.suggestionName(row, style)
 
   local score = tonumber(row.combined_score)
   if score then
@@ -338,7 +332,11 @@ end
 -- id and no name -- a taxon the API knows of and had nothing to say about --
 -- and a row reading "Family:" with an empty value is a rung the user will think
 -- they are supposed to be able to read.
-function PanelCore.taxonomyRows(taxon)
+--
+-- `name` and `common_name` stay as the API gave them, whatever the style: they
+-- are what `PanelCore.taxonForName` matches a pasted name against. Only `text`
+-- -- the line shown and copied -- is arranged to taste.
+function PanelCore.taxonomyRows(taxon, style)
   local rows = {}
 
   for _, link in ipairs(PanelCore.chainOf(taxon)) do
@@ -347,16 +345,13 @@ function PanelCore.taxonomyRows(taxon)
       local common = link.preferred_common_name or link.common_name
       if common == "" then common = nil end
 
-      local text = name
-      if common then text = text .. " (" .. common .. ")" end
-
       rows[#rows + 1] = {
         id          = link.id,
         rank        = link.rank,
         label       = PanelCore.rankLabel(link.rank),
         name        = name,
         common_name = common,
-        text        = text,
+        text        = NameStyle.format(name, common, style),
       }
     end
   end

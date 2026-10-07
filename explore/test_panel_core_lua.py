@@ -1725,7 +1725,7 @@ def test_a_rung_carries_its_common_name_when_there_is_one(plugin, core):
     rows = taxonomy_rows(core, top_hit(plugin))
     genus = [r for r in rows if r["rank"] == "genus"][0]
 
-    assert genus["text"] == "Ischnura (Forktails)"
+    assert genus["text"] == "Forktails (Ischnura)"
 
 
 def test_a_rung_with_no_common_name_is_the_scientific_one_alone(plugin, core):
@@ -1790,7 +1790,7 @@ def test_the_clipboard_text_is_one_tab_separated_line_per_rank(plugin, core):
 
     assert len(lines) == 7
     assert lines[0] == "Kingdom\tAnimalia"
-    assert lines[5] == "Genus\tIschnura (Forktails)"
+    assert lines[5] == "Genus\tForktails (Ischnura)"
     assert lines[6] == "Species\tIschnura erratica"
 
 
@@ -1921,10 +1921,10 @@ def test_a_name_with_its_common_name_in_brackets_is_unwrapped(plugin, core):
                                   "rank": "genus", "ancestors": {}}),
     }))
 
-    taxon, _ = core["taxonForName"](api, "Ischnura (Forktails)")
+    taxon, _ = core["taxonForName"](api, "Forktails (Ischnura)")
 
     assert taxon["id"] == 52054
-    assert call_named(calls, "autocomplete")[0] == "Ischnura (Forktails)"
+    assert call_named(calls, "autocomplete")[0] == "Forktails (Ischnura)"
     assert "Ischnura" in call_named(calls, "autocomplete")
 
 

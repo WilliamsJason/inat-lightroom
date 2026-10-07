@@ -203,6 +203,16 @@ again to check it, **Update photo tags** to file the photo under it, or **Upload
 to iNaturalist** to post it. The brackets are fine — paste *Ischnura
 (Forktails)* exactly as the Copy button gave it to you.
 
+**Names appear in the order your iNaturalist account asks for.** The plugin
+reads your *Settings > Content & Display* choices — whether to show common
+names at all, and whether the scientific name comes first — and uses them
+everywhere it shows a species: the suggestion list, **Species guess**, the
+taxonomy windows, the line describing the current observation, and the
+reverse-sync list. Turn common names off on the website and the plugin shows
+the scientific name alone, as the website does. Change the setting and reopen
+the panel to pick it up. It also asks iNaturalist for common names in your
+account's language rather than always in English.
+
 A name iNaturalist has never heard of still uploads, as free text, because that
 is sometimes the only honest answer. **Update photo tags** needs a real taxon
 and will say so.
@@ -413,15 +423,16 @@ disagreeing with itself. Posting a new identification withdraws the old one.
 ### The name in the box is the one you want to paste
 
 Clicking a suggestion fills the **Species guess** box with the row as you see
-it — *Western Honey Bee (Apis mellifera)*. That box is the only text in the
-panel you can select, so it is the only place a name can be copied from for a
-caption, and a common name used to mean retyping it.
+it — *Western Honey Bee (Apis mellifera)*, or *Apis mellifera (Western Honey
+Bee)* if that is the order your iNaturalist account asks for. That box is the
+only text in the panel you can select, so it is the only place a name can be
+copied from for a caption, and a common name used to mean retyping it.
 
 What gets sent is the bare scientific name, not that string. iNaturalist turns
 free text into an identification by matching it against taxon names, and it
-matches *Apis mellifera*, not the version with the common name in front of it.
-The two are kept separately for that reason, and the difference is never
-something you have to think about.
+matches *Apis mellifera*, not the version with the common name attached. The
+two are kept separately for that reason, and the difference is never something
+you have to think about.
 
 Type over the box and your own words are sent exactly as typed — editing it is
 how you overrule a suggestion, so a name you just deleted is never sent behind
@@ -648,6 +659,7 @@ pinned.lrplugin/
 ├── SyncCore.lua               # Sync logic, callable from any entry point
 ├── LinkObservation.lua        # Adopting an existing observation
 ├── TaxonomyDialog.lua         # A guess's lineage, one rank per row, in its own window
+├── NameStyle.lua              # Which way round a taxon's two names go, per your account
 ├── SettingsMenu.lua           # Plug-in Extras entry: opens settings
 ├── SettingsDialog.lua         # The settings window
 ├── Settings.lua               # Reading, writing and validating settings

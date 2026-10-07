@@ -42,6 +42,7 @@ local LrTasks           = import "LrTasks"
 local LrView            = import "LrView"
 
 local InatAuth   = require "InatAuth"
+local NameStyle  = require "NameStyle"
 local PanelCore  = require "PanelCore"
 local Settings   = require "Settings"
 local UploadCore = require "UploadCore"
@@ -127,10 +128,7 @@ function ObservationPanel.statusFor(photo)
     return "Observation " .. obsId .. " - not identified yet"
   end
 
-  if common then
-    return common .. " (" .. taxon .. ")"
-  end
-  return taxon
+  return NameStyle.format(taxon, common)
 end
 
 --- Gather everything the window displays for one photo.
@@ -772,6 +770,12 @@ function ObservationPanel.loadSuggestions(props)
     return
   end
 
+  -- Before the rows are described rather than after, because describing them is
+  -- what needs to know which way round the two names go. Memoised, and the
+  -- account has usually been fetched already for its id, so this is normally
+  -- free; when it is not, it is one request on the slowest button in the panel.
+  NameStyle.load(api)
+
   local rows, err = PanelCore.getSuggestions(api, photos[1])
   if not rows then
     props.suggestionStatus = err or "Could not get suggestions."
@@ -911,6 +915,8 @@ function ObservationPanel.loadTaxonomy(props)
     return nil
   end
 
+  NameStyle.load(api)
+
   local taxonomy, err = PanelCore.taxonomyFor(api, row)
 
   if props.suggestionTaxonId ~= wanted then return nil end
@@ -987,6 +993,8 @@ function ObservationPanel.showTaxonomy(context, props)
     end
 
     props.suggestionStatus = "Looking up " .. typed .. "…"
+
+    NameStyle.load(api)
 
     local found, err = PanelCore.taxonomyForName(api, typed)
     if not found then
@@ -1402,6 +1410,15 @@ function ObservationPanel.show()
       -- first photo's stored guess does.
       props:addObserver("speciesGuess", function()
         ObservationPanel.guessEdited(props)
+      end)
+
+      -- On its own task because it is a network call and the panel should be on
+      -- screen before it finishes. Until it does, names are drawn iNaturalist's
+      -- default way round; the account's answer arrives a moment later and the
+      -- panel redraws itself when the selection next changes.
+      LrTasks.startAsyncTask(function()
+        NameStyle.load(UploadCore.requireAPI())
+        refresh()
       end)
 
       refresh()
