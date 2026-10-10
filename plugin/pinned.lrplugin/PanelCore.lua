@@ -667,10 +667,11 @@ function PanelCore.multiPhotoWarning(photos)
   if UploadCore.pluginField(photos[1], "inat_observation_id") then return nil end
 
   return string.format(
-    "This creates one iNaturalist observation carrying all %d photos -- not "
-    .. "%d separate observations.\n\nIts date, location and description come "
-    .. "from the first photo, so this is right when the photos are of the same "
-    .. "individual, and wrong when they are not.\n\nIf you did not mean to "
+    "This creates one iNaturalist observation carrying %d photos -- not "
+    .. "%d separate observations.\n\nPhotos are sorted by highest rated to "
+    .. "lowest rated, with the timestamp breaking ties. The observation's date "
+    .. "and location come from the first photo. Ensure all the photos are of "
+    .. "the same individual.\n\nIf you did not mean to "
     .. "have %d photos selected, cancel and select just the ones you want.",
     #photos, #photos, #photos)
 end

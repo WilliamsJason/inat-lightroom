@@ -724,8 +724,8 @@ MUTATIONS = [
     (
         "PanelCore",
         "the dialog describes one observation per photo, which is not what happens",
-        '    "This creates one iNaturalist observation carrying all %d photos -- not "\n    .. "%d separate observations.\\n\\nIts date, location and description come "',
-        '    "This uploads %d photos, creating %d observations.\\n\\nIts date, location and description come "',
+        '    "This creates one iNaturalist observation carrying %d photos -- not "\n    .. "%d separate observations.\\n\\nPhotos are sorted by highest rated to "',
+        '    "This uploads %d photos, creating %d observations.\\n\\nPhotos are sorted by highest rated to "',
     ),
     (
         "ObservationPanel",
