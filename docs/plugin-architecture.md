@@ -899,7 +899,7 @@ gives `1.03486e+08` past a certain size and a URL that 404s.
 
 ## Custom metadata schema (`CustomMetadata.lua`)
 
-`schemaVersion = 5`. Every field is **read-only**; the panel writes them, the
+`schemaVersion = 9`. Every field is **read-only**; the panel writes them, the
 user does not.
 
 | Field ID | Type | Description |
@@ -910,10 +910,17 @@ user does not.
 | `inat_taxon_id` | `string` | Taxon ID of the community determination |
 | `inat_taxon_name` | `string` | Scientific name of the taxon |
 | `inat_common_name` | `string` | Vernacular/common name |
+| `inat_taxon_family` | `string` | Family the taxon belongs to, from its lineage |
 | `inat_quality_grade` | `string` | `casual`, `needs_id`, or `research` |
 | `inat_last_synced` | `string` | ISO 8601 timestamp of last sync |
 | `inat_species_guess` | `string` | What the photo was last uploaded or identified as |
 | `inat_positional_accuracy` | `string` | Location accuracy in metres |
+
+`inat_taxon_family` follows the same rule as the keyword tree: it is written
+only when the lineage is known. A run that could not fetch ancestors leaves
+whatever was there alone rather than blanking a correct value, while a known
+lineage with no family writes `""`, so a re-identification clears a family that
+no longer applies.
 
 Everything mirroring iNaturalist state would be silently overwritten by the next
 sync, which is worse than not being editable. The two that were once editable

@@ -97,6 +97,28 @@ return {
       readOnly    = true,
     },
 
+    -- The family, lifted out of the taxon's lineage.
+    --
+    -- Every rank is already in the catalog as a keyword, so this is not new
+    -- information -- it is the one rung of the tree that is worth reading at a
+    -- glance. Family is where a lot of field identification actually happens:
+    -- it groups a page of photos into something recognisable in a way that
+    -- neither the species (too fine to generalise from) nor the order (too
+    -- coarse to mean much) does.
+    --
+    -- Stored as well as derived because the Metadata panel can only draw
+    -- fields, not compute them, and walking a keyword tree to find the
+    -- family-rank rung would mean doing it for every selected photo on every
+    -- redraw.
+    {
+      id          = "inat_taxon_family",
+      title       = LOC "$$$/iNatLightroom/Meta/Family=Family",
+      dataType    = "string",
+      searchable  = true,
+      browsable   = true,
+      readOnly    = true,
+    },
+
     -- -----------------------------------------------------------------------
     -- Observation quality
     -- -----------------------------------------------------------------------
@@ -194,7 +216,11 @@ return {
   -- stays in the catalog and keeps showing up in Lightroom's own "All Plug-in
   -- Metadata" preset, so it is worth being sure before adding one. See
   -- docs/lightroom-sdk-notes.md.
-  schemaVersion = 8,
+  --
+  -- v9 adds inat_taxon_family. Nothing to migrate: a catalog that has never
+  -- seen the field reads it as empty, and the next sync of a photo fills it in
+  -- from the lineage that was already being fetched for the keywords.
+  schemaVersion = 9,
 
   -- Nothing to do. Adding a field needs no migration, Lightroom will not let a
   -- removed one be touched, and making a field read-only does not change what is

@@ -1038,12 +1038,28 @@ function PanelCore.upload(catalog, api, settings, photos, options)
 
   local errors = {}
 
+  -- Highest-rated first. iNaturalist numbers an observation's photos in the
+  -- order they arrive and shows the first one as the observation's thumbnail,
+  -- so this is what decides which frame represents the sighting. See
+  -- UploadCore.uploadOrder.
+  local ordered = UploadCore.uploadOrder(photos)
+
   onEvent("Rendering " .. #photos .. " photo(s)…")
-  local rendered, renderFailures, folder, renderCanceled = RenderPhoto.render(photos, {
+  local rendered, renderFailures, folder, renderCanceled = RenderPhoto.render(ordered, {
     settings   = settings,
     onEvent    = onEvent,
     isCanceled = isCanceled,
   })
+
+  -- Re-sorted rather than trusted. LrExportSession yields its renditions in
+  -- the order it was given the photos today, but nothing in the SDK promises
+  -- that, and the one thing this whole ordering exists to guarantee is which
+  -- file is uploaded first.
+  local position = {}
+  for index, photo in ipairs(ordered) do position[photo] = index end
+  table.sort(rendered, function(left, right)
+    return (position[left.photo] or 0) < (position[right.photo] or 0)
+  end)
 
   for _, failure in ipairs(renderFailures) do
     errors[#errors + 1] = failure
@@ -1068,6 +1084,11 @@ function PanelCore.upload(catalog, api, settings, photos, options)
 
   onEvent("Creating the observation…")
   local seen = {}
+  -- `photos[1]`, deliberately, and not `ordered[1]`. The observation's time,
+  -- place and description come from the selection as it was handed over, so
+  -- that adding a star to pick a lead photo changes which image is first and
+  -- nothing else. Re-uploading a group whose ratings have since changed must
+  -- not quietly move the observation to a different moment.
   local observationId, uuid, resolveErr, wasCreated =
     UploadCore.resolveObservation(api, settings, photos[1], seen, errors,
       { withoutSpeciesGuess = options.withoutSpeciesGuess })

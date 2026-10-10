@@ -613,3 +613,56 @@ def test_every_frame_in_a_truncated_minute_is_offered(plugin, sync):
 
     assert sorted(found[i].path for i in range(1, len(found) + 1)) == [
         "/early.ARW", "/late.ARW"]
+
+
+# ----------------------------------------------- carrying the range through
+
+
+def recording_api(plugin):
+    """An InatAPI stand-in that remembers the options it was searched with."""
+    return plugin.eval("""
+      function()
+        local seen = {}
+        local api = {}
+        function api:listObservations(options)
+          seen[#seen + 1] = options
+          return {}
+        end
+        return api, seen
+      end
+    """)()
+
+
+def test_the_range_reaches_the_search(plugin, sync):
+    """Every link in the chain has to carry it. Dropping it here is invisible
+    -- the run still works, it just quietly fetches the entire account, which
+    is the slowness the range exists to avoid."""
+    api, seen = recording_api(plugin)
+
+    plugin.in_task(sync["prepare"], api,
+                   plugin.eval('{ d1 = "2026-05-01", d2 = "2026-05-03" }'))
+
+    assert seen[1]["d1"] == "2026-05-01"
+    assert seen[1]["d2"] == "2026-05-03"
+
+
+def test_the_summary_remembers_what_was_searched(plugin, sync):
+    """The review dialog says so in its sentence, and it has nothing else to
+    read it from."""
+    api, _ = recording_api(plugin)
+
+    _matches, summary = plugin.in_task(
+        sync["prepare"], api, plugin.eval('{ d1 = "2026-05-01" }'))
+
+    assert summary["d1"] == "2026-05-01"
+    assert summary["d2"] is None
+
+
+def test_no_range_searches_everything(plugin, sync):
+    """What the button did before, and what it still does by default."""
+    api, seen = recording_api(plugin)
+
+    plugin.in_task(sync["prepare"], api, plugin.eval("{}"))
+
+    assert seen[1]["d1"] is None
+    assert seen[1]["d2"] is None

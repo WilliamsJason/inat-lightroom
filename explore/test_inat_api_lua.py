@@ -1051,3 +1051,55 @@ def test_a_root_already_split_into_levels_is_taken_as_it_is():
     levels = plugin.eval('{ "Nature", "iNaturalist" }')
 
     assert path_of(plugin, levels)[:2] == ["Nature", "iNaturalist"]
+
+
+# ---------------------------------------------------------------------------
+# Limiting the search to a date range
+# ---------------------------------------------------------------------------
+
+
+def test_a_date_range_is_sent_as_d1_and_d2(api_pair_with):
+    """Bulk uploads are the reason: fetching an entire account to find the
+    fifty observations made on one outing is minutes of work, almost all of it
+    re-deciding things decided last time. d1 and d2 bound the observed date,
+    both ends included."""
+    plugin, api, pages = api_pair_with(Pages(3))
+
+    plugin.call(api.listObservations, api,
+                plugin.eval('{ d1 = "2026-05-01", d2 = "2026-05-03" }'))
+
+    assert "d1=2026-05-01" in pages.searches[0]["url"]
+    assert "d2=2026-05-03" in pages.searches[0]["url"]
+
+
+def test_one_end_of_the_range_can_be_left_open(api_pair_with):
+    plugin, api, pages = api_pair_with(Pages(3))
+
+    plugin.call(api.listObservations, api, plugin.eval('{ d1 = "2026-05-01" }'))
+
+    assert "d1=2026-05-01" in pages.searches[0]["url"]
+    assert "d2=" not in pages.searches[0]["url"]
+
+
+def test_no_range_sends_no_date_parameters(api_pair_with):
+    """An empty d1 is not the same as no d1: iNaturalist answers the empty
+    string with HTTP 422 and the whole run fails."""
+    plugin, api, pages = api_pair_with(Pages(3))
+
+    plugin.call(api.listObservations, api, plugin.eval('{ d1 = "", d2 = "" }'))
+
+    assert "d1=" not in pages.searches[0]["url"]
+    assert "d2=" not in pages.searches[0]["url"]
+
+
+def test_the_range_is_repeated_on_every_page(api_pair_with):
+    """Pagination walks forward with id_above, and a second page fetched
+    without the filter would quietly return the whole account."""
+    plugin, api, pages = api_pair_with(Pages(500))
+
+    plugin.call(api.listObservations, api,
+                plugin.eval('{ perPage = 200, d1 = "2026-05-01" }'))
+
+    assert len(pages.searches) == 3
+    for search in pages.searches:
+        assert "d1=2026-05-01" in search["url"]

@@ -1037,3 +1037,59 @@ def test_the_account_tab_still_takes_a_pasted_token(plugin, dialog):
     """The other half of the test above: proving those fields are gone is only
     reassuring if the one remaining way in still exists."""
     assert "api_token" in account_tab_bindings(plugin, dialog)
+
+
+# ---------------------------------------------------------------------------
+# The reverse sync asks before it fetches
+# ---------------------------------------------------------------------------
+
+
+def test_cancelling_the_range_fetches_nothing(plugin, dialog):
+    """Asked before the progress bar goes up, because the answer decides how
+    much there is to be in progress. Cancelling has to cost nothing -- no
+    request made, no catalog search started."""
+    plugin.set_modal_answer("cancel")
+    seen = plugin.eval("{}")
+    plugin.require("UploadCore")["requireAPI"] = plugin.eval(
+        "function() return { token = 'x' } end")
+    plugin.require("ReverseSyncDialog")["askRange"] = plugin.eval(
+        "function() return nil end")
+    plugin.require("ReverseSync")["prepare"] = plugin.eval("""
+      function(seen)
+        return function()
+          seen[1] = true
+          return nil, "should never be reached"
+        end
+      end
+    """)(seen)
+
+    dialog["reverseSync"](plugin.eval("{ alive = true }"))
+    plugin.run_pending_tasks()
+
+    assert seen[1] is None
+    assert plugin.dialogs == []
+
+
+def test_the_chosen_range_reaches_the_fetch(plugin, dialog):
+    """The link between the dialog and the search. Losing it here still works
+    -- it just fetches the whole account, which is the one thing the range was
+    added to avoid."""
+    seen = plugin.eval("{}")
+    plugin.require("UploadCore")["requireAPI"] = plugin.eval(
+        "function() return { token = 'x' } end")
+    plugin.require("ReverseSyncDialog")["askRange"] = plugin.eval(
+        'function() return { d1 = "2026-05-01", d2 = "2026-05-03" } end')
+    plugin.require("ReverseSync")["prepare"] = plugin.eval("""
+      function(seen)
+        return function(_api, options)
+          seen[1] = options
+          return nil, "stop here"
+        end
+      end
+    """)(seen)
+
+    dialog["reverseSync"](plugin.eval("{ alive = true }"))
+    plugin.run_pending_tasks()
+
+    assert seen[1]["d1"] == "2026-05-01"
+    assert seen[1]["d2"] == "2026-05-03"

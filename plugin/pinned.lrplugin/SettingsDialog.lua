@@ -566,10 +566,11 @@ local function observationsTab(f, props, actions)
       f:static_text {
         title = "Looks through your iNaturalist observations for ones where the\n"
           .. "matching photo in your catalog does not have the linked\n"
-          .. "iNaturalist metadata. You choose what gets linked before\n"
-          .. "anything is written.",
+          .. "iNaturalist metadata. Search everything, or just a range of\n"
+          .. "observation dates after a bulk upload. You choose what gets\n"
+          .. "linked before anything is written.",
         width           = 500,
-        height_in_lines = 4,
+        height_in_lines = 5,
       },
       f:push_button {
         title   = "Find Unlinked Observations…",
@@ -950,14 +951,21 @@ end
 
 --- The reverse sync itself, without the lock.
 function SettingsDialog.reverseSyncNow(context)
-  local UploadCore  = require "UploadCore"
-  local ReverseSync = require "ReverseSync"
+  local UploadCore        = require "UploadCore"
+  local ReverseSync       = require "ReverseSync"
+  local ReverseSyncDialog = require "ReverseSyncDialog"
 
   local api, err = UploadCore.requireAPI()
   if not api then
     InatAuth.reportMissingCredentials(err)
     return
   end
+
+  -- Asked before the progress scope goes up, because the answer decides how
+  -- much there is to be in progress. Cancelling here has cost nothing: no
+  -- request has been made and no catalog search has started.
+  local range = ReverseSyncDialog.askRange(context)
+  if not range then return end
 
   local progress = LrProgressScope {
     title           = "Pinned Reverse Sync",
@@ -967,6 +975,9 @@ function SettingsDialog.reverseSyncNow(context)
   progress:setCancelable(true)
 
   local matches, summary = ReverseSync.prepare(api, {
+    d1 = range.d1,
+    d2 = range.d2,
+
     shouldStop = function() return progress:isCanceled() end,
 
     onFetch = function(fetched, total)

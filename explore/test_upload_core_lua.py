@@ -647,3 +647,104 @@ def test_the_observation_is_sent_with_a_time_not_just_a_date(plugin, upload):
 
     assert params["observed_on_string"] == "2026-05-23T13:09:27"
 
+
+
+# -------------------------------------------------------------- upload order
+
+
+def framed(plugin, path, rating=None, captured=None):
+    return plugin.new_photo(raw={"path": path, "rating": rating,
+                                 "dateTimeOriginal": captured})
+
+
+def ordered(plugin, upload, *photos):
+    """The order as paths.
+
+    Two lupa wrappers around the same Lua table do not compare equal, so the
+    photos themselves cannot be asserted on directly.
+    """
+    result = plugin.in_task(upload["uploadOrder"],
+                            plugin.runtime.table_from(list(photos)))
+    return [plugin.in_task(result[i + 1].getRawMetadata,
+                           result[i + 1], "path")
+            for i in range(len(photos))]
+
+
+def test_the_highest_rated_frame_leads(plugin, upload):
+    """The whole feature. iNaturalist shows the first photo everywhere the
+    observation appears, and re-ordering them on the website is slow enough
+    that people stopped bothering. A star in Lightroom is a thing the user is
+    already reaching for while culling."""
+    plain = framed(plugin, "/a.NEF", captured=100)
+    starred = framed(plugin, "/b.NEF", rating=3, captured=200)
+
+    assert ordered(plugin, upload, plain, starred) == ["/b.NEF", "/a.NEF"]
+
+
+def test_more_stars_beat_fewer(plugin, upload):
+    one = framed(plugin, "/a.NEF", rating=1, captured=100)
+    five = framed(plugin, "/b.NEF", rating=5, captured=200)
+    three = framed(plugin, "/c.NEF", rating=3, captured=300)
+
+    assert ordered(plugin, upload, one, five, three) == [
+        "/b.NEF", "/c.NEF", "/a.NEF"]
+
+
+def test_unrated_frames_keep_the_order_they_had(plugin, upload):
+    """Capture time is what this did before ratings were consulted, and for
+    anyone who does not rate their photos it has to stay exactly that."""
+    late = framed(plugin, "/a.NEF", captured=300)
+    early = framed(plugin, "/b.NEF", captured=100)
+    middle = framed(plugin, "/c.NEF", captured=200)
+
+    assert ordered(plugin, upload, late, early, middle) == [
+        "/b.NEF", "/c.NEF", "/a.NEF"]
+
+
+def test_equal_stars_fall_back_to_capture_time(plugin, upload):
+    """Rating three frames of one bird is normal; it says which are keepers,
+    not which comes first. The burst order decides that."""
+    late = framed(plugin, "/a.NEF", rating=4, captured=300)
+    early = framed(plugin, "/b.NEF", rating=4, captured=100)
+
+    assert ordered(plugin, upload, late, early) == ["/b.NEF", "/a.NEF"]
+
+
+def test_a_frame_with_no_capture_time_goes_last(plugin, upload):
+    """A scan or an export with the EXIF stripped should not silently become
+    the cover photo because nil sorted below every number."""
+    timeless = framed(plugin, "/a.NEF")
+    dated = framed(plugin, "/b.NEF", captured=500)
+
+    assert ordered(plugin, upload, timeless, dated) == ["/b.NEF", "/a.NEF"]
+
+
+def test_frames_sharing_a_second_are_ordered_by_path(plugin, upload):
+    """Two bodies firing at once, or a burst the EXIF rounds to the second.
+    Without a last tiebreak the order is whatever table.sort felt like, which
+    is not the same twice and makes a re-upload look like a change."""
+    second = framed(plugin, "/shoot/DSC_0002.NEF", captured=100)
+    first = framed(plugin, "/shoot/DSC_0001.NEF", captured=100)
+
+    assert ordered(plugin, upload, second, first) == [
+        "/shoot/DSC_0001.NEF", "/shoot/DSC_0002.NEF"]
+
+
+def test_the_selection_itself_is_left_alone(plugin, upload):
+    """Everything else about the upload -- which photo the observation's time,
+    place and description come from -- still reads photos[1]. Sorting the
+    caller's array in place would quietly move the observation as well as the
+    images."""
+    plain = framed(plugin, "/a.NEF", captured=100)
+    starred = framed(plugin, "/b.NEF", rating=5, captured=200)
+    selection = plugin.runtime.table_from([plain, starred])
+
+    plugin.in_task(upload["uploadOrder"], selection)
+
+    assert plugin.in_task(selection[1].getRawMetadata,
+                          selection[1], "path") == "/a.NEF"
+
+
+def test_ordering_nothing_is_not_an_error(plugin, upload):
+    assert list(plugin.in_task(
+        upload["uploadOrder"], plugin.eval("{}")).values()) == []

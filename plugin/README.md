@@ -246,6 +246,16 @@ selection into a **single observation** with several photos, which is what
 selecting several frames of one animal usually means. Date, location and
 description come from the first photo.
 
+**Star ratings decide which photo goes first.** iNaturalist shows an
+observation's first photo everywhere the observation appears — the feed, search
+results, the taxon page — and reordering them on the website is a drag per photo
+per observation. So the plugin sends them highest-rated first: give the frame
+you want on top one more star than the rest and it leads. Frames with the same
+rating keep the order they already had, earliest capture time first, which is
+what every photo gets when nothing is rated. Ratings only move the images; the
+observation's date, location and description still come from the first photo in
+your selection, so starring a frame never quietly moves the sighting.
+
 Because that merge is easy to miss — Lightroom will happily keep a selection you
 have stopped looking at — **uploading more than one photo asks first**, and the
 dialog says plainly that the photos are about to become one observation rather
@@ -469,7 +479,9 @@ suggestion row above still reads the long way round if you want to copy it.
   **Save Token** and **Clear Stored Credentials** beside the field they act on.
 - **Observations** — the catalog side: where the taxonomy keywords go, plus
   **Sync All Linked Photos**, which refreshes every photo in the catalog that
-  has an observation ID, and **Find Unlinked Observations…**.
+  has an observation ID, and **Find Unlinked Observations…**, which asks
+  whether to search your whole account or just a range of observation dates
+  before it fetches anything.
 - **Upload** — everything an upload decides. What the observation says:
   geoprivacy, an optional project ID, and whether to sync taxa back
   afterwards. And what the file carries: which export preset to render with.
@@ -478,6 +490,26 @@ suggestion row above still reads the long way round if you want to copy it.
 
 Every setting outside the Account tab is saved the moment you change it, so the
 window closes on **Done** and there is nothing to cancel.
+
+#### Finding observations you uploaded elsewhere
+
+**Find Unlinked Observations…** looks through your iNaturalist observations for
+ones whose photo is sitting in your catalog with none of the iNaturalist
+metadata on it, matches them by capture time, and shows you the list before
+anything is written.
+
+It asks first whether to search everything or just a range of observation
+dates. The range is there for bulk uploads: put a day's observations up through
+iNaturalist's own uploader, then run this over that day and link the lot in one
+pass. Searching the whole account works too, and is what it does if you leave
+the choice alone — it is just slower, and most of that time is spent
+re-deciding observations that were decided the last time you ran it.
+
+Dates are written `2026-05-30`, both ends are included, and leaving one box
+empty means no limit at that end — so "everything since the trip" is a
+from-date and nothing else. The summary over the review list repeats the range
+it searched, so a small number of matches reads as a narrow search rather than
+a scan that went wrong.
 
 #### Rendering with your own export preset
 
@@ -654,8 +686,14 @@ Two fields used to be editable and both were quietly broken:
 | **Taxon ID** | ID of the community-determined taxon |
 | **Taxon Name** | Scientific name |
 | **Common Name** | Vernacular/common name |
+| **Family** | The family the taxon belongs to |
 | **Quality Grade** | `casual`, `needs_id`, or `research` |
 | **Last Synced** | Timestamp of the last sync |
+
+**Family** is filled in from the taxon's lineage whenever a sync knows it, which
+makes it something you can filter, sort and smart-collection on without digging
+through the keyword tree. An observation identified no further than order or
+class leaves it empty.
 
 ---
 
@@ -690,7 +728,7 @@ pinned.lrplugin/
 ├── PluginUrls.lua             # Builds and parses lightroom:// plugin URLs
 ├── URLHandler.lua             # Receives those URLs and dispatches
 ├── TagsetInat.lua             # Metadata panel preset: the plugin's fields
-├── CustomMetadata.lua         # Custom metadata schema (schemaVersion 4)
+├── CustomMetadata.lua         # Custom metadata schema (schemaVersion 9)
 ├── Log.lua                    # Shared, enabled logger
 └── json.lua                   # Bundled JSON encoder/decoder
 ```

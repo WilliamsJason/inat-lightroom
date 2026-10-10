@@ -33,9 +33,51 @@ MUTATIONS = [
     ),
     (
         "UploadCore",
+        "the star rating is ignored, so order is capture time again",
+        "    if left.rating ~= right.rating then return left.rating > right.rating end",
+        "",
+    ),
+    (
+        "UploadCore",
+        "the lowest rating leads instead of the highest",
+        "if left.rating ~= right.rating then return left.rating > right.rating end",
+        "if left.rating ~= right.rating then return left.rating < right.rating end",
+    ),
+    (
+        "UploadCore",
+        "equally rated frames are ordered by nothing in particular",
+        "    if left.captured ~= right.captured then\n"
+        "      if left.captured == nil then return false end\n"
+        "      if right.captured == nil then return true end\n"
+        "      return left.captured < right.captured\n"
+        "    end",
+        "",
+    ),
+    (
+        "UploadCore",
+        "a photo with no capture time sorts ahead of every dated one",
+        "      if left.captured == nil then return false end\n"
+        "      if right.captured == nil then return true end",
+        "      if left.captured == nil then return true end\n"
+        "      if right.captured == nil then return false end",
+    ),
+    (
+        "UploadCore",
+        "two frames stamped with the same second can swap places between runs",
+        "    if left.path ~= right.path then return left.path < right.path end",
+        "",
+    ),
+    (
+        "UploadCore",
+        "the caller's selection is sorted in place",
+        "  local ordered = {}\n  for index, entry in ipairs(decorated) do\n    ordered[index] = entry.photo\n  end\n\n  return ordered",
+        "  for index, entry in ipairs(decorated) do\n    photos[index] = entry.photo\n  end\n\n  return photos",
+    ),
+    (
+        "UploadCore",
         "unlink also wipes the user's species guess",
-        '  "inat_common_name",\n}',
-        '  "inat_common_name",\n  "inat_species_guess",\n}',
+        '  "inat_taxon_family",\n}',
+        '  "inat_taxon_family",\n  "inat_species_guess",\n}',
     ),
     (
         "UploadCore",

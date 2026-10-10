@@ -41,6 +41,7 @@
 
 local LrBinding = import "LrBinding"
 local LrColor   = import "LrColor"
+local LrDate    = import "LrDate"
 local LrDialogs = import "LrDialogs"
 local LrTasks   = import "LrTasks"
 local LrView    = import "LrView"
@@ -61,6 +62,184 @@ ReverseSyncDialog.PAGE_SIZE = 25
 -- Large enough to tell two frames of the same bird apart, small enough that
 -- twenty-five rows scroll rather than needing a dialog taller than a laptop.
 ReverseSyncDialog.THUMB = 92
+
+--------------------------------------------------------------------------------
+-- Which observations to look at
+--------------------------------------------------------------------------------
+
+--- The two answers the range dialog can give.
+ReverseSyncDialog.ALL   = "all"
+ReverseSyncDialog.RANGE = "range"
+
+--- How a date is spelled in the fields and in the summary.
+ReverseSyncDialog.DATE_HINT = "2026-05-30"
+
+--- Turn what the range dialog holds into the two bounds the fetch wants.
+--
+-- Reversed dates are swapped rather than refused. Somebody who types the later
+-- day into the first box has said which two days they mean, unambiguously, and
+-- an error message that makes them retype it is the plugin being pedantic
+-- about something it already understood.
+--
+-- @return d1, d2 -- either may be nil, meaning no bound on that end
+function ReverseSyncDialog.rangeFrom(props)
+  if props.scope ~= ReverseSyncDialog.RANGE then return nil, nil end
+
+  local from = MatchCore.parseDay(props.fromDate)
+  local to   = MatchCore.parseDay(props.toDate)
+
+  -- ISO dates compare as text, which is half the reason that is the format
+  -- parseDay normalises to.
+  if from and to and from > to then return to, from end
+
+  return from, to
+end
+
+--- How the chosen range reads in a sentence, or nil when there was no range.
+function ReverseSyncDialog.rangeNote(summary)
+  local from, to = summary.d1, summary.d2
+
+  if from and to then
+    if from == to then return "observed on " .. from end
+    return string.format("observed %s to %s", from, to)
+  end
+  if from then return "observed on or after " .. from end
+  if to then return "observed on or before " .. to end
+
+  return nil
+end
+
+--- Ask which observations to fetch, before fetching any of them.
+--
+-- The reason this exists is bulk uploading. Somebody who has just put fifty
+-- observations up through iNaturalist's own uploader wants those fifty linked
+-- to their photos, and the only way to ask for them used to be to fetch every
+-- observation the account has ever held and match the lot -- minutes of work,
+-- almost all of it re-deciding things that were decided the last time.
+--
+-- A date range is the filter that fits the way the photos were taken. A day's
+-- outing or a week's trip is one range; "the observations I made yesterday"
+-- needs no new vocabulary to express, and the dates the user would type are
+-- the capture dates they already have in front of them in the filmstrip.
+--
+-- Defaults to the whole account, which is what this did before, so the button
+-- behaves as it always has for anyone who just presses Search.
+--
+-- MUST be called from inside a task with a function context: it presents a
+-- modal dialog and builds a bound property table.
+--
+-- @return { d1 = ..., d2 = ... } with either key absent for an open end, or
+--         nil when the user cancelled.
+function ReverseSyncDialog.askRange(context)
+  local f     = LrView.osFactory()
+  local props = LrBinding.makePropertyTable(context)
+
+  local today = LrDate.timeToUserFormat(LrDate.currentTime(), "%Y-%m-%d")
+  props.scope    = ReverseSyncDialog.ALL
+  props.fromDate = today
+  props.toDate   = today
+
+  -- Checked as the field is left rather than after the dialog is dismissed.
+  -- Lightroom draws the message beside the box that is wrong, which is the one
+  -- place it is useful, and a value it refuses never reaches the property
+  -- table -- so nothing downstream has to cope with "2026-13-45".
+  local function validateDay(_view, value)
+    if type(value) ~= "string" or value:match("^%s*$") then
+      return true, ""
+    end
+
+    local day = MatchCore.parseDay(value)
+    if not day then
+      return false, value,
+        "Dates look like " .. ReverseSyncDialog.DATE_HINT .. "."
+    end
+
+    -- Handed back normalised, so "2026/5/3" becomes the same string the
+    -- summary and the request will use.
+    return true, day
+  end
+
+  local function dateField(key)
+    return f:edit_field {
+      value     = LrView.bind(key),
+      validate  = validateDay,
+      immediate = false,
+      width     = 120,
+      enabled   = LrView.bind {
+        key = "scope",
+        transform = function(scope) return scope == ReverseSyncDialog.RANGE end,
+      },
+    }
+  end
+
+  local contents = f:column {
+    bind_to_object = props,
+    spacing = f:control_spacing(),
+
+    f:static_text {
+      title = "Which of your iNaturalist observations should be checked "
+        .. "against the catalog?",
+      width           = 460,
+      height_in_lines = 2,
+    },
+
+    f:radio_button {
+      title         = "All of my observations",
+      value         = LrView.bind("scope"),
+      checked_value = ReverseSyncDialog.ALL,
+    },
+    f:radio_button {
+      title         = "Only observations made in a date range",
+      value         = LrView.bind("scope"),
+      checked_value = ReverseSyncDialog.RANGE,
+    },
+
+    f:row {
+      spacing = 6,
+      f:static_text { title = "From", width = 40 },
+      dateField("fromDate"),
+      f:static_text { title = "to", width = 20 },
+      dateField("toDate"),
+    },
+
+    f:static_text {
+      title = "Observation dates, as " .. ReverseSyncDialog.DATE_HINT
+        .. ", and both ends are included. Leave one empty for no limit at "
+        .. "that end. A range makes this quick enough to run after every bulk "
+        .. "upload rather than once.",
+      width           = 460,
+      height_in_lines = 3,
+    },
+  }
+
+  local result = LrDialogs.presentModalDialog {
+    title      = "Pinned Reverse Sync",
+    contents   = contents,
+    actionVerb = "Search",
+  }
+  if result ~= "ok" then return nil end
+
+  local from, to = ReverseSyncDialog.rangeFrom(props)
+
+  -- A range with neither end is the whole account, which is the other option
+  -- on this very dialog. Running it is almost certainly not what was meant,
+  -- and the choice is cheap to make again.
+  if props.scope == ReverseSyncDialog.RANGE and not from and not to then
+    LrDialogs.message("Pinned Reverse Sync",
+      "Enter a date to search from, a date to search to, or both -- or choose "
+      .. "\"All of my observations\".", "info")
+    return nil
+  end
+
+  logger:infof("reverse sync range: %s",
+    ReverseSyncDialog.rangeNote { d1 = from, d2 = to } or "all observations")
+
+  return { d1 = from, d2 = to }
+end
+
+--------------------------------------------------------------------------------
+-- The review list
+--------------------------------------------------------------------------------
 
 --- The last two path segments, which is what identifies a photo to its owner.
 --
@@ -254,9 +433,17 @@ function ReverseSyncDialog.summaryParts(summary)
       summary.matched or 0, summary.observations or 0)
   end
 
+  -- Which observations were looked at at all, second so it qualifies the
+  -- headline it belongs to. Without it, "3 of 4 observations matched" on an
+  -- account holding nine hundred reads as a scan that went badly wrong rather
+  -- than as the date range doing exactly what was asked of it.
+  local range = ReverseSyncDialog.rangeNote(summary)
+  if range then parts[#parts + 1] = range end
+
   if (summary.unmatched or 0) > 0 then
     parts[#parts + 1] = string.format("%d found no photo", summary.unmatched)
   end
+
   if (summary.undatable or 0) > 0 then
     -- Worth naming rather than folding into "unmatched": nothing is wrong with
     -- the catalog, the observation just does not carry a time, and matching it
