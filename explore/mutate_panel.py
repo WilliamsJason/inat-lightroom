@@ -135,14 +135,21 @@ MUTATIONS = [
     (
         "PanelCore",
         "a star moves the observation's time and place, not just the photos",
-        "UploadCore.resolveObservation(api, settings, photos[1], seen, errors)",
-        "UploadCore.resolveObservation(api, settings, ordered[1], seen, errors)",
+        "UploadCore.resolveObservation(api, settings, photos[1], seen, errors,",
+        "UploadCore.resolveObservation(api, settings, ordered[1], seen, errors,",
     ),
     (
         "PanelCore",
         "each photo becomes its own observation",
-        "  local observationId, uuid, resolveErr, wasCreated =\n    UploadCore.resolveObservation(api, settings, photos[1], seen, errors)",
-        "  local observationId, uuid, resolveErr, wasCreated\n  for _, photo in ipairs(photos) do\n    observationId, uuid, resolveErr, wasCreated =\n      UploadCore.resolveObservation(api, settings, photo, {}, errors)\n  end",
+        "  local observationId, uuid, resolveErr, wasCreated =\n"
+        "    UploadCore.resolveObservation(api, settings, photos[1], seen, errors,\n"
+        "      { withoutSpeciesGuess = options.withoutSpeciesGuess })",
+        "  local observationId, uuid, resolveErr, wasCreated\n"
+        "  for _, photo in ipairs(photos) do\n"
+        "    observationId, uuid, resolveErr, wasCreated =\n"
+        "      UploadCore.resolveObservation(api, settings, photo, {}, errors,\n"
+        "        { withoutSpeciesGuess = options.withoutSpeciesGuess })\n"
+        "  end",
     ),
     (
         "PanelCore",

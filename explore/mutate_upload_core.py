@@ -118,8 +118,11 @@ MUTATIONS = [
     (
         "UploadCore",
         "the recreated observation loses its UUID, splitting the group",
-        "  local params = UploadCore.observationParamsFor(settings, photo)\n  if uuid then\n    params.uuid = uuid\n  end",
-        "  local params = UploadCore.observationParamsFor(settings, photo)",
+        "  local params = UploadCore.observationParamsFor(settings, photo, {\n"
+        "    withoutSpeciesGuess = options.withoutSpeciesGuess,\n"
+        "  })\n  if uuid then\n    params.uuid = uuid\n  end",
+        "  local params = UploadCore.observationParamsFor(settings, photo, {\n"
+        "    withoutSpeciesGuess = options.withoutSpeciesGuess,\n  })",
     ),
     (
         "UploadCore",
