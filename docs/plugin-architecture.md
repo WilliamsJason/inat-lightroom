@@ -422,6 +422,18 @@ observation's taxon but leaves the author's earlier identification standing, so
 the observation disagrees with itself. Posting a new identification withdraws
 the previous one automatically.
 
+For the same reason a new upload that already has a taxon id sends **no**
+`species_guess` at all (`PanelCore.upload`'s `withoutSpeciesGuess`, threaded
+through to `UploadCore.observationParamsFor`). iNaturalist runs
+`set_taxon_from_species_guess` before every save, so a guess that resolves
+makes the author's identification by itself — and the identification posted a
+moment later then withdraws it. Both carry the same taxon, so the observation
+is correct either way, but its activity is left showing an ID of the observer's
+own, withdrawn, with nothing on the page to explain it.
+
+The guess is only sent if that identification fails, as a fallback: holding it
+back is worth a withdrawn ID, not an observation with no name on it.
+
 Every mutating path — upload, update, unlink's counterpart, link — ends in a
 sync, so the catalog is never left describing an older version of the
 observation than the one that now exists.
@@ -803,8 +815,9 @@ Two deliberate asymmetries:
 
 - `recordGuess` stores the **bare** name in `inat_species_guess`, because
   `UploadCore.observationParamsFor` reads that field straight off the photo and
-  sends it as `species_guess` when creating an observation. A display string
-  there would defeat the same name matching on every later upload.
+  sends it as `species_guess` when creating an observation without a taxon id.
+  A display string there would defeat the same name matching on every later
+  upload.
 - `confidenceWarning` is passed what the **field** shows. It is a sentence
   somebody has to decide on, not something transmitted.
 

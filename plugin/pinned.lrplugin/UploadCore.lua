@@ -130,9 +130,17 @@ function UploadCore.observationParamsFor(settings, photo, options)
     params.observed_on_string = observedOn
   end
 
-  local guess = pluginField(photo, "inat_species_guess")
-  if guess then
-    params.species_guess = guess
+  -- Held back when the caller is about to post an identification.
+  -- iNaturalist runs set_taxon_from_species_guess before every save, so a name
+  -- sent here resolves to a taxon and becomes the author's identification all
+  -- by itself; the identification posted a second later then withdraws it.
+  -- Both say exactly the same thing, and what the observer is left looking at
+  -- is an ID of their own, withdrawn, for no reason visible from the website.
+  if not options.withoutSpeciesGuess then
+    local guess = pluginField(photo, "inat_species_guess")
+    if guess then
+      params.species_guess = guess
+    end
   end
 
   local caption = photo:getFormattedMetadata("caption")
@@ -173,9 +181,14 @@ end
 --                  back to the server or create a duplicate.
 -- @param warnings  Collects things worth telling the user that are not bad
 --                  enough to fail the photo.
+-- @param options   withoutSpeciesGuess leaves the photo's species guess out of
+--                  the observation, for a caller that is going to post an
+--                  identification as soon as there is something to post it on.
 -- @return observation id, uuid, error message, true when this call created the
 --         observation rather than finding one that already existed
-function UploadCore.resolveObservation(api, settings, photo, seen, warnings)
+function UploadCore.resolveObservation(api, settings, photo, seen, warnings, options)
+  options = options or {}
+
   local uuid = pluginField(photo, "inat_observation_uuid")
 
   if uuid then
@@ -199,7 +212,10 @@ function UploadCore.resolveObservation(api, settings, photo, seen, warnings)
       -- never updating it meant an edited species guess was written to the
       -- catalog, uploaded, and then thrown away.
       local _, updateErr = api:updateObservation(
-        existing.id, UploadCore.observationParamsFor(settings, photo, { update = true }))
+        existing.id, UploadCore.observationParamsFor(settings, photo, {
+          update              = true,
+          withoutSpeciesGuess = options.withoutSpeciesGuess,
+        }))
       if updateErr then
         logger:warn("Could not update observation " .. tostring(existing.id)
           .. ": " .. tostring(updateErr))
@@ -214,7 +230,9 @@ function UploadCore.resolveObservation(api, settings, photo, seen, warnings)
     end
   end
 
-  local params = UploadCore.observationParamsFor(settings, photo)
+  local params = UploadCore.observationParamsFor(settings, photo, {
+    withoutSpeciesGuess = options.withoutSpeciesGuess,
+  })
   if uuid then
     params.uuid = uuid
   end

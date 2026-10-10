@@ -89,6 +89,11 @@ def methods(calls) -> list[str]:
     return [calls[i]["method"] for i in range(1, len(calls) + 1)]
 
 
+def call_named(calls, name):
+    return [calls[i]["arg"] for i in range(1, len(calls) + 1)
+            if calls[i]["method"] == name]
+
+
 # ---------------------------------------------------------------------------
 # The observation date
 # ---------------------------------------------------------------------------
@@ -129,6 +134,23 @@ def test_an_empty_species_guess_is_not_sent(plugin, upload):
     params = upload["observationParamsFor"](settings(plugin), photo)
 
     assert params["species_guess"] is None
+
+
+def test_the_species_guess_is_held_back_for_a_coming_identification(plugin, upload):
+    """iNaturalist runs set_taxon_from_species_guess before every save, so a
+    name sent here becomes the author's identification by itself. The
+    identification posted a moment later then withdraws it, and the observer is
+    left looking at an ID of their own, withdrawn, with nothing on the page to
+    explain it. Same taxon either way -- this is about the activity log."""
+    photo = plugin.new_photo(inat_species_guess="Quercus robur")
+
+    params = upload["observationParamsFor"](
+        settings(plugin), photo,
+        plugin.runtime.table_from({"withoutSpeciesGuess": True}))
+
+    assert params["species_guess"] is None
+    # Only the guess is withheld; the rest of the observation is unaffected.
+    assert params["geoprivacy"] == "open"
 
 
 def test_the_caption_becomes_the_description(plugin, upload):
@@ -277,6 +299,56 @@ def test_a_previously_uploaded_photo_reuses_its_observation(plugin, upload):
 
     assert (obs_id, uuid, err) == (99, "known", None)
     assert methods(calls) == ["find", "update"]
+
+
+def test_creating_can_be_told_to_leave_the_species_guess_out(plugin, upload):
+    """The flag has to reach the create call, not just exist on the options
+    table: everything above it is reasoning about a parameter this is the only
+    line that actually sends."""
+    api, calls = fake_api(
+        plugin, created=plugin.runtime.table_from({"id": 42, "uuid": "abc"}))
+
+    upload["resolveObservation"](
+        api, settings(plugin),
+        plugin.new_photo(inat_species_guess="Quercus robur"),
+        plugin.eval("{}"), None,
+        plugin.runtime.table_from({"withoutSpeciesGuess": True}))
+
+    assert call_named(calls, "create")[0]["species_guess"] is None
+
+
+def test_re_uploading_leaves_the_species_guess_out_as_well(plugin, upload):
+    """An observation found by UUID may have no taxon on it -- it is the one
+    the user deleted their ID from, or one created without a name -- and
+    set_taxon_from_species_guess runs on an update just as it does on a create.
+    """
+    api, calls = fake_api(
+        plugin, found=plugin.runtime.table_from({"id": 99, "uuid": "known"}))
+
+    upload["resolveObservation"](
+        api, settings(plugin),
+        plugin.new_photo(inat_observation_uuid="known",
+                         inat_species_guess="Quercus robur"),
+        plugin.eval("{}"), None,
+        plugin.runtime.table_from({"withoutSpeciesGuess": True}))
+
+    assert call_named(calls, "update")[0]["params"]["species_guess"] is None
+
+
+def test_the_species_guess_still_goes_up_when_nothing_will_identify_it(
+    plugin, upload
+):
+    """The free-text case, which is the whole reason the field survives: a name
+    iNaturalist has no taxon for can only ever travel as species_guess."""
+    api, calls = fake_api(
+        plugin, created=plugin.runtime.table_from({"id": 42, "uuid": "abc"}))
+
+    upload["resolveObservation"](
+        api, settings(plugin),
+        plugin.new_photo(inat_species_guess="Quercus robur"),
+        plugin.eval("{}"))
+
+    assert call_named(calls, "create")[0]["species_guess"] == "Quercus robur"
 
 
 # --- who made it -----------------------------------------------------------

@@ -868,7 +868,7 @@ def stub_upload_path(plugin):
         local UploadCore = require "UploadCore"
         local PanelCore  = require "PanelCore"
         local reached = { count = 0, updates = 0, accuracy = nil, guess = nil,
-                          matches = {}, lookups = {} }
+                          matches = {}, lookups = {}, sent = {} }
 
         UploadCore.requireAPI = function()
           return {
@@ -886,14 +886,19 @@ def stub_upload_path(plugin):
             end,
           }, nil
         end
-        PanelCore.upload = function()
+        PanelCore.upload = function(_catalog, _api, _settings, _photos, options)
           reached.count = reached.count + 1
+          reached.uploadOptions = options or {}
           return 42, nil, {}
         end
         PanelCore.updateSpeciesGuess = function(_catalog, _api, _photos, guess, taxonId)
           reached.updates = (reached.updates or 0) + 1
           reached.guess   = guess
           reached.taxonId = taxonId
+          reached.sent[#reached.sent + 1] = { guess = guess, taxonId = taxonId }
+          if reached.identifyError and taxonId then
+            return false, reached.identifyError
+          end
           return true, nil
         end
 
@@ -1267,6 +1272,64 @@ def test_a_new_upload_posts_the_bare_name_too(plugin, panel):
 
     assert reached["count"] == 1
     assert reached["guess"] == "Apis mellifera"
+
+
+def test_an_upload_that_will_identify_sends_no_species_guess_with_it(plugin, panel):
+    """The withdrawn ID people kept finding on their first uploads. Sent both
+    ways, iNaturalist resolves the guess, makes the author's identification
+    from it, and then withdraws that in favour of the identical one posted a
+    second later -- so the observation is right and its activity reads like a
+    change of mind nobody made."""
+    reached = stub_upload_path(plugin)
+    photo = plugin.new_photo(raw={"gps": {"latitude": 51.5, "longitude": -0.1}})
+    plugin.set_target_photos([photo])
+    props = chosen(plugin, panel, plugin.runtime.table_from({}),
+                   {"taxon_id": 47219, "name": "Apis mellifera",
+                    "common_name": "Western Honey Bee"})
+
+    plugin.call(panel.uploadOrUpdate, props)
+    plugin.run_pending_tasks()
+
+    assert reached["uploadOptions"]["withoutSpeciesGuess"] is True
+    assert reached["taxonId"] == 47219
+
+
+def test_an_upload_with_no_taxon_still_carries_its_guess(plugin, panel):
+    """Nothing is going to post an identification, so holding the name back
+    would upload an observation with no name on it anywhere."""
+    reached = stub_upload_path(plugin)
+    photo = plugin.new_photo(raw={"gps": {"latitude": 51.5, "longitude": -0.1}})
+    plugin.set_target_photos([photo])
+    plugin.set_confirm_answer("ok")  # it resolves to nothing, so it is asked about
+    props = plugin.runtime.table_from({})
+    props["speciesGuess"] = "Ischnura erratica"
+
+    plugin.call(panel.uploadOrUpdate, props)
+    plugin.run_pending_tasks()
+
+    assert reached["uploadOptions"]["withoutSpeciesGuess"] is False
+
+
+def test_a_failed_identification_puts_the_guess_back(plugin, panel):
+    """Holding the name back is worth a withdrawn ID, not an observation with
+    no name at all. When the identification does not land, the free text is the
+    only thing left that says what this is."""
+    reached = stub_upload_path(plugin)
+    reached["identifyError"] = "the server said no"
+    photo = plugin.new_photo(raw={"gps": {"latitude": 51.5, "longitude": -0.1}})
+    plugin.set_target_photos([photo])
+    props = chosen(plugin, panel, plugin.runtime.table_from({}),
+                   {"taxon_id": 47219, "name": "Apis mellifera",
+                    "common_name": "Western Honey Bee"})
+
+    plugin.call(panel.uploadOrUpdate, props)
+    plugin.run_pending_tasks()
+
+    sent = reached["sent"]
+    assert [sent[i]["taxonId"] for i in range(1, len(sent) + 1)] == [47219, None]
+    assert sent[2]["guess"] == "Apis mellifera"
+    # And the failure is still reported rather than papered over.
+    assert "the server said no" in plugin.dialogs[-1]["message"]
 
 
 def test_the_confidence_dialog_names_what_the_user_can_see(plugin, panel):

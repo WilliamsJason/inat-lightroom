@@ -1243,6 +1243,13 @@ function ObservationPanel.uploadOrUpdate(props)
     sleep      = LrTasks.sleep,
     onEvent    = function(message) props.suggestionStatus = message end,
     isCanceled = function() return props.uploadCanceled == true end,
+
+    -- The name is sent as an identification below rather than with the
+    -- observation. Sending it both ways makes iNaturalist create an ID from
+    -- the guess and then withdraw it in favour of the identical one posted
+    -- straight after, which is the withdrawn ID people were finding on every
+    -- upload they had named first.
+    withoutSpeciesGuess = taxonId ~= nil,
   })
 
   props.uploading = false
@@ -1272,6 +1279,18 @@ function ObservationPanel.uploadOrUpdate(props)
     local ok, err = PanelCore.updateSpeciesGuess(catalog, api, photos, wireGuess, taxonId)
     if not ok then
       errors[#errors + 1] = err
+
+      -- The guess was kept out of the observation above only because this
+      -- identification was going to say the same thing better. It did not, so
+      -- the observation is sitting there with no name on it at all -- worse
+      -- than the withdrawn ID that holding the guess back was meant to avoid.
+      -- Free text is not an identification, but it is what the user typed, and
+      -- it is visible on an observation nobody has identified yet.
+      local guessOk, guessErr =
+        PanelCore.updateSpeciesGuess(catalog, api, photos, wireGuess, nil)
+      if not guessOk then
+        errors[#errors + 1] = guessErr or "The species guess could not be sent either."
+      end
     end
   end
 
