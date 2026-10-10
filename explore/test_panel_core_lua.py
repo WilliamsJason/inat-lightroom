@@ -568,6 +568,19 @@ def test_the_observation_details_come_from_the_first_photo(plugin, core):
     assert call_named(calls, "create")[0]["species_guess"] == "Apis mellifera"
 
 
+def test_the_caller_can_hold_the_species_guess_back(plugin, core):
+    """`upload` only passes this along, but it is the only thing joining the
+    panel's decision to the parameter that carries it, and a flag dropped in
+    the middle would restore the withdrawn ID with every test above still
+    green."""
+    first = plugin.new_photo(inat_species_guess="Apis mellifera")
+    api, calls = fake_api(plugin)
+
+    upload(plugin, core, [first], api, options={"withoutSpeciesGuess": True})
+
+    assert call_named(calls, "create")[0]["species_guess"] is None
+
+
 def test_the_rendered_files_are_cleaned_up(plugin, core):
     api, _ = fake_api(plugin)
 

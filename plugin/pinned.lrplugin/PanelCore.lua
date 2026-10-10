@@ -1021,7 +1021,9 @@ end
 -- frames were taken of it.
 --
 -- @param options  onEvent(message) progress callback, sleep for the upload
---                 verifier, isCanceled() checked at every step
+--                 verifier, isCanceled() checked at every step,
+--                 withoutSpeciesGuess when the caller will post an
+--                 identification once the observation exists
 -- @return observationId, url, list of error strings, true when the user
 --         cancelled partway
 function PanelCore.upload(catalog, api, settings, photos, options)
@@ -1067,7 +1069,8 @@ function PanelCore.upload(catalog, api, settings, photos, options)
   onEvent("Creating the observation…")
   local seen = {}
   local observationId, uuid, resolveErr, wasCreated =
-    UploadCore.resolveObservation(api, settings, photos[1], seen, errors)
+    UploadCore.resolveObservation(api, settings, photos[1], seen, errors,
+      { withoutSpeciesGuess = options.withoutSpeciesGuess })
 
   if not observationId then
     RenderPhoto.cleanUp(folder)
