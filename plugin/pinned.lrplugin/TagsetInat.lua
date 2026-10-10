@@ -70,6 +70,7 @@ return {
 
     prefix .. "inat_taxon_name",
     prefix .. "inat_common_name",
+    prefix .. "inat_taxon_family",
     prefix .. "inat_taxon_id",
   },
 }

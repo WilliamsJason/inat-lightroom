@@ -95,6 +95,70 @@ function UploadCore.observedAtFor(photo)
   return LrDate.timeToUserFormat(captured, "%Y-%m-%dT%H:%M:%S")
 end
 
+--- The order a group of photos should be attached to an observation in.
+--
+-- iNaturalist numbers an observation's photos in the order they arrive, and
+-- the first one is the thumbnail that represents the observation everywhere it
+-- appears. Until this existed the order was whichever order the selection came
+-- in -- filmstrip order, which for most people is capture time -- so the lead
+-- photo was whichever frame happened to be shot first, and putting the good one
+-- in front meant dragging it there on the website afterwards.
+--
+-- Rating decides it instead: more stars go first. That is deliberately not a
+-- new setting. The star rating is the one "this is the good one" judgement a
+-- Lightroom user already has to hand, it costs a single keystroke, and it is as
+-- easy to take back as it was to apply -- so a rating used only to pick a lead
+-- frame need not survive the upload.
+--
+-- Ties fall back to capture time, earliest first, which is exactly the order
+-- this had before, and then to the file path so that two frames stamped with
+-- the same second do not swap places between one run and the next. A photo with
+-- no capture time at all sorts after every photo that has one.
+--
+-- Every value is read *before* the sort and never from inside the comparator.
+-- table.sort is a C function, catalog reads yield, and Lua 5.1 cannot yield
+-- across a C call -- the same trap that left the settings window's keyword
+-- picker empty for every catalog.
+--
+-- @return a new array, highest-rated first. The array passed in is untouched.
+function UploadCore.uploadOrder(photos)
+  local decorated = {}
+
+  for index, photo in ipairs(photos or {}) do
+    decorated[index] = {
+      photo    = photo,
+      index    = index,
+      rating   = tonumber(photo:getRawMetadata("rating")) or 0,
+      captured = tonumber(photo:getRawMetadata("dateTimeOriginal")),
+      path     = tostring(photo:getRawMetadata("path") or ""),
+    }
+  end
+
+  table.sort(decorated, function(left, right)
+    if left.rating ~= right.rating then return left.rating > right.rating end
+
+    if left.captured ~= right.captured then
+      if left.captured == nil then return false end
+      if right.captured == nil then return true end
+      return left.captured < right.captured
+    end
+
+    if left.path ~= right.path then return left.path < right.path end
+
+    -- The last resort, and the reason this is a total order rather than one
+    -- with gaps in it: table.sort is not stable, so two rows it cannot tell
+    -- apart are free to change places on every run.
+    return left.index < right.index
+  end)
+
+  local ordered = {}
+  for index, entry in ipairs(decorated) do
+    ordered[index] = entry.photo
+  end
+
+  return ordered
+end
+
 --- Read a photo's coordinates, if it has any.
 --
 -- Shared because three callers wanted it and each had grown its own copy: the
@@ -308,6 +372,7 @@ UploadCore.LINK_FIELDS = {
   "inat_taxon_id",
   "inat_taxon_name",
   "inat_common_name",
+  "inat_taxon_family",
 }
 
 function UploadCore.unlink(catalog, photos)

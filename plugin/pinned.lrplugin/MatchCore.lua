@@ -172,6 +172,37 @@ function MatchCore.parseTimestamp(text)
   return parts
 end
 
+--- Parse a date the user typed into the ISO day the API's filters want.
+--
+-- Deliberately narrow about the year and generous about the rest: "2026-5-3",
+-- "2026/05/03" and a stray space around any of it all mean the same day, and
+-- rejecting them would be rejecting a date the user wrote correctly. A
+-- two-digit year is not accepted, because "26-05-03" is ambiguous in a way the
+-- others are not.
+--
+-- Returns nil for anything else rather than guessing. A date silently read as
+-- a different one narrows a search to the wrong window, and the result -- a
+-- scan that finds nothing -- looks exactly like having no observations there.
+--
+-- @return "YYYY-MM-DD", or nil when the text is not a date
+function MatchCore.parseDay(text)
+  if type(text) ~= "string" then return nil end
+
+  local trimmed = text:match("^%s*(.-)%s*$")
+  if trimmed == "" then return nil end
+
+  local year, month, day = trimmed:match("^(%d%d%d%d)[-/](%d%d?)[-/](%d%d?)$")
+  if not year then return nil end
+
+  local parts = {
+    year = tonumber(year), month = tonumber(month), day = tonumber(day),
+    hour = 0, min = 0, sec = 0,
+  }
+  if not validParts(parts) then return nil end
+
+  return string.format("%04d-%02d-%02d", parts.year, parts.month, parts.day)
+end
+
 --- The wall-clock time an observation was made, or nil if it has none.
 --
 -- `time_observed_at` is the field with a time in it. `observed_on` is a date

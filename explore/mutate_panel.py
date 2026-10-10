@@ -122,9 +122,34 @@ MUTATIONS = [
     # --- uploading -----------------------------------------------------------
     (
         "PanelCore",
+        "the selection is rendered in filmstrip order, ignoring ratings",
+        "RenderPhoto.render(ordered, {",
+        "RenderPhoto.render(photos, {",
+    ),
+    (
+        "PanelCore",
+        "the rendered files are trusted to come back in the order they went in",
+        "  local position = {}\n  for index, photo in ipairs(ordered) do position[photo] = index end\n  table.sort(rendered, function(left, right)\n    return (position[left.photo] or 0) < (position[right.photo] or 0)\n  end)",
+        "",
+    ),
+    (
+        "PanelCore",
+        "a star moves the observation's time and place, not just the photos",
+        "UploadCore.resolveObservation(api, settings, photos[1], seen, errors,",
+        "UploadCore.resolveObservation(api, settings, ordered[1], seen, errors,",
+    ),
+    (
+        "PanelCore",
         "each photo becomes its own observation",
-        "  local seen = {}\n  local observationId, uuid, resolveErr, wasCreated =\n    UploadCore.resolveObservation(api, settings, photos[1], seen, errors)",
-        "  local seen = {}\n  local observationId, uuid, resolveErr, wasCreated\n  for _, photo in ipairs(photos) do\n    observationId, uuid, resolveErr, wasCreated =\n      UploadCore.resolveObservation(api, settings, photo, {}, errors)\n  end",
+        "  local observationId, uuid, resolveErr, wasCreated =\n"
+        "    UploadCore.resolveObservation(api, settings, photos[1], seen, errors,\n"
+        "      { withoutSpeciesGuess = options.withoutSpeciesGuess })",
+        "  local observationId, uuid, resolveErr, wasCreated\n"
+        "  for _, photo in ipairs(photos) do\n"
+        "    observationId, uuid, resolveErr, wasCreated =\n"
+        "      UploadCore.resolveObservation(api, settings, photo, {}, errors,\n"
+        "        { withoutSpeciesGuess = options.withoutSpeciesGuess })\n"
+        "  end",
     ),
     (
         "PanelCore",
@@ -348,8 +373,8 @@ MUTATIONS = [
     (
         "CustomMetadata",
         "the schema version is not bumped with the field changes",
+        "  schemaVersion = 9,",
         "  schemaVersion = 8,",
-        "  schemaVersion = 7,",
     ),
     (
         "CustomMetadata",
@@ -699,8 +724,8 @@ MUTATIONS = [
     (
         "PanelCore",
         "the dialog describes one observation per photo, which is not what happens",
-        '    "This creates one iNaturalist observation carrying all %d photos -- not "\n    .. "%d separate observations.\\n\\nIts date, location and description come "',
-        '    "This uploads %d photos, creating %d observations.\\n\\nIts date, location and description come "',
+        '    "This creates one iNaturalist observation carrying %d photos -- not "\n    .. "%d separate observations.\\n\\nPhotos are sorted by highest rated to "',
+        '    "This uploads %d photos, creating %d observations.\\n\\nPhotos are sorted by highest rated to "',
     ),
     (
         "ObservationPanel",
@@ -777,6 +802,44 @@ MUTATIONS = [
         "a large taxon id is formatted into scientific notation",
         'return "https://www.inaturalist.org/taxa/" .. string.format("%d", id)',
         'return "https://www.inaturalist.org/taxa/" .. tostring(id)',
+    ),
+    (
+        "InatAPI",
+        "the date range is dropped, so the whole account is fetched",
+        '    if options.d1 and options.d1 ~= "" then params.d1 = options.d1 end\n'
+        '    if options.d2 and options.d2 ~= "" then params.d2 = options.d2 end',
+        "",
+    ),
+    (
+        "InatAPI",
+        "an empty date is sent as a filter, which the API answers with a 422",
+        '    if options.d1 and options.d1 ~= "" then params.d1 = options.d1 end\n'
+        '    if options.d2 and options.d2 ~= "" then params.d2 = options.d2 end',
+        "    params.d1 = options.d1\n    params.d2 = options.d2",
+    ),
+    (
+        "SyncCore",
+        "a rate-limited run blanks the family it could not look up",
+        '  if SyncCore.hasLineage(taxon) or taxon.rank == "family" then',
+        "  if true then",
+    ),
+    (
+        "SyncCore",
+        "a re-identification leaves the old family behind",
+        '  if SyncCore.hasLineage(taxon) or taxon.rank == "family" then',
+        "  if false then",
+    ),
+    (
+        "SyncCore",
+        "an observation identified to family does not record its own family",
+        '  if taxon.rank == "family" and taxon.name then return taxon.name end',
+        "",
+    ),
+    (
+        "SyncCore",
+        "the family is read from any rank the lineage happens to offer",
+        '    if ancestor.rank == "family" and ancestor.name then return ancestor.name end',
+        "    if ancestor.name then return ancestor.name end",
     ),
     (
         "SyncCore",

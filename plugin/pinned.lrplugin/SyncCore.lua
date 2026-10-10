@@ -182,6 +182,27 @@ function SyncCore.hasLineage(taxon)
   return taxon ~= nil and taxon.ancestors ~= nil
 end
 
+--- The family a taxon sits in, or nil when its lineage does not name one.
+--
+-- The taxon itself counts: an observation identified only as far as Syrphidae
+-- *is* the family, and it has no family-ranked ancestor to find.
+--
+-- nil rather than "" for a lineage that genuinely has no family in it -- a
+-- kingdom, or an observation stopped at order -- because the caller has to be
+-- able to tell "no family" from "not looked up yet" to decide whether writing
+-- an empty string would be correcting the field or wiping it.
+function SyncCore.familyOf(taxon)
+  if type(taxon) ~= "table" then return nil end
+
+  if taxon.rank == "family" and taxon.name then return taxon.name end
+
+  for _, ancestor in ipairs(taxon.ancestors or {}) do
+    if ancestor.rank == "family" and ancestor.name then return ancestor.name end
+  end
+
+  return nil
+end
+
 --- Write a taxon onto a photo: the keyword hierarchy and the taxon fields.
 --
 -- MUST be called from inside a write transaction. createKeyword needs write
@@ -217,6 +238,22 @@ function SyncCore.applyTaxon(catalog, photo, taxon)
   photo:setPropertyForPlugin(_PLUGIN, "inat_taxon_name", taxon.name or "")
   photo:setPropertyForPlugin(_PLUGIN, "inat_common_name",
     taxon.preferred_common_name or "")
+
+  -- Family is read off the lineage, so it is written on the same terms as the
+  -- keyword and not on the same terms as the three fields above. Those are
+  -- correct whether or not the ancestors loaded; this one is simply unknown
+  -- until they do, and blanking it on a run that hit the rate limit would
+  -- throw away a correct answer an earlier run had already found. Left for a
+  -- later run instead, exactly as the keyword is.
+  --
+  -- When the lineage *is* known, an empty string is the right answer for a
+  -- taxon that has no family above it -- a kingdom, or an identification that
+  -- stopped at order -- and it has to be written, or re-identifying a photo
+  -- from a species to its order would leave the old family behind.
+  if SyncCore.hasLineage(taxon) or taxon.rank == "family" then
+    photo:setPropertyForPlugin(_PLUGIN, "inat_taxon_family",
+      SyncCore.familyOf(taxon) or "")
+  end
 
   return true
 end

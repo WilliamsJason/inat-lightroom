@@ -2041,3 +2041,60 @@ def test_a_resolved_name_with_no_lineage_is_an_error_not_one_rung(plugin, core):
 
     assert taxonomy is None
     assert "Ischnura erratica" in err
+
+
+# ---------------------------------------------------------------------------
+# Which frame iNaturalist shows first
+#
+# The first photo on an observation is the one that appears in the feed, in
+# search results and on the taxon page. Re-ordering them on the website takes
+# a drag per photo per observation, which is enough work that people stop
+# doing it -- so the order the plugin sends is the order that sticks.
+# ---------------------------------------------------------------------------
+
+
+def rated(plugin, path, rating=None, captured=None):
+    return plugin.new_photo(raw={"path": path, "rating": rating,
+                                 "dateTimeOriginal": captured})
+
+
+def exported_paths(plugin):
+    """The photos handed to the export, in the order they were handed over.
+
+    That order is the order the renditions come back in and therefore the
+    order they reach iNaturalist; the rendered files are numbered by position
+    rather than named after their source, so the paths cannot say it.
+    """
+    session = plugin.export_sessions[-1]
+    return [plugin.in_task(photo.getRawMetadata, photo, "path")
+            for photo in session["photos"].values()]
+
+
+def test_the_starred_frame_is_sent_first(plugin, core):
+    """A star is something the user is already reaching for while culling, so
+    choosing the cover photo costs nothing new to learn."""
+    api, calls = fake_api(plugin)
+    photos = [rated(plugin, "/a.NEF", captured=100),
+              rated(plugin, "/b.NEF", rating=4, captured=200)]
+
+    upload(plugin, core, photos, api)
+
+    assert len([c for c in calls.values() if c["method"] == "upload"]) == 2
+    assert exported_paths(plugin) == ["/b.NEF", "/a.NEF"]
+
+
+def test_the_observation_still_comes_from_the_selection_not_the_order(
+    plugin, core
+):
+    """Ratings decide the order of the images and nothing else. If they moved
+    the observation too, starring the sharpest frame would quietly relocate
+    the sighting to wherever that frame was taken."""
+    first = rated(plugin, "/a.NEF", captured=100)
+    first["_props"]["inat_species_guess"] = "Apis mellifera"
+    starred = rated(plugin, "/b.NEF", rating=5, captured=200)
+    api, calls = fake_api(plugin)
+
+    upload(plugin, core, [first, starred], api)
+
+    assert call_named(calls, "create")[0]["species_guess"] == "Apis mellifera"
+    assert exported_paths(plugin) == ["/b.NEF", "/a.NEF"]

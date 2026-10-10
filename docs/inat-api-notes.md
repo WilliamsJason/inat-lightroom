@@ -731,6 +731,20 @@ needs it: an obscured observation's public `location` is randomised within a
 0.2-degree cell, and matching a photo against it would be matching against
 noise.
 
+### `d1` and `d2` bound the observed date
+
+The cheapest fix for the whole problem above is to not ask for most of it.
+`d1` and `d2` are `YYYY-MM-DD`, inclusive at both ends, and filter on when the
+observation was *made* rather than when it was uploaded -- which is the date
+the user is reading off their filmstrip, so it is also the one they can type.
+Either may be sent alone for an open-ended range.
+
+Two things to watch. An empty string is not the same as an absent parameter:
+`d1=` is answered with HTTP 422 and fails the whole search, so the parameter
+has to be omitted rather than blanked. And the filter has to be repeated on
+every page -- cursor pagination walks forward with `id_above`, and a second
+page fetched without `d1` quietly returns the whole account.
+
 ## Fifteen megabytes is also too much for a Lua JSON parser
 
 Worth recording next to the above, because the two together are what made the

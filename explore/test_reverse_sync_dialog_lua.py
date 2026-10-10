@@ -518,3 +518,140 @@ def test_a_short_summary_stays_on_one_line(plugin, dialog):
 def test_breaks_fall_between_clauses_not_mid_sentence(plugin, dialog):
     for line in lines_for(plugin, dialog, REAL_RUN):
         assert line.endswith(",") or line.endswith(".")
+
+
+# ---------------------------------------------------------------- date range
+
+
+def views(node, found=None):
+    """Every table in a view tree, flattened."""
+    found = [] if found is None else found
+    if not hasattr(node, "keys"):
+        return found
+    found.append(node)
+    for key in list(node.keys()):
+        child = node[key]
+        if hasattr(child, "keys"):
+            views(child, found)
+    return found
+
+
+def range_props(plugin, dialog, scope, from_date="", to_date=""):
+    props = plugin.eval(
+        'function() return import("LrBinding").makePropertyTable(nil) end')()
+    props.scope = scope
+    props.fromDate = from_date
+    props.toDate = to_date
+    return props
+
+
+def test_searching_everything_puts_no_bound_on_the_fetch(plugin, dialog):
+    """The default, and what the button did before the range existed. A stray
+    date left in the fields from a previous thought must not leak into a
+    search the user has just told us is unlimited."""
+    props = range_props(plugin, dialog, dialog["ALL"], "2026-05-01", "2026-05-03")
+
+    assert dialog["rangeFrom"](props) == (None, None)
+
+
+def test_a_range_becomes_the_two_bounds(plugin, dialog):
+    props = range_props(plugin, dialog, dialog["RANGE"], "2026-05-01", "2026-05-03")
+
+    assert dialog["rangeFrom"](props) == ("2026-05-01", "2026-05-03")
+
+
+def test_one_open_end_is_a_bound_on_the_other_only(plugin, dialog):
+    """"Everything since the trip" is a real question, and leaving the second
+    box empty is how it gets asked."""
+    props = range_props(plugin, dialog, dialog["RANGE"], "2026-05-01", "")
+
+    assert dialog["rangeFrom"](props) == ("2026-05-01", None)
+
+
+def test_dates_typed_the_wrong_way_round_are_swapped(plugin, dialog):
+    """Two dates name one range whichever order they arrive in. Refusing them
+    would be the plugin being pedantic about something it understood -- and
+    sending them as-is asks iNaturalist for observations after the 3rd and
+    before the 1st, which is nothing at all."""
+    props = range_props(plugin, dialog, dialog["RANGE"], "2026-05-03", "2026-05-01")
+
+    assert dialog["rangeFrom"](props) == ("2026-05-01", "2026-05-03")
+
+
+def test_a_date_that_is_not_a_date_is_no_bound_at_all(plugin, dialog):
+    """Belt and braces: the field's validate callback refuses these before
+    they reach the property table. If one ever does, dropping the bound is
+    safer than passing it on -- iNaturalist answers garbage with a 422 and the
+    whole run fails."""
+    props = range_props(plugin, dialog, dialog["RANGE"], "last Tuesday", "2026-05-03")
+
+    assert dialog["rangeFrom"](props) == (None, "2026-05-03")
+
+
+def test_the_summary_names_the_range_that_produced_it(plugin, dialog):
+    """Three of four matching reads as a scan gone wrong unless the sentence
+    says it only ever looked at one day's worth."""
+    lines = lines_for(plugin, dialog, {
+        "observations": 4, "matched": 3, "unmatched": 1,
+        "d1": "2026-05-01", "d2": "2026-05-03"})
+
+    assert "observed 2026-05-01 to 2026-05-03" in " ".join(lines)
+
+
+def test_one_day_is_said_as_one_day(plugin, dialog):
+    assert dialog["rangeNote"](plugin.runtime.table_from(
+        {"d1": "2026-05-01", "d2": "2026-05-01"})) == "observed on 2026-05-01"
+
+
+def test_an_open_ended_range_says_which_end_is_open(plugin, dialog):
+    assert dialog["rangeNote"](plugin.runtime.table_from(
+        {"d1": "2026-05-01"})) == "observed on or after 2026-05-01"
+    assert dialog["rangeNote"](plugin.runtime.table_from(
+        {"d2": "2026-05-01"})) == "observed on or before 2026-05-01"
+
+
+def test_a_whole_account_scan_says_nothing_about_dates(plugin, dialog):
+    """The clause would be noise on the summary that has always been there."""
+    assert dialog["rangeNote"](plugin.runtime.table_from({})) is None
+    assert "observed" not in " ".join(
+        lines_for(plugin, dialog, {"observations": 3, "matched": 3}))
+
+
+def ask(plugin, dialog, answer):
+    plugin.set_modal_answer(answer)
+    chosen = []
+    plugin.eval("""function(dialog, record)
+      import("LrFunctionContext").callWithContext("test", function(context)
+        record(dialog.askRange(context))
+      end)
+    end""")(dialog, lambda got: chosen.append(got))
+    return chosen[0] if chosen else None
+
+
+def test_cancelling_the_range_dialog_searches_nothing(plugin, dialog):
+    """Returning an empty range rather than nil would fetch the entire
+    account, which is the one outcome someone pressing Cancel cannot want."""
+    assert ask(plugin, dialog, "cancel") is None
+    assert plugin.modal_dialogs[0]["actionVerb"] == "Search"
+
+
+def test_accepting_the_default_searches_everything(plugin, dialog):
+    """Pressing Search without touching anything has to behave exactly as the
+    button did before this dialog was added."""
+    chosen = ask(plugin, dialog, "ok")
+
+    assert chosen.d1 is None
+    assert chosen.d2 is None
+
+
+def test_the_date_fields_start_filled_in(plugin, dialog):
+    """An empty box beside a radio button reads as a thing that must be
+    researched. Today's date is both a valid answer and an example of the
+    format the field wants."""
+    ask(plugin, dialog, "cancel")
+    fields = [v for v in views(plugin.modal_dialogs[0]["contents"])
+              if v["_viewType"] == "edit_field"]
+
+    assert len(fields) == 2
+    for field in fields:
+        assert field["validate"] is not None

@@ -1183,3 +1183,95 @@ def test_a_missing_ancestor_leaves_the_taxon_to_the_slow_path():
     # Fell back and got the real hierarchy rather than a truncated one.
     assert names_on(photo) == ["Ischnura cervula"]
     assert "Odonata" in [k["name"] for k in plugin.keywords]
+
+
+# ---------------------------------------------------------------------------
+# Family
+#
+# Requested rather than deduced: the family is the rank most people navigate
+# by when they do not yet know the species, and it is the one rung of the
+# lineage that is worth filtering and sorting a catalog on. The keyword tree
+# has carried it all along, but keywords are not a column.
+# ---------------------------------------------------------------------------
+
+
+RANKED_ANCESTORS = [
+    {"id": 1, "name": "Animalia", "rank": "kingdom"},
+    {"id": 2, "name": "Arthropoda", "rank": "phylum"},
+    {"id": 3, "name": "Insecta", "rank": "class"},
+    {"id": 4, "name": "Odonata", "rank": "order"},
+    {"id": 5, "name": "Coenagrionidae", "rank": "family"},
+    {"id": 6, "name": "Ischnura", "rank": "genus"},
+]
+
+
+def ranked_damselfly(ancestors=None):
+    return {
+        "id": 12345,
+        "name": "Ischnura cervula",
+        "rank": "species",
+        "preferred_common_name": "Pacific Forktail",
+        "ancestors": RANKED_ANCESTORS if ancestors is None else ancestors,
+    }
+
+
+def sync_with(taxon_):
+    plugin = make_plugin({"/observations/999": observation(community=taxon_)})
+    photo = plugin.new_photo(inat_observation_id="999")
+    plugin.set_target_photos([photo])
+    run_sync(plugin)
+    return photo
+
+
+def test_the_family_is_written_from_the_lineage():
+    assert sync_with(ranked_damselfly())._props["inat_taxon_family"] \
+        == "Coenagrionidae"
+
+
+def test_an_observation_identified_only_to_family_is_its_own_family():
+    """"Coenagrionidae" is a perfectly good identification, and the rank the
+    user is reading sits on the taxon rather than in its ancestors."""
+    family = {"id": 5, "name": "Coenagrionidae", "rank": "family",
+              "ancestors": RANKED_ANCESTORS[:4]}
+
+    assert sync_with(family)._props["inat_taxon_family"] == "Coenagrionidae"
+
+
+def test_a_lineage_that_stops_short_of_family_writes_nothing():
+    """Plenty of things are identified to order and no further, and the field
+    has to be empty rather than hold the nearest rank that happened to fit."""
+    above = {"id": 4, "name": "Odonata", "rank": "order",
+             "ancestors": RANKED_ANCESTORS[:3]}
+
+    assert sync_with(above)._props["inat_taxon_family"] == ""
+
+
+def test_re_identification_clears_a_family_that_no_longer_applies():
+    """A moth re-identified as a different family must not keep the old one.
+    The lineage is known, so an empty answer is an answer."""
+    plugin = make_plugin({"/observations/999": observation(
+        community={"id": 4, "name": "Odonata", "rank": "order",
+                   "ancestors": RANKED_ANCESTORS[:3]})})
+    photo = plugin.new_photo(inat_observation_id="999",
+                             inat_taxon_family="Noctuidae")
+    plugin.set_target_photos([photo])
+
+    run_sync(plugin)
+
+    assert photo._props["inat_taxon_family"] == ""
+
+
+def test_a_throttled_taxon_leaves_the_family_alone():
+    """Same rule as the keyword: no ancestors came back, so nothing is known
+    about the family -- and blanking a correct value because iNaturalist was
+    busy is worse than leaving it."""
+    plugin = make_refusing_plugin(
+        {"/observations/999": observation(community=bare_taxon())},
+        refuse="/taxa")
+    photo = plugin.new_photo(inat_observation_id="999",
+                             inat_taxon_family="Apidae")
+    plugin.set_target_photos([photo])
+
+    run_sync(plugin)
+
+    assert photo._props["inat_taxon_family"] == "Apidae"

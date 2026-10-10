@@ -513,3 +513,43 @@ def test_frames_across_a_truncated_minute_rank_by_position_not_by_second(
 
     assert [ranked[1].secondsApart, ranked[2].secondsApart] == [0, 0]
     assert ranked[1].path == "2025-05-30T20:03:52-06:00"
+
+
+# ------------------------------------------------------------------ day only
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("2026-05-01", "2026-05-01"),
+        ("2026-5-1", "2026-05-01"),       # typed quickly, meant exactly
+        ("2026/05/01", "2026-05-01"),     # the separator most cameras use
+        ("  2026-05-01  ", "2026-05-01"), # pasted from somewhere else
+        ("2024-02-29", "2024-02-29"),
+    ],
+)
+def test_a_day_is_read_and_normalised(match, text, expected):
+    """Normalising at the edge is what lets the rest of the plugin compare two
+    dates as strings -- ISO is the one format where that is the same answer as
+    comparing them as dates."""
+    assert match.parseDay(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "2026-13-01",   # month 13
+        "2023-02-29",   # 2023 was not a leap year
+        "26-05-01",     # two-digit years are ambiguous and always will be
+        "01/05/2026",   # day first or month first? unanswerable
+        "May 1 2026",
+        "2026-05-01T10:22:27",  # a time is not a day
+        "",
+        None,
+    ],
+)
+def test_refuses_anything_it_would_have_to_guess_at(match, text):
+    """A date range the user did not ask for silently returns the wrong
+    observations, and iNaturalist answers an unparseable one with a 422 that
+    fails the whole run."""
+    assert match.parseDay(text) is None

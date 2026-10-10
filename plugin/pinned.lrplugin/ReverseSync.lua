@@ -373,6 +373,9 @@ end
 --------------------------------------------------------------------------------
 
 --- Fetch observations and match them, without applying anything.
+--
+-- @param options.d1  earliest observed date to consider, "YYYY-MM-DD", or nil
+-- @param options.d2  latest observed date to consider, "YYYY-MM-DD", or nil
 -- @return matches, summary -- or nil plus an error message
 function ReverseSync.prepare(api, options)
   options = options or {}
@@ -380,12 +383,16 @@ function ReverseSync.prepare(api, options)
 
   local observations, err = api:listObservations {
     perPage    = 200,
+    d1         = options.d1,
+    d2         = options.d2,
     onPage     = options.onFetch,
     shouldStop = options.shouldStop,
   }
   if not observations then return nil, err end
 
   local matches, summary = ReverseSync.scan(catalog, observations, options)
+  summary.d1 = options.d1
+  summary.d2 = options.d2
   return matches, summary
 end
 

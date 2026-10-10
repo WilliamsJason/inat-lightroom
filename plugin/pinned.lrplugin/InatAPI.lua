@@ -768,6 +768,8 @@ InatAPI.LIST_FIELDS = LIST_FIELDS
 --
 -- @param options.perPage    results per request (default 200, the API maximum)
 -- @param options.fields     comma-separated field list, to keep pages small
+-- @param options.d1         earliest observed date to return, "YYYY-MM-DD"
+-- @param options.d2         latest observed date to return, "YYYY-MM-DD"
 -- @param options.onPage     called with (fetchedSoFar, totalResults) per page
 -- @param options.shouldStop called between pages; return true to stop early
 -- @return array of observations, or nil plus an error message
@@ -791,6 +793,23 @@ function InatAPI:listObservations(options)
       id_above = idAbove,
       fields   = options.fields or LIST_FIELDS,
     }
+
+    -- `d1`/`d2` bound the *observed* date, inclusive, in the observation's own
+    -- time zone -- which is the date the user is thinking of when they say
+    -- "the photos from Saturday", and the one that lines up with the capture
+    -- times Reverse Sync matches against.
+    --
+    -- Either may be given without the other: d1 alone is "since", d2 alone is
+    -- "up to". Both are sent only when they are there, because an empty string
+    -- is not the same as an absent filter -- the API treats it as a date it
+    -- cannot parse and answers 422.
+    --
+    -- The filter belongs here rather than in the caller's loop for the reason
+    -- the whole feature exists: an account with tens of thousands of
+    -- observations pays for every page it fetches, and filtering after the
+    -- fetch would save none of that.
+    if options.d1 and options.d1 ~= "" then params.d1 = options.d1 end
+    if options.d2 and options.d2 ~= "" then params.d2 = options.d2 end
 
     local payload, err = apiGet(API_V2 .. "/observations", params, self.token)
     if not payload then return nil, err end
